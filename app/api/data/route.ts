@@ -42,6 +42,14 @@ async function ensureDatabase() {
     { name: "quantity", sql: "quantity INTEGER NOT NULL DEFAULT 1" },
     { name: "status", sql: "status TEXT NOT NULL DEFAULT 'Confirmed'" },
   ]);
+  await db.batch([
+    db.prepare("UPDATE inventory_items SET price = 650, currency = 'MZN', photo_url = ?, storage_location = 'Corredor A · Prateleira 2', condition = 'Excelente' WHERE id = 1 AND price = 0").bind(starterItems[0][10]),
+    db.prepare("UPDATE inventory_items SET price = 180, currency = 'MZN', photo_url = ?, storage_location = 'Corredor C · Caixa 14', condition = 'Bom' WHERE id = 2 AND price = 0").bind(starterItems[1][10]),
+    db.prepare("UPDATE inventory_items SET price = 75, currency = 'MZN', photo_url = ?, storage_location = 'Corredor B · Caixa 6', condition = 'Excelente' WHERE id = 3 AND price = 0").bind(starterItems[2][10]),
+    db.prepare("UPDATE inventory_items SET price = 900, currency = 'MZN', photo_url = ?, storage_location = 'Corredor D · Chão 3', condition = 'Bom' WHERE id = 4 AND price = 0").bind(starterItems[3][10]),
+    db.prepare("UPDATE inventory_items SET price = 2500, currency = 'MZN', photo_url = ?, storage_location = 'Zona E · Posição 5', condition = 'Excelente' WHERE id = 5 AND price = 0").bind(starterItems[4][10]),
+    db.prepare("UPDATE inventory_items SET price = 220, currency = 'MZN', photo_url = ?, storage_location = 'Corredor C · Caixa 9', condition = 'Requer inspecção' WHERE id = 6 AND price = 0").bind(starterItems[5][10]),
+  ]);
 
   const count = await db.prepare("SELECT COUNT(*) AS count FROM inventory_items").first<{ count: number }>();
   if (!count?.count) {
@@ -53,6 +61,7 @@ async function ensureDatabase() {
   if (!categoryCount?.count) {
     await db.batch(starterCategories.map((name, index) => db.prepare("INSERT INTO categories (id, name) VALUES (?, ?)").bind(index + 1, name)));
   }
+  await db.prepare("INSERT OR IGNORE INTO categories (name) SELECT DISTINCT category FROM inventory_items WHERE category IS NOT NULL AND category != ''").run();
   const profileCount = await db.prepare("SELECT COUNT(*) AS count FROM business_profile").first<{ count: number }>();
   if (!profileCount?.count) {
     await db.prepare("INSERT INTO business_profile (id, business_name, handle, bio, location, phone, email, color) VALUES (1, ?, ?, ?, ?, ?, ?, ?)")
