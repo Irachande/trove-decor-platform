@@ -1,9 +1,11 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type View = "home" | "storage" | "calendar" | "network" | "profile" | "plans";
 type ItemStatus = "Available" | "Reserved" | "Rented";
+type Language = "pt" | "en";
+type Translator = (pt: string, en: string) => string;
 
 type Item = {
   id: number;
@@ -14,6 +16,11 @@ type Item = {
   status: ItemStatus;
   tone: string;
   symbol: string;
+  price: number;
+  currency: string;
+  photoUrl?: string;
+  storageLocation: string;
+  condition: string;
 };
 
 type Reservation = {
@@ -23,6 +30,11 @@ type Reservation = {
   date: string;
   endDate: string;
   color: string;
+  eventName: string;
+  contact: string;
+  notes: string;
+  quantity: number;
+  status: string;
 };
 
 type Profile = {
@@ -37,18 +49,18 @@ type Profile = {
 };
 
 const seedItems: Item[] = [
-  { id: 1, name: "Bentwood dining chair", category: "Furniture", quantity: 48, available: 36, status: "Reserved", tone: "sand", symbol: "BC" },
-  { id: 2, name: "Amber bud vase", category: "Tabletop", quantity: 72, available: 72, status: "Available", tone: "amber", symbol: "AV" },
-  { id: 3, name: "Linen napkin · Sage", category: "Textiles", quantity: 120, available: 84, status: "Rented", tone: "sage", symbol: "LN" },
-  { id: 4, name: "Rattan lantern · Large", category: "Lighting", quantity: 18, available: 14, status: "Reserved", tone: "clay", symbol: "RL" },
-  { id: 5, name: "Fluted plinth · Ivory", category: "Structures", quantity: 8, available: 8, status: "Available", tone: "ivory", symbol: "FP" },
-  { id: 6, name: "Stone candle holder", category: "Tabletop", quantity: 34, available: 28, status: "Available", tone: "stone", symbol: "SC" },
+  { id: 1, name: "Cadeira Bentwood", category: "Mobiliário", quantity: 48, available: 36, status: "Reserved", tone: "sand", symbol: "CB", price: 650, currency: "MZN", storageLocation: "Corredor A · Prateleira 2", condition: "Excelente", photoUrl: "https://images.unsplash.com/photo-1503602642458-232111445657?auto=format&fit=crop&w=900&q=80" },
+  { id: 2, name: "Jarra âmbar pequena", category: "Mesa", quantity: 72, available: 72, status: "Available", tone: "amber", symbol: "JA", price: 180, currency: "MZN", storageLocation: "Corredor C · Caixa 14", condition: "Bom", photoUrl: "https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&w=900&q=80" },
+  { id: 3, name: "Guardanapo de linho · Sálvia", category: "Têxteis", quantity: 120, available: 84, status: "Rented", tone: "sage", symbol: "GL", price: 75, currency: "MZN", storageLocation: "Corredor B · Caixa 6", condition: "Excelente", photoUrl: "https://images.unsplash.com/photo-1493663284031-b7e3aefcae8e?auto=format&fit=crop&w=900&q=80" },
+  { id: 4, name: "Lanterna de rattan · Grande", category: "Iluminação", quantity: 18, available: 14, status: "Reserved", tone: "clay", symbol: "LR", price: 900, currency: "MZN", storageLocation: "Corredor D · Chão 3", condition: "Bom", photoUrl: "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=80" },
+  { id: 5, name: "Plinto canelado · Marfim", category: "Estruturas", quantity: 8, available: 8, status: "Available", tone: "ivory", symbol: "PC", price: 2500, currency: "MZN", storageLocation: "Zona E · Posição 5", condition: "Excelente", photoUrl: "https://images.unsplash.com/photo-1615873968403-89e068629265?auto=format&fit=crop&w=900&q=80" },
+  { id: 6, name: "Castiçal de pedra", category: "Mesa", quantity: 34, available: 28, status: "Available", tone: "stone", symbol: "CP", price: 220, currency: "MZN", storageLocation: "Corredor C · Caixa 9", condition: "Requer inspeção", photoUrl: "https://images.unsplash.com/photo-1602874801006-e26b7af32e9f?auto=format&fit=crop&w=900&q=80" },
 ];
 
 const seedReservations: Reservation[] = [
-  { id: 1, item: "Bentwood dining chairs × 12", client: "Maya & Tom · Casa Flora", date: "2026-07-28", endDate: "2026-07-29", color: "#bb6242" },
-  { id: 2, item: "Rattan lanterns × 4", client: "Luma Events", date: "2026-07-30", endDate: "2026-07-31", color: "#778567" },
-  { id: 3, item: "Linen napkins × 36", client: "Sofia & Liam · The Glasshouse", date: "2026-08-01", endDate: "2026-08-02", color: "#c3974d" },
+  { id: 1, item: "Cadeiras Bentwood × 12", client: "Maya & Tom", eventName: "Casamento na Casa Flora", contact: "+258 84 221 1002", notes: "Levantamento pela equipa do cliente às 09:30.", date: "2026-07-28", endDate: "2026-07-29", color: "#bb6242", quantity: 12, status: "Confirmed" },
+  { id: 2, item: "Lanternas de rattan × 4", client: "Luma Events", eventName: "Jantar corporativo", contact: "eventos@luma.co.mz", notes: "Entrega no Hotel Polana, entrada de serviço.", date: "2026-07-30", endDate: "2026-07-31", color: "#778567", quantity: 4, status: "Confirmed" },
+  { id: 3, item: "Guardanapos de linho × 36", client: "Sofia & Liam", eventName: "Celebração no Glasshouse", contact: "+258 86 446 8821", notes: "Confirmar contagem no regresso.", date: "2026-08-01", endDate: "2026-08-02", color: "#c3974d", quantity: 36, status: "Confirmed" },
 ];
 
 const seedProfile: Profile = {
@@ -61,28 +73,32 @@ const seedProfile: Profile = {
   color: "#b75d3f",
 };
 
-const monthDays = [
-  { n: 29, muted: true }, { n: 30, muted: true }, { n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }, { n: 5 },
-  { n: 6 }, { n: 7 }, { n: 8 }, { n: 9 }, { n: 10 }, { n: 11 }, { n: 12 },
-  { n: 13 }, { n: 14 }, { n: 15 }, { n: 16 }, { n: 17 }, { n: 18 }, { n: 19 },
-  { n: 20 }, { n: 21 }, { n: 22 }, { n: 23 }, { n: 24 }, { n: 25 }, { n: 26 },
-  { n: 27 }, { n: 28 }, { n: 29 }, { n: 30 }, { n: 31 }, { n: 1, muted: true }, { n: 2, muted: true },
-];
-
 const networkItems = [
-  { name: "Clear ghost chair", owner: "Aster Events", distance: "2.4 km", available: 42, price: "$7 / day", symbol: "GC", tone: "mist", rating: "4.9" },
-  { name: "Brass table lamp", owner: "Gather & Glow", distance: "4.8 km", available: 12, price: "$16 / day", symbol: "BL", tone: "gold", rating: "4.8" },
-  { name: "White sailcloth tent", owner: "Marée Rentals", distance: "8.1 km", available: 2, price: "$240 / day", symbol: "ST", tone: "ivory", rating: "5.0" },
-  { name: "Cane lounge set", owner: "Olive House", distance: "11 km", available: 3, price: "$85 / day", symbol: "CL", tone: "sage", rating: "4.7" },
+  { name: "Cadeira Ghost transparente", owner: "Aster Events", distance: "2,4 km", available: 42, price: "450 MZN / dia", symbol: "CG", tone: "mist", rating: "4.9" },
+  { name: "Candeeiro de mesa em latão", owner: "Gather & Glow", distance: "4,8 km", available: 12, price: "1 050 MZN / dia", symbol: "CL", tone: "gold", rating: "4.8" },
+  { name: "Tenda sailcloth branca", owner: "Marée Rentals", distance: "8,1 km", available: 2, price: "15 500 MZN / dia", symbol: "TS", tone: "ivory", rating: "5.0" },
+  { name: "Conjunto lounge em cana", owner: "Olive House", distance: "11 km", available: 3, price: "5 500 MZN / dia", symbol: "LC", tone: "sage", rating: "4.7" },
 ];
 
-const navItems: { id: View; label: string; icon: string }[] = [
-  { id: "home", label: "Overview", icon: "⌂" },
-  { id: "storage", label: "Storage", icon: "▦" },
-  { id: "calendar", label: "Calendar", icon: "□" },
-  { id: "network", label: "Nearby network", icon: "◎" },
-  { id: "profile", label: "Public profile", icon: "◇" },
-];
+const seedCategories = ["Mobiliário", "Mesa", "Têxteis", "Iluminação", "Estruturas"];
+
+function formatMoney(value: number, currency = "MZN", language: Language = "pt") {
+  return new Intl.NumberFormat(language === "pt" ? "pt-MZ" : "en-MZ", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function navItems(t: Translator): { id: View; label: string; icon: string }[] {
+  return [
+    { id: "home", label: t("Visão geral", "Overview"), icon: "⌂" },
+    { id: "storage", label: t("Inventário", "Inventory"), icon: "▦" },
+    { id: "calendar", label: t("Calendário", "Calendar"), icon: "□" },
+    { id: "network", label: t("Rede local", "Nearby network"), icon: "◎" },
+    { id: "profile", label: t("Perfil público", "Public profile"), icon: "◇" },
+  ];
+}
 
 function cls(...names: (string | false | undefined)[]) {
   return names.filter(Boolean).join(" ");
@@ -90,12 +106,18 @@ function cls(...names: (string | false | undefined)[]) {
 
 export default function DecorApp() {
   const [view, setView] = useState<View>("home");
+  const [language, setLanguage] = useState<Language>("pt");
   const [items, setItems] = useState<Item[]>(seedItems);
   const [reservations, setReservations] = useState<Reservation[]>(seedReservations);
+  const [categories, setCategories] = useState<string[]>(seedCategories);
   const [profile, setProfile] = useState<Profile>(seedProfile);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All items");
+  const [categoryFilter, setCategoryFilter] = useState("All");
+  const [sort, setSort] = useState("name");
   const [addOpen, setAddOpen] = useState(false);
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [teamOpen, setTeamOpen] = useState(false);
   const [reserveOpen, setReserveOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [networkQuery, setNetworkQuery] = useState("");
@@ -103,6 +125,9 @@ export default function DecorApp() {
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
   const [plan, setPlan] = useState<"Basic" | "Network">("Network");
+  const importRef = useRef<HTMLInputElement>(null);
+  const t: Translator = (pt, en) => language === "pt" ? pt : en;
+  const navigation = navItems(t);
 
   useEffect(() => {
     fetch("/api/data")
@@ -110,12 +135,23 @@ export default function DecorApp() {
       .then((data) => {
         if (data.items?.length) setItems(data.items);
         if (data.reservations?.length) setReservations(data.reservations);
+        if (data.categories?.length) setCategories(data.categories.map((entry: { name: string }) => entry.name));
         if (data.profile) setProfile({ ...seedProfile, ...data.profile });
       })
       .catch(() => {
         // The seeded demo remains fully usable if local database bindings are unavailable.
       });
   }, []);
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("trove-language");
+    if (saved === "pt" || saved === "en") setLanguage(saved);
+  }, []);
+
+  function changeLanguage(next: Language) {
+    setLanguage(next);
+    window.localStorage.setItem("trove-language", next);
+  }
 
   useEffect(() => {
     if (!toast) return;
@@ -128,9 +164,15 @@ export default function DecorApp() {
     return items.filter((item) => {
       const matchesQuery = `${item.name} ${item.category}`.toLowerCase().includes(normalized);
       const matchesFilter = filter === "All items" || item.status === filter;
-      return matchesQuery && matchesFilter;
+      const matchesCategory = categoryFilter === "All" || item.category === categoryFilter;
+      return matchesQuery && matchesFilter && matchesCategory;
+    }).sort((a, b) => {
+      if (sort === "price-low") return a.price - b.price;
+      if (sort === "price-high") return b.price - a.price;
+      if (sort === "available") return b.available - a.available;
+      return a.name.localeCompare(b.name);
     });
-  }, [items, query, filter]);
+  }, [items, query, filter, categoryFilter, sort]);
 
   const filteredNetwork = useMemo(() => {
     const normalized = networkQuery.toLowerCase();
@@ -157,9 +199,21 @@ export default function DecorApp() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "").trim();
-    const category = String(form.get("category") || "Furniture");
+    const category = String(form.get("category") || categories[0] || t("Sem categoria", "Uncategorized"));
     const quantity = Number(form.get("quantity") || 1);
     if (!name) return;
+    let photoUrl = "";
+    const photo = form.get("photo");
+    if (photo instanceof File && photo.size) {
+      const upload = new FormData();
+      upload.append("file", photo);
+      try {
+        const response = await fetch("/api/item-image", { method: "POST", body: upload });
+        if (response.ok) photoUrl = (await response.json()).url;
+      } catch {
+        showToast(t("O item será guardado sem fotografia.", "The item will be saved without a photo."));
+      }
+    }
     const item: Item = {
       id: Date.now(),
       name,
@@ -169,29 +223,42 @@ export default function DecorApp() {
       status: "Available",
       tone: "clay",
       symbol: name.split(/\s+/).slice(0, 2).map((word) => word[0]).join("").toUpperCase(),
+      price: Number(form.get("price") || 0),
+      currency: String(form.get("currency") || "MZN"),
+      photoUrl,
+      storageLocation: String(form.get("location") || ""),
+      condition: String(form.get("condition") || t("Bom", "Good")),
     };
     setItems((current) => [item, ...current]);
     setAddOpen(false);
-    showToast(`${name} added to Storage`);
+    showToast(t(`${name} adicionado ao inventário`, `${name} added to Inventory`));
     await persist("addItem", item);
   }
 
   async function handleReservation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!selectedItem) return;
     const form = new FormData(event.currentTarget);
+    const itemId = Number(form.get("itemId") || selectedItem?.id);
+    const itemForReservation = items.find((item) => item.id === itemId);
+    if (!itemForReservation) return;
+    const quantity = Number(form.get("quantity") || 1);
     const reservation: Reservation = {
       id: Date.now(),
-      item: `${selectedItem.name} × ${form.get("quantity") || 1}`,
-      client: String(form.get("client") || "New reservation"),
+      item: `${itemForReservation.name} × ${quantity}`,
+      client: String(form.get("client") || t("Nova reserva", "New reservation")),
+      eventName: String(form.get("eventName") || ""),
+      contact: String(form.get("contact") || ""),
+      notes: String(form.get("notes") || ""),
       date: String(form.get("start")),
       endDate: String(form.get("end")),
       color: profile.color,
+      quantity,
+      status: "Confirmed",
     };
     setReservations((current) => [reservation, ...current]);
-    setItems((current) => current.map((item) => item.id === selectedItem.id ? { ...item, status: "Reserved" } : item));
+    setItems((current) => current.map((item) => item.id === itemForReservation.id ? { ...item, status: "Reserved" } : item));
     setReserveOpen(false);
-    showToast(`Dates reserved for ${selectedItem.name}`);
+    showToast(t(`Datas reservadas para ${itemForReservation.name}`, `Dates reserved for ${itemForReservation.name}`));
     await persist("addReservation", reservation);
   }
 
@@ -200,13 +267,76 @@ export default function DecorApp() {
     await persist("updateProfile", profile);
     window.setTimeout(() => {
       setSaving(false);
-      showToast("Public profile updated");
+      showToast(t("Perfil público actualizado", "Public profile updated"));
     }, 450);
   }
 
   function openReserve(item: Item) {
     setSelectedItem(item);
     setReserveOpen(true);
+  }
+
+  async function addCategory(name: string) {
+    const clean = name.trim();
+    if (!clean || categories.includes(clean)) return;
+    setCategories((current) => [...current, clean].sort());
+    await persist("addCategory", { id: Date.now(), name: clean });
+    showToast(t("Categoria adicionada", "Category added"));
+  }
+
+  async function removeCategory(name: string) {
+    const fallback = t("Sem categoria", "Uncategorized");
+    setCategories((current) => current.filter((entry) => entry !== name));
+    setItems((current) => current.map((item) => item.category === name ? { ...item, category: fallback } : item));
+    await persist("removeCategory", { name, fallback });
+    showToast(t("Categoria removida; os itens foram movidos.", "Category removed; its items were moved."));
+  }
+
+  async function bulkStatus(ids: number[], status: ItemStatus) {
+    setItems((current) => current.map((item) => ids.includes(item.id) ? { ...item, status } : item));
+    await persist("bulkStatus", { ids: ids.join(","), status });
+    showToast(t(`${ids.length} itens actualizados`, `${ids.length} items updated`));
+  }
+
+  async function bulkRemove(ids: number[]) {
+    setItems((current) => current.filter((item) => !ids.includes(item.id)));
+    await persist("bulkRemove", { ids: ids.join(",") });
+    showToast(t(`${ids.length} itens removidos`, `${ids.length} items removed`));
+  }
+
+  function exportInventory() {
+    const header = ["name", "category", "quantity", "available", "status", "price", "currency", "location", "condition"];
+    const rows = items.map((item) => [item.name, item.category, item.quantity, item.available, item.status, item.price, item.currency, item.storageLocation, item.condition]);
+    downloadCsv("trove-inventario.csv", [header, ...rows]);
+    showToast(t("Inventário exportado para CSV", "Inventory exported to CSV"));
+  }
+
+  async function importInventory(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const rows = text.split(/\r?\n/).filter(Boolean).slice(1);
+    const imported: Item[] = rows.map((row, index) => {
+      const [name, category, quantity, available, status, price, currency, storageLocation, condition] = parseCsvRow(row);
+      return {
+        id: Date.now() + index,
+        name: name || `${t("Item importado", "Imported item")} ${index + 1}`,
+        category: category || t("Sem categoria", "Uncategorized"),
+        quantity: Number(quantity) || 1,
+        available: Number(available) || Number(quantity) || 1,
+        status: (["Available", "Reserved", "Rented"].includes(status) ? status : "Available") as ItemStatus,
+        price: Number(price) || 0,
+        currency: currency || "MZN",
+        storageLocation: storageLocation || "",
+        condition: condition || t("Bom", "Good"),
+        tone: "sand",
+        symbol: (name || "IT").split(/\s+/).slice(0, 2).map((word) => word[0]).join("").toUpperCase(),
+      };
+    });
+    setItems((current) => [...imported, ...current]);
+    for (const item of imported) await persist("addItem", item);
+    showToast(t(`${imported.length} itens importados`, `${imported.length} items imported`));
+    event.target.value = "";
   }
 
   return (
@@ -221,8 +351,8 @@ export default function DecorApp() {
           <span><strong>Terra & Table</strong><small>{plan} plan</small></span>
           <b>⌄</b>
         </div>
-        <nav aria-label="Primary navigation">
-          {navItems.map((item) => (
+        <nav aria-label={t("Navegação principal", "Primary navigation")}>
+          {navigation.map((item) => (
             <button key={item.id} onClick={() => setView(item.id)} className={cls(view === item.id && "active")}>
               <span className="nav-icon">{item.icon}</span>{item.label}
               {item.id === "network" && <em>PRO</em>}
@@ -232,12 +362,12 @@ export default function DecorApp() {
         <div className="sidebar-bottom">
           <button onClick={() => setView("plans")} className={cls("plan-card", view === "plans" && "active")}>
             <span className="plan-orbit">✦</span>
-            <span><strong>{plan} plan</strong><small>{plan === "Network" ? "Unlimited team · Local rentals" : "Inventory essentials"}</small></span>
+            <span><strong>{t("Plano", "Plan")} {plan}</strong><small>{plan === "Network" ? t("Equipa ilimitada · Aluguer local", "Unlimited team · Local rentals") : t("Gestão essencial", "Inventory essentials")}</small></span>
             <span>›</span>
           </button>
           <button className="user-row" onClick={() => setView("profile")}>
             <span className="user-avatar">AM</span>
-            <span><strong>Amelia Moss</strong><small>Owner</small></span>
+            <span><strong>Amelia Moss</strong><small>{t("Proprietária", "Owner")}</small></span>
             <span>•••</span>
           </button>
         </div>
@@ -247,11 +377,12 @@ export default function DecorApp() {
         <header className="topbar">
           <button className="mobile-logo" onClick={() => setView("home")}><span className="brand-mark"><i /><i /><i /></span>Trove</button>
           <div className="topbar-actions">
-            <button className="icon-button" aria-label="Search" onClick={() => setView("storage")}>⌕</button>
-            <button className="icon-button notification" aria-label="Notifications">♢<i /></button>
-            <div className="team-faces" aria-label="3 team members">
+            <label className="language-picker" aria-label={t("Idioma", "Language")}><span>文</span><select value={language} onChange={(event) => changeLanguage(event.target.value as Language)}><option value="pt">PT</option><option value="en">EN</option></select></label>
+            <button className="icon-button" aria-label={t("Pesquisar", "Search")} onClick={() => setView("storage")}>⌕</button>
+            <button className="icon-button notification" aria-label={t("Notificações", "Notifications")}>♢<i /></button>
+            <div className="team-faces" aria-label={t("3 membros da equipa", "3 team members")}>
               <span>AM</span><span>JR</span><span>SK</span>
-              <button onClick={() => showToast("Team invite link copied")} aria-label="Invite teammate">+</button>
+              <button onClick={() => setTeamOpen(true)} aria-label={t("Convidar colaborador", "Invite teammate")}>+</button>
             </div>
           </div>
         </header>
@@ -259,6 +390,8 @@ export default function DecorApp() {
         <div className="page-content">
           {view === "home" && (
             <Overview
+              language={language}
+              t={t}
               items={items}
               reservations={reservations}
               setView={setView}
@@ -269,74 +402,115 @@ export default function DecorApp() {
           {view === "storage" && (
             <Storage
               items={filteredItems}
+              allItems={items}
+              language={language}
+              t={t}
+              categories={categories}
               query={query}
               setQuery={setQuery}
               filter={filter}
               setFilter={setFilter}
+              categoryFilter={categoryFilter}
+              setCategoryFilter={setCategoryFilter}
+              sort={sort}
+              setSort={setSort}
               openAdd={() => setAddOpen(true)}
+              openCategories={() => setCategoryOpen(true)}
               openReserve={openReserve}
+              exportInventory={exportInventory}
+              importInventory={() => importRef.current?.click()}
+              bulkStatus={bulkStatus}
+              bulkRemove={bulkRemove}
               removeItem={(item) => {
                 setItems((current) => current.filter((candidate) => candidate.id !== item.id));
                 persist("removeItem", { id: item.id });
-                showToast(`${item.name} removed`);
+                showToast(t(`${item.name} removido`, `${item.name} removed`));
               }}
             />
           )}
-          {view === "calendar" && <Calendar reservations={reservations} openAdd={() => { setSelectedItem(items[0] || null); setReserveOpen(true); }} />}
+          {view === "calendar" && <Calendar language={language} t={t} reservations={reservations} openAdd={() => { setSelectedItem(null); setReserveOpen(true); }} />}
           {view === "network" && (
             <Network
               plan={plan}
+              t={t}
               query={networkQuery}
               setQuery={setNetworkQuery}
               items={filteredNetwork}
               requested={requested}
               onRequest={(name) => {
                 setRequested((current) => [...current, name]);
-                showToast(`Request sent for ${name}`);
+                showToast(t(`Pedido enviado para ${name}`, `Request sent for ${name}`));
               }}
               openPlans={() => setView("plans")}
             />
           )}
-          {view === "profile" && <ProfileEditor profile={profile} setProfile={setProfile} save={saveProfile} saving={saving} />}
-          {view === "plans" && <Plans plan={plan} choose={(next) => { setPlan(next); showToast(`${next} plan selected`); }} />}
+          {view === "profile" && <ProfileEditor t={t} profile={profile} setProfile={setProfile} save={saveProfile} saving={saving} />}
+          {view === "plans" && <Plans t={t} plan={plan} choose={(next) => { setPlan(next); showToast(t(`Plano ${next} seleccionado`, `${next} plan selected`)); }} />}
         </div>
       </section>
 
-      <nav className="mobile-nav" aria-label="Mobile navigation">
-        {navItems.slice(0, 4).map((item) => (
+      <nav className="mobile-nav" aria-label={t("Navegação móvel", "Mobile navigation")}>
+        {navigation.slice(0, 4).map((item) => (
           <button key={item.id} className={cls(view === item.id && "active")} onClick={() => setView(item.id)}>
-            <span>{item.icon}</span><small>{item.id === "network" ? "Network" : item.label}</small>
+            <span>{item.icon}</span><small>{item.id === "network" ? t("Rede", "Network") : item.label}</small>
           </button>
         ))}
-        <button className={cls(view === "profile" && "active")} onClick={() => setView("profile")}><span>◇</span><small>Profile</small></button>
+        <button className={cls(view === "profile" && "active")} onClick={() => setView("profile")}><span>◇</span><small>{t("Perfil", "Profile")}</small></button>
       </nav>
+      <input className="visually-hidden" ref={importRef} type="file" accept=".csv,text/csv" onChange={importInventory} />
 
       {addOpen && (
-        <Modal title="Add to Storage" subtitle="Create an inventory record your whole team can see." onClose={() => setAddOpen(false)}>
+        <Modal title={t("Adicionar ao inventário", "Add to Inventory")} subtitle={t("Crie uma ficha completa que toda a equipa consegue consultar.", "Create a complete record your whole team can see.")} onClose={() => setAddOpen(false)}>
           <form onSubmit={handleAddItem} className="modal-form">
-            <label>Item name<input name="name" placeholder="e.g. Travertine plinth" autoFocus required /></label>
+            <label>{t("Fotografia do item", "Item photo")}<span className="photo-upload-field"><span>▧</span><span><strong>{t("Carregar fotografia", "Upload photo")}</strong><small>JPG ou PNG · máx. 5 MB</small></span><input name="photo" type="file" accept="image/png,image/jpeg" /></span></label>
+            <label>{t("Nome do item", "Item name")}<input name="name" placeholder={t("ex.: Plinto de travertino", "e.g. Travertine plinth")} autoFocus required /></label>
             <div className="form-grid">
-              <label>Category<select name="category"><option>Furniture</option><option>Tabletop</option><option>Textiles</option><option>Lighting</option><option>Structures</option></select></label>
-              <label>Quantity<input name="quantity" type="number" min="1" defaultValue="1" required /></label>
+              <label>{t("Categoria", "Category")}<select name="category">{categories.map((category) => <option key={category}>{category}</option>)}</select></label>
+              <label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min="1" defaultValue="1" required /></label>
             </div>
-            <label>Storage location<input name="location" placeholder="Aisle B · Shelf 04" /></label>
-            <div className="modal-actions"><button type="button" className="button-secondary" onClick={() => setAddOpen(false)}>Cancel</button><button className="button-primary">Add item</button></div>
+            <div className="form-grid">
+              <label>{t("Preço de aluguer / dia", "Rental price / day")}<input name="price" type="number" min="0" defaultValue="500" required /></label>
+              <label>{t("Moeda", "Currency")}<select name="currency" defaultValue="MZN"><option value="MZN">MZN · Metical</option><option value="ZAR">ZAR · Rand</option><option value="USD">USD · Dollar</option><option value="EUR">EUR · Euro</option></select></label>
+            </div>
+            <div className="form-grid">
+              <label>{t("Localização no armazém", "Storage location")}<input name="location" placeholder={t("Corredor B · Prateleira 04", "Aisle B · Shelf 04")} /></label>
+              <label>{t("Condição", "Condition")}<select name="condition"><option>{t("Excelente", "Excellent")}</option><option>{t("Bom", "Good")}</option><option>{t("Requer inspecção", "Needs inspection")}</option><option>{t("Em manutenção", "In maintenance")}</option></select></label>
+            </div>
+            <div className="modal-actions"><button type="button" className="button-secondary" onClick={() => setAddOpen(false)}>{t("Cancelar", "Cancel")}</button><button className="button-primary">{t("Adicionar item", "Add item")}</button></div>
           </form>
         </Modal>
       )}
 
-      {reserveOpen && selectedItem && (
-        <Modal title="Reserve item" subtitle={selectedItem.name} onClose={() => setReserveOpen(false)}>
+      {reserveOpen && (
+        <Modal title={t("Nova reserva", "New reservation")} subtitle={selectedItem?.name || t("Escolha o item e registe os detalhes do evento.", "Choose the item and record the event details.")} onClose={() => setReserveOpen(false)}>
           <form onSubmit={handleReservation} className="modal-form">
-            <label>Client or event<input name="client" placeholder="e.g. Rivera wedding" required /></label>
+            <label>{t("Item", "Item")}<select name="itemId" defaultValue={selectedItem?.id || items[0]?.id}>{categories.map((category) => <optgroup label={category} key={category}>{items.filter((item) => item.category === category).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.available} {t("disponíveis", "available")}</option>)}</optgroup>)}</select></label>
             <div className="form-grid">
-              <label>Start date<input name="start" type="date" defaultValue="2026-08-08" required /></label>
-              <label>End date<input name="end" type="date" defaultValue="2026-08-09" required /></label>
+              <label>{t("Evento", "Event")}<input name="eventName" placeholder={t("ex.: Casamento Rivera", "e.g. Rivera wedding")} required /></label>
+              <label>{t("Cliente", "Client")}<input name="client" placeholder={t("Nome do cliente", "Client name")} required /></label>
             </div>
-            <label>Quantity<input name="quantity" type="number" min="1" max={selectedItem.available} defaultValue="1" required /></label>
-            <div className="availability-note"><span>✓</span> {selectedItem.available} currently available for these dates</div>
-            <div className="modal-actions"><button type="button" className="button-secondary" onClick={() => setReserveOpen(false)}>Cancel</button><button className="button-primary">Confirm reservation</button></div>
+            <label>{t("Contacto do cliente", "Client contact")}<input name="contact" placeholder="+258 84 000 0000" /></label>
+            <div className="form-grid">
+              <label>{t("Data de início", "Start date")}<input name="start" type="date" defaultValue="2026-08-08" required /></label>
+              <label>{t("Data de fim", "End date")}<input name="end" type="date" defaultValue="2026-08-09" required /></label>
+            </div>
+            <label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min="1" max={selectedItem?.available || 999} defaultValue="1" required /></label>
+            <label>{t("Notas de logística", "Logistics notes")}<textarea name="notes" rows={3} placeholder={t("Horário de recolha, endereço, responsável, cuidados especiais…", "Pickup time, address, owner, special handling…")} /></label>
+            <div className="availability-note"><span>✓</span> {selectedItem?.available || items[0]?.available || 0} {t("unidades disponíveis neste momento", "units currently available")}</div>
+            <div className="modal-actions"><button type="button" className="button-secondary" onClick={() => setReserveOpen(false)}>{t("Cancelar", "Cancel")}</button><button className="button-primary">{t("Confirmar reserva", "Confirm reservation")}</button></div>
           </form>
+        </Modal>
+      )}
+
+      {categoryOpen && (
+        <Modal title={t("Gerir categorias", "Manage categories")} subtitle={t("Adicione, renomeie a organização ou remova categorias que já não usa.", "Add new organization options or remove categories you no longer use.")} onClose={() => setCategoryOpen(false)}>
+          <CategoryManager t={t} categories={categories} addCategory={addCategory} removeCategory={removeCategory} />
+        </Modal>
+      )}
+
+      {teamOpen && (
+        <Modal title={t("Equipa e permissões", "Team & permissions")} subtitle={t("Convide colaboradores e defina quem pode editar, reservar ou apenas consultar.", "Invite collaborators and choose who can edit, reserve, or only view.")} onClose={() => setTeamOpen(false)}>
+          <TeamManager t={t} onInvite={(email, role) => { persist("inviteMember", { id: Date.now(), email, role }); showToast(t("Convite registado como pendente", "Invitation recorded as pending")); }} />
         </Modal>
       )}
 
@@ -349,126 +523,151 @@ function PageHeading({ eyebrow, title, detail, action }: { eyebrow?: string; tit
   return <div className="page-heading"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{detail}</p></div>{action}</div>;
 }
 
-function Overview({ items, reservations, setView, openAdd, openReserve }: { items: Item[]; reservations: Reservation[]; setView: (view: View) => void; openAdd: () => void; openReserve: (item: Item) => void }) {
+function Overview({ language, t, items, reservations, setView, openAdd, openReserve }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[]; setView: (view: View) => void; openAdd: () => void; openReserve: (item: Item) => void }) {
   const total = items.reduce((sum, item) => sum + item.quantity, 0);
   const available = items.reduce((sum, item) => sum + item.available, 0);
+  const utilization = total ? Math.round(((total - available) / total) * 100) : 0;
+  const estimatedRevenue = items.reduce((sum, item) => sum + (item.quantity - item.available) * (item.price || 0), 0);
   return (
     <>
-      <PageHeading eyebrow="MONDAY, 27 JULY" title="Good morning, Amelia." detail="Here’s what’s happening across your collection today." action={<button className="button-primary" onClick={openAdd}><span>＋</span>Add item</button>} />
+      <PageHeading eyebrow={t("SEGUNDA-FEIRA, 27 DE JULHO", "MONDAY, 27 JULY")} title={t("Bom dia, Amelia.", "Good morning, Amelia.")} detail={t("Veja a operação, as reservas e o desempenho do seu inventário.", "See your operations, reservations, and inventory performance.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
       <section className="stat-grid">
-        <article><div className="stat-icon terracotta">▦</div><div><span>Total items</span><strong>{total}</strong><small><b>+12</b> this month</small></div></article>
-        <article><div className="stat-icon olive">✓</div><div><span>Available now</span><strong>{available}</strong><small>{Math.round((available / total) * 100)}% of collection</small></div></article>
-        <article><div className="stat-icon gold">□</div><div><span>Out this week</span><strong>24</strong><small>Across 3 events</small></div></article>
-        <article><div className="stat-icon lilac">◎</div><div><span>Network earnings</span><strong>$1,240</strong><small><b>↑ 18%</b> this month</small></div></article>
+        <article><div className="stat-icon terracotta">▦</div><div><span>{t("Total de peças", "Total pieces")}</span><strong>{total}</strong><small><b>+12</b> {t("este mês", "this month")}</small></div></article>
+        <article><div className="stat-icon olive">✓</div><div><span>{t("Disponíveis agora", "Available now")}</span><strong>{available}</strong><small>{Math.round((available / Math.max(total, 1)) * 100)}% {t("da colecção", "of collection")}</small></div></article>
+        <article><div className="stat-icon gold">□</div><div><span>{t("Utilização", "Utilization")}</span><strong>{utilization}%</strong><small>{t("Em reservas activas", "In active reservations")}</small></div></article>
+        <article><div className="stat-icon lilac">◎</div><div><span>{t("Receita estimada", "Estimated revenue")}</span><strong>{formatMoney(estimatedRevenue, "MZN", language)}</strong><small><b>↑ 18%</b> {t("este mês", "this month")}</small></div></article>
       </section>
       <section className="overview-grid">
         <article className="card schedule-card">
-          <div className="card-heading"><div><span className="eyebrow">THIS WEEK</span><h2>Upcoming movements</h2></div><button onClick={() => setView("calendar")}>View calendar <span>→</span></button></div>
+          <div className="card-heading"><div><span className="eyebrow">{t("ESTA SEMANA", "THIS WEEK")}</span><h2>{t("Próximos movimentos", "Upcoming movements")}</h2></div><button onClick={() => setView("calendar")}>{t("Ver calendário", "View calendar")} <span>→</span></button></div>
           <div className="schedule-list">
             {reservations.slice(0, 3).map((reservation, index) => (
               <button key={reservation.id} className="schedule-row" onClick={() => setView("calendar")}>
-                <span className="date-block"><b>{index === 0 ? "TUE" : index === 1 ? "THU" : "SAT"}</b><strong>{new Date(`${reservation.date}T00:00:00`).getDate()}</strong></span>
+                <span className="date-block"><b>{index === 0 ? t("TER", "TUE") : index === 1 ? t("QUI", "THU") : t("SÁB", "SAT")}</b><strong>{new Date(`${reservation.date}T00:00:00`).getDate()}</strong></span>
                 <span className="schedule-line" style={{ background: reservation.color }} />
-                <span className="schedule-copy"><strong>{reservation.item}</strong><small>{reservation.client}</small></span>
-                <span className={cls("status-pill", index === 0 ? "pickup" : index === 1 ? "delivery" : "return")}>{index === 0 ? "Pickup" : index === 1 ? "Delivery" : "Return"}</span>
+                <span className="schedule-copy"><strong>{reservation.eventName || reservation.item}</strong><small>{reservation.item} · {reservation.client}</small></span>
+                <span className={cls("status-pill", index === 0 ? "pickup" : index === 1 ? "delivery" : "return")}>{index === 0 ? t("Recolha", "Pickup") : index === 1 ? t("Entrega", "Delivery") : t("Devolução", "Return")}</span>
                 <span className="row-arrow">›</span>
               </button>
             ))}
           </div>
         </article>
         <article className="card pulse-card">
-          <div className="card-heading"><div><span className="eyebrow">STORAGE PULSE</span><h2>Collection health</h2></div><button aria-label="More options">•••</button></div>
-          <div className="donut-wrap"><div className="donut"><span><strong>78%</strong><small>in use</small></span></div><div className="legend"><p><i className="dot available" />Available <b>{available}</b></p><p><i className="dot reserved" />Reserved <b>48</b></p><p><i className="dot rented" />Rented out <b>36</b></p><p><i className="dot maintenance" />Maintenance <b>6</b></p></div></div>
-          <div className="capacity"><span><b>Storage capacity</b><small>620 of 800 slots</small></span><div><i /></div></div>
+          <div className="card-heading"><div><span className="eyebrow">{t("SAÚDE DO INVENTÁRIO", "INVENTORY HEALTH")}</span><h2>{t("Estado da colecção", "Collection health")}</h2></div><button aria-label={t("Mais opções", "More options")}>•••</button></div>
+          <div className="donut-wrap"><div className="donut"><span><strong>{utilization}%</strong><small>{t("em uso", "in use")}</small></span></div><div className="legend"><p><i className="dot available" />{t("Disponível", "Available")} <b>{available}</b></p><p><i className="dot reserved" />{t("Reservado", "Reserved")} <b>{items.filter((item) => item.status === "Reserved").reduce((sum, item) => sum + item.quantity - item.available, 0)}</b></p><p><i className="dot rented" />{t("Alugado", "Rented out")} <b>{items.filter((item) => item.status === "Rented").reduce((sum, item) => sum + item.quantity - item.available, 0)}</b></p><p><i className="dot maintenance" />{t("A inspeccionar", "Inspection due")} <b>{items.filter((item) => item.condition?.toLowerCase().includes("inspec")).length}</b></p></div></div>
+          <div className="capacity"><span><b>{t("Capacidade do armazém", "Storage capacity")}</b><small>{total} / 800 {t("lugares", "slots")}</small></span><div><i style={{ width: `${Math.min(100, (total / 800) * 100)}%` }} /></div></div>
         </article>
       </section>
       <section className="card recent-card">
-        <div className="card-heading"><div><span className="eyebrow">YOUR COLLECTION</span><h2>Recently updated</h2></div><button onClick={() => setView("storage")}>Open Storage <span>→</span></button></div>
+        <div className="card-heading"><div><span className="eyebrow">{t("A SUA COLECÇÃO", "YOUR COLLECTION")}</span><h2>{t("Actualizados recentemente", "Recently updated")}</h2></div><button onClick={() => setView("storage")}>{t("Abrir inventário", "Open inventory")} <span>→</span></button></div>
         <div className="mini-item-grid">
-          {items.slice(0, 4).map((item) => <ItemCard key={item.id} item={item} compact onReserve={() => openReserve(item)} />)}
+          {items.slice(0, 4).map((item) => <ItemCard key={item.id} language={language} t={t} item={item} compact onReserve={() => openReserve(item)} />)}
         </div>
       </section>
+      <Analytics language={language} t={t} items={items} reservations={reservations} />
     </>
   );
 }
 
-function Storage({ items, query, setQuery, filter, setFilter, openAdd, openReserve, removeItem }: { items: Item[]; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; openAdd: () => void; openReserve: (item: Item) => void; removeItem: (item: Item) => void }) {
+function Storage({ items, allItems, language, t, categories, query, setQuery, filter, setFilter, categoryFilter, setCategoryFilter, sort, setSort, openAdd, openCategories, openReserve, removeItem, exportInventory, importInventory, bulkStatus, bulkRemove }: { items: Item[]; allItems: Item[]; language: Language; t: Translator; categories: string[]; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; categoryFilter: string; setCategoryFilter: (value: string) => void; sort: string; setSort: (value: string) => void; openAdd: () => void; openCategories: () => void; openReserve: (item: Item) => void; removeItem: (item: Item) => void; exportInventory: () => void; importInventory: () => void; bulkStatus: (ids: number[], status: ItemStatus) => void; bulkRemove: (ids: number[]) => void }) {
+  const [selected, setSelected] = useState<number[]>([]);
+  const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
   return (
     <>
-      <PageHeading eyebrow="INVENTORY" title="Storage" detail="A live view of everything you own, where it is, and when it’s available." action={<button className="button-primary" onClick={openAdd}><span>＋</span>Add item</button>} />
-      <div className="toolbar">
-        <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search your collection…" /></label>
-        <div className="filter-pills">
-          {["All items", "Available", "Reserved", "Rented"].map((value) => <button key={value} className={cls(filter === value && "active")} onClick={() => setFilter(value)}>{value}</button>)}
-        </div>
-        <button className="button-secondary">⇅ Sort</button>
+      <PageHeading eyebrow={t("ARMAZÉM", "STORAGE")} title={t("Inventário", "Inventory")} detail={t("Fotografias, quantidades, localização, preço e disponibilidade num só lugar.", "Photos, quantities, location, price, and availability in one place.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
+      <div className="inventory-actions">
+        <button className="button-secondary" onClick={openCategories}>＋ {t("Gerir categorias", "Manage categories")}</button>
+        <button className="button-secondary" onClick={importInventory}>↑ {t("Importar CSV", "Import CSV")}</button>
+        <button className="button-secondary" onClick={exportInventory}>↓ {t("Exportar CSV", "Export CSV")}</button>
       </div>
-      <div className="collection-summary"><span><b>{items.length}</b> item types</span><span><b>386</b> individual pieces</span><span><i />Synced just now</span></div>
-      {items.length ? <div className="storage-grid">{items.map((item) => <ItemCard key={item.id} item={item} onReserve={() => openReserve(item)} onRemove={() => removeItem(item)} />)}</div> : <div className="empty-state"><span>⌕</span><h3>No items found</h3><p>Try another search or add something new to your Storage.</p></div>}
+      <div className="toolbar">
+        <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Pesquisar nome, categoria ou local…", "Search name, category, or location…")} /></label>
+        <select className="toolbar-select" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label={t("Filtrar por categoria", "Filter by category")}><option value="All">{t("Todas as categorias", "All categories")}</option>{categories.map((category) => <option key={category}>{category}</option>)}</select>
+        <div className="filter-pills">
+          {[["All items", t("Todos", "All")], ["Available", t("Disponíveis", "Available")], ["Reserved", t("Reservados", "Reserved")], ["Rented", t("Alugados", "Rented")]].map(([value, label]) => <button key={value} className={cls(filter === value && "active")} onClick={() => setFilter(value)}>{label}</button>)}
+        </div>
+        <select className="toolbar-select" value={sort} onChange={(event) => setSort(event.target.value)} aria-label={t("Ordenar inventário", "Sort inventory")}><option value="name">{t("Nome A–Z", "Name A–Z")}</option><option value="available">{t("Mais disponíveis", "Most available")}</option><option value="price-low">{t("Menor preço", "Lowest price")}</option><option value="price-high">{t("Maior preço", "Highest price")}</option></select>
+      </div>
+      {selected.length > 0 && <div className="bulk-bar"><strong>{selected.length} {t("seleccionados", "selected")}</strong><button onClick={() => { bulkStatus(selected, "Rented"); setSelected([]); }}>{t("Marcar como alugado", "Mark as rented")}</button><button onClick={() => { bulkStatus(selected, "Available"); setSelected([]); }}>{t("Marcar disponível", "Mark available")}</button><button className="danger" onClick={() => { bulkRemove(selected); setSelected([]); }}>{t("Eliminar", "Delete")}</button><button onClick={() => setSelected([])}>×</button></div>}
+      <div className="collection-summary"><span><b>{items.length}</b> {t("tipos de item", "item types")}</span><span><b>{allItems.reduce((sum, item) => sum + item.quantity, 0)}</b> {t("peças individuais", "individual pieces")}</span><span><i />{t("Sincronizado agora", "Synced just now")}</span></div>
+      {items.length ? <div className="storage-grid">{items.map((item) => <ItemCard key={item.id} language={language} t={t} item={item} selected={selected.includes(item.id)} onSelect={() => toggle(item.id)} onReserve={() => openReserve(item)} onRemove={() => removeItem(item)} />)}</div> : <div className="empty-state"><span>⌕</span><h3>{t("Nenhum item encontrado", "No items found")}</h3><p>{t("Ajuste os filtros ou adicione um novo item.", "Adjust the filters or add something new.")}</p></div>}
     </>
   );
 }
 
-function ItemCard({ item, compact, onReserve, onRemove }: { item: Item; compact?: boolean; onReserve: () => void; onRemove?: () => void }) {
+function ItemCard({ item, language, t, compact, selected, onSelect, onReserve, onRemove }: { item: Item; language: Language; t: Translator; compact?: boolean; selected?: boolean; onSelect?: () => void; onReserve: () => void; onRemove?: () => void }) {
+  const statusLabel = item.status === "Available" ? t("Disponível", "Available") : item.status === "Reserved" ? t("Reservado", "Reserved") : t("Alugado", "Rented");
   return (
-    <article className={cls("item-card", compact && "compact")}>
-      <div className={cls("item-visual", item.tone)}><span>{item.symbol}</span><button aria-label={`Favorite ${item.name}`}>♡</button></div>
+    <article className={cls("item-card", compact && "compact", selected && "selected")}>
+      <div className={cls("item-visual", item.tone)}>{item.photoUrl ? <img src={item.photoUrl} alt={item.name} /> : <span>{item.symbol}</span>}{onSelect && <label className="item-select"><input type="checkbox" checked={selected} onChange={onSelect} aria-label={t(`Seleccionar ${item.name}`, `Select ${item.name}`)} /><i>✓</i></label>}<button aria-label={t(`Favoritar ${item.name}`, `Favorite ${item.name}`)}>♡</button></div>
       <div className="item-info">
         <span className="item-category">{item.category}</span>
         <h3>{item.name}</h3>
-        <div className="item-meta"><span><b>{item.available}</b> / {item.quantity} available</span><span className={cls("status-dot", item.status.toLowerCase())}>{item.status}</span></div>
-        {!compact && <div className="item-card-actions"><button onClick={onReserve}>Reserve dates</button>{onRemove && <button onClick={onRemove} aria-label={`Remove ${item.name}`}>•••</button>}</div>}
+        <strong className="item-price">{formatMoney(item.price || 0, item.currency || "MZN", language)} <small>/ {t("dia", "day")}</small></strong>
+        <div className="item-meta"><span><b>{item.available}</b> / {item.quantity} {t("disponíveis", "available")}</span><span className={cls("status-dot", item.status.toLowerCase())}>{statusLabel}</span></div>
+        {!compact && <><div className="item-extra"><span>⌖ {item.storageLocation || t("Local por definir", "Location not set")}</span><span>◇ {item.condition || t("Bom", "Good")}</span></div><div className="item-card-actions"><button onClick={onReserve}>{t("Reservar datas", "Reserve dates")}</button>{onRemove && <button onClick={onRemove} aria-label={t(`Remover ${item.name}`, `Remove ${item.name}`)}>•••</button>}</div></>}
       </div>
     </article>
   );
 }
 
-function Calendar({ reservations, openAdd }: { reservations: Reservation[]; openAdd: () => void }) {
+function Calendar({ language, t, reservations, openAdd }: { language: Language; t: Translator; reservations: Reservation[]; openAdd: () => void }) {
+  const [calendarView, setCalendarView] = useState<"month" | "week">("month");
+  const [cursor, setCursor] = useState(new Date(2026, 6, 27));
+  const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(reservations[0] || null);
+  const days = calendarView === "month" ? getMonthCells(cursor) : getWeekDays(cursor);
+  const title = calendarView === "month"
+    ? cursor.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { month: "long", year: "numeric" })
+    : `${days[0].toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — ${days[6].toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short", year: "numeric" })}`;
+  const move = (direction: number) => {
+    const next = new Date(cursor);
+    if (calendarView === "month") next.setMonth(next.getMonth() + direction);
+    else next.setDate(next.getDate() + direction * 7);
+    setCursor(next);
+  };
+  const reservationsFor = (date: Date) => reservations.filter((reservation) => dateKey(date) >= reservation.date && dateKey(date) <= reservation.endDate);
   return (
     <>
-      <PageHeading eyebrow="SCHEDULE" title="Calendar" detail="Every pickup, return, and reservation in one shared team view." action={<button className="button-primary" onClick={openAdd}><span>＋</span>New reservation</button>} />
+      <PageHeading eyebrow={t("AGENDA PARTILHADA", "SHARED SCHEDULE")} title={t("Calendário", "Calendar")} detail={t("Veja eventos e reservas por semana ou mês — sem procurar item por item.", "See events and reservations by week or month—without browsing item by item.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Nova reserva", "New reservation")}</button>} />
       <section className="calendar-layout">
         <article className="card calendar-card">
-          <div className="calendar-toolbar"><button>‹</button><h2>July 2026</h2><button>›</button><button className="today-button">Today</button><div className="calendar-view-toggle"><button className="active">Month</button><button>List</button></div></div>
-          <div className="calendar-grid">
-            {["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"].map((day) => <div className="weekday" key={day}>{day}</div>)}
-            {monthDays.map((day, index) => {
-              const event = !day.muted && (day.n === 28 || day.n === 30 || day.n === 31);
-              return <div className={cls("calendar-day", day.muted && "muted", day.n === 27 && !day.muted && "today")} key={`${day.n}-${index}`}><span>{day.n}</span>{event && <button style={{ "--event": day.n === 28 ? "#b75d3f" : day.n === 30 ? "#778567" : "#c3974d" } as React.CSSProperties}>{day.n === 28 ? "Chairs · Casa Flora" : day.n === 30 ? "Lanterns · Luma" : "Napkins · Glasshouse"}</button>}</div>;
+          <div className="calendar-toolbar"><button onClick={() => move(-1)}>‹</button><h2>{title}</h2><button onClick={() => move(1)}>›</button><button className="today-button" onClick={() => setCursor(new Date(2026, 6, 27))}>{t("Hoje", "Today")}</button><div className="calendar-view-toggle"><button className={cls(calendarView === "week" && "active")} onClick={() => setCalendarView("week")}>{t("Semana", "Week")}</button><button className={cls(calendarView === "month" && "active")} onClick={() => setCalendarView("month")}>{t("Mês", "Month")}</button></div></div>
+          {calendarView === "month" ? <div className="calendar-grid">
+            {(language === "pt" ? ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"] : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]).map((day) => <div className="weekday" key={day}>{day}</div>)}
+            {days.map((day) => {
+              const dayReservations = reservationsFor(day);
+              const muted = day.getMonth() !== cursor.getMonth();
+              return <div className={cls("calendar-day", muted && "muted", dateKey(day) === "2026-07-27" && "today")} key={dateKey(day)}><span>{day.getDate()}</span>{dayReservations.slice(0, 3).map((reservation) => <button key={reservation.id} onClick={() => setSelectedReservation(reservation)} style={{ "--event": reservation.color } as React.CSSProperties}><b>{reservation.eventName || reservation.client}</b><small>{reservation.item}</small></button>)}{dayReservations.length > 3 && <em>+{dayReservations.length - 3}</em>}</div>;
             })}
-          </div>
+          </div> : <div className="week-calendar">
+            {days.map((day) => <div className={cls("week-day", dateKey(day) === "2026-07-27" && "today")} key={dateKey(day)}><header><span>{day.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { weekday: "short" })}</span><strong>{day.getDate()}</strong></header><div className="week-day-body">{reservationsFor(day).map((reservation) => <button key={reservation.id} style={{ "--event": reservation.color } as React.CSSProperties} onClick={() => setSelectedReservation(reservation)}><small>09:30</small><strong>{reservation.eventName || reservation.client}</strong><span>{reservation.item}</span></button>)}{!reservationsFor(day).length && <span className="week-empty">—</span>}</div></div>)}
+          </div>}
         </article>
-        <aside className="card agenda-card">
-          <span className="eyebrow">UP NEXT</span><h2>Monday, 27 July</h2>
-          <div className="agenda-empty"><span>☼</span><strong>A calm day</strong><p>No movements today. Your next pickup is tomorrow at 09:30.</p></div>
-          <div className="agenda-next"><span className="time">TUE<br /><b>28</b></span><span><small>09:30 · PICKUP</small><strong>Bentwood dining chairs × 12</strong><p>Casa Flora · Maya & Tom</p></span></div>
-          <h3>Team availability</h3>
-          <div className="team-list"><span><i className="face clay">AM</i><b>Amelia</b><small>Available</small><em>●</em></span><span><i className="face olive">JR</i><b>Jonah</b><small>Delivery · 10–12</small><em>●</em></span><span><i className="face gold">SK</i><b>Sara</b><small>Available after 13:00</small><em>●</em></span></div>
-        </aside>
+        <ReservationInspector language={language} t={t} reservation={selectedReservation} />
       </section>
       <section className="card reservation-list">
-        <div className="card-heading"><div><span className="eyebrow">RESERVATIONS</span><h2>Coming up</h2></div><button>Export schedule ↓</button></div>
-        {reservations.map((reservation) => <div className="reservation-row" key={reservation.id}><i style={{ background: reservation.color }} /><span><strong>{reservation.item}</strong><small>{reservation.client}</small></span><span><strong>{new Date(`${reservation.date}T00:00:00`).toLocaleDateString("en", { day: "numeric", month: "short" })} — {new Date(`${reservation.endDate}T00:00:00`).toLocaleDateString("en", { day: "numeric", month: "short" })}</strong><small>2 days</small></span><span className="status-pill pickup">Confirmed</span><button>•••</button></div>)}
+        <div className="card-heading"><div><span className="eyebrow">{t("RESERVAS", "RESERVATIONS")}</span><h2>{t("Próximos eventos", "Upcoming events")}</h2></div><button onClick={() => downloadCsv("trove-reservas.csv", [["event", "client", "item", "start", "end", "contact", "notes"], ...reservations.map((r) => [r.eventName, r.client, r.item, r.date, r.endDate, r.contact, r.notes])])}>{t("Exportar agenda", "Export schedule")} ↓</button></div>
+        {reservations.map((reservation) => <button className="reservation-row" key={reservation.id} onClick={() => setSelectedReservation(reservation)}><i style={{ background: reservation.color }} /><span><strong>{reservation.eventName || reservation.item}</strong><small>{reservation.item} · {reservation.client}</small></span><span><strong>{new Date(`${reservation.date}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${reservation.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</strong><small>{reservation.contact || t("Sem contacto", "No contact")}</small></span><span className="status-pill pickup">{t("Confirmada", "Confirmed")}</span><span>›</span></button>)}
       </section>
     </>
   );
 }
 
-function Network({ plan, query, setQuery, items, requested, onRequest, openPlans }: { plan: string; query: string; setQuery: (value: string) => void; items: typeof networkItems; requested: string[]; onRequest: (name: string) => void; openPlans: () => void }) {
-  if (plan !== "Network") return <section className="locked-network"><div className="network-orbit">◎</div><span className="eyebrow">TROVE NETWORK</span><h1>More inventory, without more storage.</h1><p>Search trusted decorators nearby, check live availability, and request the pieces your next event needs.</p><button className="button-primary" onClick={openPlans}>Explore Network plan</button></section>;
+function Network({ plan, t, query, setQuery, items, requested, onRequest, openPlans }: { plan: string; t: Translator; query: string; setQuery: (value: string) => void; items: typeof networkItems; requested: string[]; onRequest: (name: string) => void; openPlans: () => void }) {
+  if (plan !== "Network") return <section className="locked-network"><div className="network-orbit">◎</div><span className="eyebrow">TROVE NETWORK</span><h1>{t("Mais inventário, sem mais armazém.", "More inventory, without more storage.")}</h1><p>{t("Pesquise decoradores verificados, veja disponibilidade e reserve o que precisa.", "Search trusted decorators, see availability, and reserve what you need.")}</p><button className="button-primary" onClick={openPlans}>{t("Explorar plano Network", "Explore Network plan")}</button></section>;
   return (
     <>
-      <PageHeading eyebrow="TROVE NETWORK" title="Find it nearby." detail="Borrow from trusted decorators in your area and turn idle stock into income." action={<button className="button-secondary">My rental requests <span>3</span></button>} />
+      <PageHeading eyebrow="TROVE NETWORK" title={t("Encontre perto de si.", "Find it nearby.")} detail={t("Alugue a decoradores da região e transforme stock parado em receita.", "Borrow locally and turn idle stock into income.")} action={<button className="button-secondary">{t("Meus pedidos", "My requests")} <span>3</span></button>} />
       <section className="network-hero">
-        <div><span className="eyebrow">SEARCH 24,000+ LOCAL PIECES</span><h2>What does your next event need?</h2><label className="network-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Try “ghost chairs” or “linen napkins”…" /><button>Search</button></label><div className="popular-searches"><small>Popular:</small>{["Plinths", "Chairs", "Bud vases", "Candle holders"].map((term) => <button key={term} onClick={() => setQuery(term)}>{term}</button>)}</div></div>
+        <div><span className="eyebrow">{t("PESQUISE 24.000+ PEÇAS LOCAIS", "SEARCH 24,000+ LOCAL PIECES")}</span><h2>{t("O que precisa o seu próximo evento?", "What does your next event need?")}</h2><label className="network-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Ex.: cadeiras ghost ou guardanapos de linho…", "Try ghost chairs or linen napkins…")} /><button>{t("Pesquisar", "Search")}</button></label><div className="popular-searches"><small>{t("Popular:", "Popular:")}</small>{[t("Plintos", "Plinths"), t("Cadeiras", "Chairs"), t("Jarras", "Bud vases"), t("Castiçais", "Candle holders")].map((term) => <button key={term} onClick={() => setQuery(term)}>{term}</button>)}</div></div>
         <div className="network-map"><span className="map-road one" /><span className="map-road two" /><span className="map-road three" /><i className="map-pin p1">12</i><i className="map-pin p2">8</i><i className="map-pin p3">4</i><i className="map-you">YOU</i></div>
       </section>
-      <div className="network-heading"><div><h2>Available near Maputo</h2><p>Verified businesses · Availability for the next 30 days</p></div><button className="button-secondary">Within 25 km⌄</button></div>
+      <div className="network-heading"><div><h2>{t("Disponível perto de Maputo", "Available near Maputo")}</h2><p>{t("Negócios verificados · Próximos 30 dias", "Verified businesses · Next 30 days")}</p></div><button className="button-secondary">{t("Até 25 km", "Within 25 km")}⌄</button></div>
       <div className="network-grid">
         {items.map((item) => (
           <article className="network-card" key={item.name}>
-            <div className={cls("network-visual", item.tone)}><span>{item.symbol}</span><em>{item.available} available</em></div>
-            <div className="network-info"><div className="network-owner"><i>{item.owner.split(" ").map((word) => word[0]).join("").slice(0, 2)}</i><span><strong>{item.owner} <b>✓</b></strong><small>★ {item.rating} · {item.distance}</small></span></div><h3>{item.name}</h3><div className="network-price"><strong>{item.price}</strong><button disabled={requested.includes(item.name)} onClick={() => onRequest(item.name)}>{requested.includes(item.name) ? "Requested ✓" : "Check dates"}</button></div></div>
+            <div className={cls("network-visual", item.tone)}><span>{item.symbol}</span><em>{item.available} {t("disponíveis", "available")}</em></div>
+            <div className="network-info"><div className="network-owner"><i>{item.owner.split(" ").map((word) => word[0]).join("").slice(0, 2)}</i><span><strong>{item.owner} <b>✓</b></strong><small>★ {item.rating} · {item.distance}</small></span></div><h3>{item.name}</h3><div className="network-price"><strong>{item.price}</strong><button disabled={requested.includes(item.name)} onClick={() => onRequest(item.name)}>{requested.includes(item.name) ? t("Pedido enviado ✓", "Requested ✓") : t("Ver datas", "Check dates")}</button></div></div>
           </article>
         ))}
       </div>
@@ -476,16 +675,16 @@ function Network({ plan, query, setQuery, items, requested, onRequest, openPlans
   );
 }
 
-function ProfileEditor({ profile, setProfile, save, saving }: { profile: Profile; setProfile: (profile: Profile) => void; save: () => void; saving: boolean }) {
+function ProfileEditor({ t, profile, setProfile, save, saving }: { t: Translator; profile: Profile; setProfile: (profile: Profile) => void; save: () => void; saving: boolean }) {
   const colors = ["#b75d3f", "#78836a", "#ba914d", "#3f5f68", "#755f72", "#303634"];
   const update = (key: keyof Profile, value: string) => setProfile({ ...profile, [key]: value });
   return (
     <>
-      <PageHeading eyebrow="YOUR BUSINESS" title="Public profile" detail="Make a polished first impression with a profile that feels like your brand." action={<button className="button-primary" onClick={save}>{saving ? "Saving…" : "Save changes"}</button>} />
+      <PageHeading eyebrow={t("O SEU NEGÓCIO", "YOUR BUSINESS")} title={t("Perfil público", "Public profile")} detail={t("Crie uma presença profissional que representa a sua marca.", "Create a polished presence that represents your brand.")} action={<button className="button-primary" onClick={save}>{saving ? t("A guardar…", "Saving…") : t("Guardar alterações", "Save changes")}</button>} />
       <section className="profile-layout">
         <div className="profile-editor card">
-          <div className="section-title"><span>01</span><div><h2>Business identity</h2><p>The essentials clients and fellow decorators will see.</p></div></div>
-          <div className="avatar-edit"><div className="profile-avatar" style={{ background: profile.color }}>{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : profile.businessName.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><span><strong>Profile picture</strong><small>JPG or PNG · Max 5 MB</small><label className="button-secondary">Choose image<input type="file" accept="image/png,image/jpeg" onChange={async (event) => {
+          <div className="section-title"><span>01</span><div><h2>{t("Identidade do negócio", "Business identity")}</h2><p>{t("A informação que clientes e decoradores verão.", "The information clients and decorators will see.")}</p></div></div>
+          <div className="avatar-edit"><div className="profile-avatar" style={{ background: profile.color }}>{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : profile.businessName.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><span><strong>{t("Fotografia do perfil", "Profile picture")}</strong><small>JPG ou PNG · Máx. 5 MB</small><label className="button-secondary">{t("Escolher imagem", "Choose image")}<input type="file" accept="image/png,image/jpeg" onChange={async (event) => {
             const file = event.target.files?.[0];
             if (!file) return;
             const body = new FormData();
@@ -498,34 +697,138 @@ function ProfileEditor({ profile, setProfile, save, saving }: { profile: Profile
               }
             } catch { /* Preview stays usable without upload binding. */ }
           }} /></label></span></div>
-          <div className="form-grid"><label>Business name<input value={profile.businessName} onChange={(event) => update("businessName", event.target.value)} /></label><label>Profile address<span className="input-prefix">trove.co/<input value={profile.handle} onChange={(event) => update("handle", event.target.value)} /></span></label></div>
-          <label>Bio<textarea rows={4} maxLength={220} value={profile.bio} onChange={(event) => update("bio", event.target.value)} /><small className="char-count">{profile.bio.length}/220</small></label>
+          <div className="form-grid"><label>{t("Nome do negócio", "Business name")}<input value={profile.businessName} onChange={(event) => update("businessName", event.target.value)} /></label><label>{t("Endereço do perfil", "Profile address")}<span className="input-prefix">trove.co/<input value={profile.handle} onChange={(event) => update("handle", event.target.value)} /></span></label></div>
+          <label>{t("Biografia", "Bio")}<textarea rows={4} maxLength={220} value={profile.bio} onChange={(event) => update("bio", event.target.value)} /><small className="char-count">{profile.bio.length}/220</small></label>
           <div className="divider" />
-          <div className="section-title"><span>02</span><div><h2>Brand colour</h2><p>Choose a tone inspired by leading décor brands.</p></div></div>
+          <div className="section-title"><span>02</span><div><h2>{t("Cor da marca", "Brand colour")}</h2><p>{t("Escolha uma cor inspirada em marcas de decoração.", "Choose a tone inspired by décor brands.")}</p></div></div>
           <div className="color-picker">{colors.map((color) => <button aria-label={`Choose ${color}`} key={color} style={{ background: color }} className={cls(profile.color === color && "active")} onClick={() => update("color", color)}><span>✓</span></button>)}</div>
           <div className="divider" />
-          <div className="section-title"><span>03</span><div><h2>Contact details</h2><p>Help visitors get in touch directly.</p></div></div>
-          <div className="form-grid"><label>Location<input value={profile.location} onChange={(event) => update("location", event.target.value)} /></label><label>Phone<input value={profile.phone} onChange={(event) => update("phone", event.target.value)} /></label></div>
-          <label>Email address<input value={profile.email} onChange={(event) => update("email", event.target.value)} /></label>
+          <div className="section-title"><span>03</span><div><h2>{t("Contactos", "Contact details")}</h2><p>{t("Ajude visitantes a entrar em contacto.", "Help visitors get in touch.")}</p></div></div>
+          <div className="form-grid"><label>{t("Localização", "Location")}<input value={profile.location} onChange={(event) => update("location", event.target.value)} /></label><label>{t("Telefone", "Phone")}<input value={profile.phone} onChange={(event) => update("phone", event.target.value)} /></label></div>
+          <label>{t("Email", "Email address")}<input value={profile.email} onChange={(event) => update("email", event.target.value)} /></label>
         </div>
-        <aside className="profile-preview-wrap"><div className="preview-label"><span className="eyebrow">LIVE PREVIEW</span><button>↗ Open public page</button></div><div className="public-profile-card"><div className="profile-cover" style={{ background: profile.color }}><span /><span /></div><div className="public-content"><div className="public-avatar" style={{ background: profile.color }}>{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : profile.businessName.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><span className="verified">VERIFIED DECORATOR · <b>✓</b></span><h2>{profile.businessName}</h2><p>{profile.bio}</p><small>⌖ {profile.location}</small><div className="public-actions"><button style={{ background: profile.color }}>Send an enquiry</button><button>♡</button></div><div className="public-stats"><span><strong>184</strong><small>pieces</small></span><span><strong>4.9</strong><small>rating</small></span><span><strong>6 yrs</strong><small>in business</small></span></div></div></div><p className="preview-footnote">Changes appear here instantly. Save when you’re happy with the result.</p></aside>
+        <aside className="profile-preview-wrap"><div className="preview-label"><span className="eyebrow">{t("PRÉ-VISUALIZAÇÃO", "LIVE PREVIEW")}</span><button>↗ {t("Abrir página pública", "Open public page")}</button></div><div className="public-profile-card"><div className="profile-cover" style={{ background: profile.color }}><span /><span /></div><div className="public-content"><div className="public-avatar" style={{ background: profile.color }}>{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : profile.businessName.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><span className="verified">{t("DECORADOR VERIFICADO", "VERIFIED DECORATOR")} · <b>✓</b></span><h2>{profile.businessName}</h2><p>{profile.bio}</p><small>⌖ {profile.location}</small><div className="public-actions"><button style={{ background: profile.color }}>{t("Enviar pedido", "Send an enquiry")}</button><button>♡</button></div><div className="public-stats"><span><strong>184</strong><small>{t("peças", "pieces")}</small></span><span><strong>4.9</strong><small>{t("avaliação", "rating")}</small></span><span><strong>6 {t("anos", "yrs")}</strong><small>{t("em actividade", "in business")}</small></span></div></div></div><p className="preview-footnote">{t("As alterações aparecem aqui imediatamente.", "Changes appear here instantly.")}</p></aside>
       </section>
     </>
   );
 }
 
-function Plans({ plan, choose }: { plan: "Basic" | "Network"; choose: (plan: "Basic" | "Network") => void }) {
+function Plans({ t, plan, choose }: { t: Translator; plan: "Basic" | "Network"; choose: (plan: "Basic" | "Network") => void }) {
   return (
     <>
-      <PageHeading eyebrow="SUBSCRIPTION" title="A plan that grows with you." detail="Start with beautifully simple inventory, then unlock the power of your local décor community." />
-      <section className="billing-toggle"><button className="active">Monthly</button><button>Yearly <span>Save 20%</span></button></section>
+      <PageHeading eyebrow={t("SUBSCRIÇÃO", "SUBSCRIPTION")} title={t("Um plano que cresce consigo.", "A plan that grows with you.")} detail={t("Comece pelo inventário e desbloqueie a rede local quando precisar.", "Start with inventory and unlock the local network when you need it.")} />
+      <section className="billing-toggle"><button className="active">{t("Mensal", "Monthly")}</button><button>{t("Anual", "Yearly")} <span>{t("Poupe 20%", "Save 20%")}</span></button></section>
       <section className="plans-grid">
-        <article className={cls("pricing-card", plan === "Basic" && "current")}><span className="plan-label">STORAGE</span><h2>Basic</h2><p>Everything a small décor team needs to stay organised.</p><div className="price"><strong>$19</strong><span>/ month<br /><small>per business</small></span></div><button className="button-secondary" onClick={() => choose("Basic")}>{plan === "Basic" ? "Current plan" : "Choose Basic"}</button><ul><li>✓ Unlimited inventory items</li><li>✓ Shared reservation calendar</li><li>✓ Up to 3 team members</li><li>✓ Custom public profile</li><li>✓ CSV exports</li></ul></article>
-        <article className={cls("pricing-card featured", plan === "Network" && "current")}><span className="recommended">MOST POPULAR</span><span className="plan-label">STORAGE + NETWORK</span><h2>Network</h2><p>Manage your own collection and expand it through trusted local partners.</p><div className="price"><strong>$49</strong><span>/ month<br /><small>per business</small></span></div><button className="button-primary" onClick={() => choose("Network")}>{plan === "Network" ? "Current plan" : "Upgrade to Network"}</button><ul><li>✓ Everything in Basic</li><li>✓ Search nearby decorator stock</li><li>✓ Request and accept rentals</li><li>✓ Set your own pricing & terms</li><li>✓ Unlimited team members</li><li>✓ Network earnings dashboard</li></ul></article>
+        <article className={cls("pricing-card", plan === "Basic" && "current")}><span className="plan-label">STORAGE</span><h2>Basic</h2><p>{t("Tudo para uma pequena equipa se manter organizada.", "Everything a small team needs to stay organised.")}</p><div className="price"><strong>1 200</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button className="button-secondary" onClick={() => choose("Basic")}>{plan === "Basic" ? t("Plano actual", "Current plan") : t("Escolher Basic", "Choose Basic")}</button><ul><li>✓ {t("Inventário ilimitado", "Unlimited inventory")}</li><li>✓ {t("Calendário partilhado", "Shared calendar")}</li><li>✓ {t("Até 3 colaboradores", "Up to 3 team members")}</li><li>✓ {t("Perfil público", "Public profile")}</li><li>✓ {t("Exportação CSV", "CSV exports")}</li></ul></article>
+        <article className={cls("pricing-card featured", plan === "Network" && "current")}><span className="recommended">{t("MAIS POPULAR", "MOST POPULAR")}</span><span className="plan-label">STORAGE + NETWORK</span><h2>Network</h2><p>{t("Gira a colecção e expanda-a através de parceiros locais.", "Manage and expand through local partners.")}</p><div className="price"><strong>3 100</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button className="button-primary" onClick={() => choose("Network")}>{plan === "Network" ? t("Plano actual", "Current plan") : t("Mudar para Network", "Upgrade to Network")}</button><ul><li>✓ {t("Tudo no Basic", "Everything in Basic")}</li><li>✓ {t("Pesquisar stock local", "Search local stock")}</li><li>✓ {t("Pedir e aceitar alugueres", "Request and accept rentals")}</li><li>✓ {t("Preços e condições próprias", "Own pricing and terms")}</li><li>✓ {t("Colaboradores ilimitados", "Unlimited team members")}</li><li>✓ {t("Análise de receita", "Revenue analytics")}</li></ul></article>
       </section>
-      <section className="plan-note"><span>♡</span><div><strong>Built for how decorators actually work.</strong><p>No contracts. Switch or cancel anytime. Your inventory exports with you.</p></div><button>Read common questions →</button></section>
+      <section className="plan-note"><span>♡</span><div><strong>{t("Pensado para a realidade dos decoradores.", "Built for how decorators actually work.")}</strong><p>{t("Sem contratos. Mude ou cancele quando quiser.", "No contracts. Switch or cancel anytime.")}</p></div><button>{t("Perguntas frequentes", "Common questions")} →</button></section>
     </>
   );
+}
+
+function Analytics({ language, t, items, reservations }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[] }) {
+  const categoryData = Array.from(new Set(items.map((item) => item.category))).map((category) => {
+    const categoryItems = items.filter((item) => item.category === category);
+    const total = categoryItems.reduce((sum, item) => sum + item.quantity, 0);
+    const inUse = categoryItems.reduce((sum, item) => sum + item.quantity - item.available, 0);
+    return { category, rate: total ? Math.round((inUse / total) * 100) : 0 };
+  }).sort((a, b) => b.rate - a.rate).slice(0, 5);
+  const weekly = [42, 58, 36, 74, 67, 88, 62];
+  const revenue = items.reduce((sum, item) => sum + (item.quantity - item.available) * (item.price || 0), 0);
+  return <section className="analytics-grid">
+    <article className="card analytics-card">
+      <div className="card-heading"><div><span className="eyebrow">{t("ANÁLISE", "ANALYTICS")}</span><h2>{t("Ocupação por categoria", "Utilization by category")}</h2></div><span className="analytics-period">{t("Últimos 30 dias", "Last 30 days")}</span></div>
+      <div className="category-bars">{categoryData.map((entry) => <div key={entry.category}><span><b>{entry.category}</b><small>{entry.rate}%</small></span><i><em style={{ width: `${entry.rate}%` }} /></i></div>)}</div>
+    </article>
+    <article className="card analytics-card">
+      <div className="card-heading"><div><span className="eyebrow">{t("DESEMPENHO", "PERFORMANCE")}</span><h2>{t("Reservas e receita", "Bookings & revenue")}</h2></div></div>
+      <div className="analytics-summary"><span><strong>{reservations.length}</strong><small>{t("reservas activas", "active bookings")}</small></span><span><strong>{formatMoney(revenue, "MZN", language)}</strong><small>{t("valor em circulação", "value in circulation")}</small></span></div>
+      <div className="weekly-chart">{weekly.map((height, index) => <span key={index}><i style={{ height: `${height}%` }} /><small>{(language === "pt" ? ["S", "T", "Q", "Q", "S", "S", "D"] : ["M", "T", "W", "T", "F", "S", "S"])[index]}</small></span>)}</div>
+    </article>
+  </section>;
+}
+
+function ReservationInspector({ language, t, reservation }: { language: Language; t: Translator; reservation: Reservation | null }) {
+  if (!reservation) return <aside className="card agenda-card"><span className="eyebrow">{t("DETALHES", "DETAILS")}</span><div className="agenda-empty"><span>☼</span><strong>{t("Nenhuma reserva seleccionada", "No reservation selected")}</strong><p>{t("Seleccione um evento no calendário.", "Select an event on the calendar.")}</p></div></aside>;
+  return <aside className="card agenda-card reservation-inspector">
+    <span className="eyebrow">{t("DETALHES DA RESERVA", "RESERVATION DETAILS")}</span>
+    <h2>{reservation.eventName || reservation.client}</h2>
+    <span className="status-pill delivery">{t("Confirmada", "Confirmed")}</span>
+    <dl>
+      <div><dt>{t("Cliente", "Client")}</dt><dd>{reservation.client}</dd></div>
+      <div><dt>{t("Item", "Item")}</dt><dd>{reservation.item}</dd></div>
+      <div><dt>{t("Datas", "Dates")}</dt><dd>{new Date(`${reservation.date}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${reservation.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</dd></div>
+      <div><dt>{t("Contacto", "Contact")}</dt><dd>{reservation.contact || "—"}</dd></div>
+      <div><dt>{t("Notas", "Notes")}</dt><dd>{reservation.notes || t("Sem notas adicionais.", "No additional notes.")}</dd></div>
+    </dl>
+    <div className="inspector-actions"><button className="button-secondary">{t("Editar", "Edit")}</button><button className="button-primary">{t("Contactar", "Contact")}</button></div>
+  </aside>;
+}
+
+function CategoryManager({ t, categories, addCategory, removeCategory }: { t: Translator; categories: string[]; addCategory: (name: string) => void; removeCategory: (name: string) => void }) {
+  const [name, setName] = useState("");
+  return <div className="category-manager"><form onSubmit={(event) => { event.preventDefault(); addCategory(name); setName(""); }}><input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("Nova categoria…", "New category…")} required /><button className="button-primary">{t("Adicionar", "Add")}</button></form><div>{categories.map((category) => <span key={category}><i>▦</i><b>{category}</b><button onClick={() => removeCategory(category)} aria-label={t(`Remover ${category}`, `Remove ${category}`)}>×</button></span>)}</div><p>{t("Ao remover uma categoria, os itens passam para “Sem categoria”.", "Removing a category moves its items to “Uncategorized”.")}</p></div>;
+}
+
+function TeamManager({ t, onInvite }: { t: Translator; onInvite: (email: string, role: string) => void }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("Editor");
+  const members = [{ initials: "AM", name: "Amelia Moss", role: t("Proprietária", "Owner"), tone: "clay" }, { initials: "JR", name: "Jonah Reis", role: t("Gestor", "Manager"), tone: "olive" }, { initials: "SK", name: "Sara Khan", role: t("Consulta", "Viewer"), tone: "gold" }];
+  return <div className="team-manager"><div className="team-members">{members.map((member) => <span key={member.name}><i className={member.tone}>{member.initials}</i><b>{member.name}<small>{member.role}</small></b><em>{t("Activo", "Active")}</em></span>)}</div><form onSubmit={(event) => { event.preventDefault(); onInvite(email, role); setEmail(""); }}><label>{t("Email do colaborador", "Collaborator email")}<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@empresa.co.mz" required /></label><label>{t("Permissão", "Permission")}<select value={role} onChange={(event) => setRole(event.target.value)}><option>Editor</option><option>{t("Gestor de reservas", "Booking manager")}</option><option>{t("Apenas consulta", "View only")}</option></select></label><button className="button-primary">{t("Enviar convite", "Send invite")}</button></form><p>{t("Os convites ficam pendentes até ligar um serviço de autenticação e email.", "Invites remain pending until an authentication and email service is connected.")}</p></div>;
+}
+
+function getMonthCells(cursor: Date) {
+  const first = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+  const mondayOffset = (first.getDay() + 6) % 7;
+  const start = new Date(first);
+  start.setDate(first.getDate() - mondayOffset);
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return date;
+  });
+}
+
+function getWeekDays(cursor: Date) {
+  const monday = new Date(cursor);
+  monday.setDate(cursor.getDate() - ((cursor.getDay() + 6) % 7));
+  return Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(monday);
+    date.setDate(monday.getDate() + index);
+    return date;
+  });
+}
+
+function dateKey(date: Date) {
+  const year = date.getFullYear();
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseCsvRow(row: string) {
+  const values: string[] = [];
+  let current = "";
+  let quoted = false;
+  for (let index = 0; index < row.length; index += 1) {
+    const char = row[index];
+    if (char === '"') quoted = !quoted;
+    else if (char === "," && !quoted) { values.push(current.trim()); current = ""; }
+    else current += char;
+  }
+  values.push(current.trim());
+  return values;
+}
+
+function downloadCsv(filename: string, rows: (string | number | undefined)[][]) {
+  const csv = rows.map((row) => row.map((value) => `"${String(value ?? "").replaceAll('"', '""')}"`).join(",")).join("\n");
+  const url = URL.createObjectURL(new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function Modal({ title, subtitle, onClose, children }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode }) {
