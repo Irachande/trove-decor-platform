@@ -132,6 +132,21 @@ export async function ensureWorkspaceDatabase() {
       "CREATE TABLE IF NOT EXISTS collaborators (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL DEFAULT 1, email TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Pending', invited_by_user_id INTEGER, created_at TEXT NOT NULL DEFAULT '')",
     ),
     db.prepare(
+      "CREATE TABLE IF NOT EXISTS item_photos (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, item_id INTEGER NOT NULL, url TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS inventory_movements (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, item_id INTEGER NOT NULL, type TEXT NOT NULL, quantity_delta INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '', created_by_user_id INTEGER, created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS maintenance_records (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, item_id INTEGER NOT NULL, type TEXT NOT NULL, status TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', cost INTEGER NOT NULL DEFAULT 0, scheduled_date TEXT NOT NULL DEFAULT '', completed_at TEXT, created_by_user_id INTEGER, created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS kits (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', price INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'MZN', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS kit_items (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, kit_id INTEGER NOT NULL, item_id INTEGER NOT NULL, quantity INTEGER NOT NULL, UNIQUE (kit_id, item_id))",
+    ),
+    db.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS memberships_business_user_idx ON memberships (business_id, user_id)",
     ),
     db.prepare(
@@ -149,6 +164,13 @@ export async function ensureWorkspaceDatabase() {
       sql: "storage_location TEXT NOT NULL DEFAULT ''",
     },
     { name: "condition", sql: "condition TEXT NOT NULL DEFAULT 'Bom'" },
+    { name: "description", sql: "description TEXT NOT NULL DEFAULT ''" },
+    { name: "sku", sql: "sku TEXT NOT NULL DEFAULT ''" },
+    {
+      name: "replacement_value",
+      sql: "replacement_value INTEGER NOT NULL DEFAULT 0",
+    },
+    { name: "min_stock", sql: "min_stock INTEGER NOT NULL DEFAULT 0" },
   ]);
   await addMissingColumns("reservations", [
     { name: "business_id", sql: "business_id INTEGER NOT NULL DEFAULT 1" },
@@ -188,6 +210,21 @@ export async function ensureWorkspaceDatabase() {
     ),
     db.prepare(
       "CREATE INDEX IF NOT EXISTS collaborators_business_email_idx ON collaborators (business_id, email, status)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS item_photos_business_item_idx ON item_photos (business_id, item_id, sort_order)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS movements_business_item_date_idx ON inventory_movements (business_id, item_id, created_at)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS maintenance_business_item_idx ON maintenance_records (business_id, item_id, status)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS kits_business_idx ON kits (business_id, active)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS kit_items_kit_item_idx ON kit_items (kit_id, item_id)",
     ),
   ]);
 

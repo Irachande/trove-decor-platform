@@ -16,7 +16,7 @@ Uma iteração só é considerada concluída quando, no mesmo commit:
 4. uma entrada for adicionada ao histórico de iterações;
 5. os comandos de validação executados estiverem registados.
 
-Última actualização: **28 de Julho de 2026**
+Última actualização: **29 de Julho de 2026**
 
 ## 1. Visão
 
@@ -82,14 +82,19 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 ### Inventário
 
 - Criação e remoção de artigos.
-- Nome, categoria, quantidade, disponibilidade e estado.
+- Criação e edição completa com nome, descrição, SKU, categoria, quantidades,
+  stock mínimo, condição e estado.
 - Preço de aluguer e moeda por artigo, com MZN como padrão.
-- Fotografia própria ou imagem de demonstração.
+- Galeria com até oito fotografias próprias por artigo.
 - Localização no armazém e condição do artigo.
 - Pesquisa, filtragem e ordenação.
 - Selecção e operações em massa.
 - Categorias personalizáveis.
-- Importação e exportação CSV.
+- Histórico de entradas, saídas, acertos, danos e abates de stock.
+- Manutenção, limpeza, inspecção, reparação e registo de danos.
+- Kits compostos por vários artigos, quantidades e preço único.
+- Importação Excel ou CSV com validação integral antes da gravação.
+- Exportação CSV.
 
 ### Reservas e calendário
 
@@ -122,6 +127,7 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 - Cloudflare D1 para dados relacionais.
 - Cloudflare R2 para fotografias.
 - Drizzle ORM para a definição do esquema.
+- `read-excel-file` para leitura de ficheiros XLSX no navegador.
 - Alojamento privado através de OpenAI Sites.
 - Código-fonte num repositório privado do GitHub.
 
@@ -135,7 +141,8 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 | Upload de imagens | Funcional | JPG/PNG até 5 MB, autenticado e separado por empresa |
 | Reservas | Parcial | Falta detectar conflitos de forma transaccional |
 | Calendário | Funcional | Baseado nas reservas existentes |
-| Importação/exportação | Parcial | CSV disponível; falta Excel e validação avançada |
+| Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
+| Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
 | Perfil público | Parcial | Editor existe; falta rota pública independente |
 | Equipa | Parcial | Memberships e funções funcionam; falta envio automático de email |
 | Autenticação | Funcional no Sites | Usa Sign in with ChatGPT; fornecedor público definitivo continua pendente |
@@ -183,6 +190,11 @@ Next.js / Vinext
 - `businesses`: empresas e plano actual.
 - `memberships`: relação entre utilizadores, empresas e funções.
 - `inventory_items`: artigos e quantidades, isolados por empresa.
+- `item_photos`: galeria de fotografias associada aos artigos.
+- `inventory_movements`: histórico de alterações de stock.
+- `maintenance_records`: inspecções, limpezas, reparações e danos.
+- `kits`: conjuntos comerciais com preço próprio.
+- `kit_items`: composição e quantidade de cada artigo num kit.
 - `reservations`: reservas associadas actualmente ao nome de um artigo.
 - `categories`: categorias isoladas por empresa.
 - `collaborators`: convites pendentes e funções.
@@ -198,8 +210,10 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `subscriptions`
 - `categories`
 - `inventory_items`
-- `item_photos`
-- `inventory_movements`
+- `item_photos` — implementado
+- `inventory_movements` — implementado
+- `maintenance_records` — implementado
+- `kits` e `kit_items` — implementado
 - `clients`
 - `events`
 - `reservations`
@@ -272,12 +286,12 @@ produto para a distribuição fora do ambiente Sites.
 
 ### Fase 2 — Inventário operacional
 
-- [ ] Edição completa de artigos.
-- [ ] Várias fotografias por artigo.
-- [ ] Histórico de movimentos de stock.
-- [ ] Kits e conjuntos.
-- [ ] Manutenção, limpeza e danos.
-- [ ] Importação Excel com validação.
+- [x] Edição completa de artigos.
+- [x] Várias fotografias por artigo.
+- [x] Histórico de movimentos de stock.
+- [x] Kits e conjuntos.
+- [x] Manutenção, limpeza e danos.
+- [x] Importação Excel com validação.
 
 ### Fase 3 — Reservas robustas
 
@@ -348,6 +362,7 @@ pnpm run dev
 pnpm run build
 pnpm test
 pnpm run lint
+pnpm run typecheck
 pnpm run db:generate
 ```
 
@@ -362,6 +377,28 @@ pnpm run db:generate
 - Política de verificação das empresas da rede.
 
 ## 17. Histórico de iterações
+
+### 29 de Julho de 2026 — Fase 2: inventário operacional
+
+- Implementada a ficha completa de artigos com descrição, SKU, stock mínimo,
+  valor de reposição, localização, condição, estado e preço em MZN.
+- Adicionada galeria de até oito fotografias por artigo, com ficheiros no R2,
+  metadados no D1 e remoção coordenada em ambos.
+- Criado histórico de movimentos de stock para stock inicial, importações,
+  compras, acertos, danos, perdas e abates.
+- Adicionados registos de inspecção, limpeza, reparação e danos, incluindo
+  custo, data, estado e conclusão.
+- Implementados kits compostos por vários artigos, quantidades e preço único.
+- Adicionada importação de XLSX e CSV com validação de cabeçalhos, tipos,
+  quantidades, disponibilidade e preços antes de qualquer gravação.
+- Criadas as entidades `item_photos`, `inventory_movements`,
+  `maintenance_records`, `kits` e `kit_items`, todas isoladas por
+  `business_id`.
+- Adicionada a migração `0003_sleepy_wolfpack.sql` e testes estruturais da
+  Fase 2.
+- Validação: `pnpm test`, `pnpm run lint`, `pnpm run typecheck`,
+  `pnpm run build`,
+  `git diff --check` e inspecção manual da migração Drizzle.
 
 ### 28 de Julho de 2026 — Fase 1: fundação segura
 

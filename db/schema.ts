@@ -41,7 +41,66 @@ export const inventoryItems = sqliteTable("inventory_items", {
   photoUrl: text("photo_url"),
   storageLocation: text("storage_location").notNull().default(""),
   condition: text("condition").notNull().default("Bom"),
+  description: text("description").notNull().default(""),
+  sku: text("sku").notNull().default(""),
+  replacementValue: integer("replacement_value").notNull().default(0),
+  minStock: integer("min_stock").notNull().default(0),
 });
+
+export const itemPhotos = sqliteTable("item_photos", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  itemId: integer("item_id").notNull(),
+  url: text("url").notNull(),
+  sortOrder: integer("sort_order").notNull().default(0),
+  createdAt: text("created_at").notNull(),
+});
+
+export const inventoryMovements = sqliteTable("inventory_movements", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  itemId: integer("item_id").notNull(),
+  type: text("type").notNull(),
+  quantityDelta: integer("quantity_delta").notNull(),
+  note: text("note").notNull().default(""),
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const maintenanceRecords = sqliteTable("maintenance_records", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  itemId: integer("item_id").notNull(),
+  type: text("type").notNull(),
+  status: text("status").notNull(),
+  notes: text("notes").notNull().default(""),
+  cost: integer("cost").notNull().default(0),
+  scheduledDate: text("scheduled_date").notNull().default(""),
+  completedAt: text("completed_at"),
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const kits = sqliteTable("kits", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  name: text("name").notNull(),
+  description: text("description").notNull().default(""),
+  price: integer("price").notNull().default(0),
+  currency: text("currency").notNull().default("MZN"),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull(),
+});
+
+export const kitItems = sqliteTable("kit_items", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  kitId: integer("kit_id").notNull(),
+  itemId: integer("item_id").notNull(),
+  quantity: integer("quantity").notNull(),
+}, (table) => [
+  uniqueIndex("kit_items_kit_item_idx").on(table.kitId, table.itemId),
+]);
 
 export const reservations = sqliteTable("reservations", {
   id: integer("id").primaryKey(),

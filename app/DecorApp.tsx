@@ -44,6 +44,29 @@ type Item = {
   photoUrl?: string;
   storageLocation: string;
   condition: string;
+  description: string;
+  sku: string;
+  replacementValue: number;
+  minStock: number;
+};
+
+type ItemPhoto = { id: number; itemId: number; url: string; sortOrder: number };
+type StockMovement = { id: number; itemId: number; type: string; quantityDelta: number; note: string; createdAt: string };
+type MaintenanceRecord = { id: number; itemId: number; type: string; status: string; notes: string; cost: number; scheduledDate: string; completedAt?: string; createdAt: string };
+type KitEntry = { id: number; kitId: number; itemId: number; quantity: number };
+type Kit = { id: number; name: string; description: string; price: number; currency: string; active: boolean; createdAt: string; items: KitEntry[] };
+type ImportReport = { title: string; detail: string; errors: string[] };
+type WorkspaceData = {
+  items?: Item[];
+  reservations?: Reservation[];
+  categories?: { name: string }[];
+  profile?: Partial<Profile>;
+  workspace?: Workspace;
+  members?: Member[];
+  photos?: ItemPhoto[];
+  movements?: StockMovement[];
+  maintenance?: MaintenanceRecord[];
+  kits?: Kit[];
 };
 
 type Reservation = {
@@ -135,6 +158,10 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [profile, setProfile] = useState<Profile>({ ...seedProfile, email: initialUser.email });
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
+  const [photos, setPhotos] = useState<ItemPhoto[]>([]);
+  const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [maintenance, setMaintenance] = useState<MaintenanceRecord[]>([]);
+  const [kits, setKits] = useState<Kit[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All items");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -144,11 +171,15 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [teamOpen, setTeamOpen] = useState(false);
   const [reserveOpen, setReserveOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
+  const [managedItem, setManagedItem] = useState<Item | null>(null);
+  const [kitsOpen, setKitsOpen] = useState(false);
+  const [importReport, setImportReport] = useState<ImportReport | null>(null);
   const [networkQuery, setNetworkQuery] = useState("");
   const [requested, setRequested] = useState<string[]>([]);
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
   const [plan, setPlan] = useState<"Basic" | "Network">("Basic");
+  const [reloadToken, setReloadToken] = useState(0);
   const importRef = useRef<HTMLInputElement>(null);
   const t: Translator = (pt, en) => language === "pt" ? pt : en;
   const navigation = navItems(t);
@@ -161,7 +192,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   useEffect(() => {
     fetch("/api/data")
       .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((data) => {
+      .then((raw) => {
+        const data = raw as WorkspaceData;
         if (Array.isArray(data.items)) setItems(data.items);
         if (Array.isArray(data.reservations)) setReservations(data.reservations);
         if (Array.isArray(data.categories)) setCategories(data.categories.map((entry: { name: string }) => entry.name));
@@ -171,11 +203,15 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
           setPlan(data.workspace.plan);
         }
         if (Array.isArray(data.members)) setMembers(data.members);
+        if (Array.isArray(data.photos)) setPhotos(data.photos);
+        if (Array.isArray(data.movements)) setMovements(data.movements);
+        if (Array.isArray(data.maintenance)) setMaintenance(data.maintenance);
+        if (Array.isArray(data.kits)) setKits(data.kits);
       })
       .catch(() => {
         setToast("Não foi possível carregar o espaço da empresa.");
       });
-  }, []);
+  }, [reloadToken]);
 
   function changeLanguage(next: Language) {
     setLanguage(next);
@@ -219,7 +255,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action, payload }),
       });
-      const result = await response.json().catch(() => ({}));
+      const result = await response.json().catch(() => ({})) as { error?: string };
       if (response.status === 401) {
         window.location.href = "/signin-with-chatgpt?return_to=%2F";
         return false;
@@ -232,6 +268,23 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
     }
   }
 
+  async function uploadItemPhotos(files: File[]) {
+    const urls: string[] = [];
+    for (const file of files.slice(0, 8)) {
+      try {
+        const upload = new FormData();
+        upload.append("file", file);
+        const response = await fetch("/api/item-image", { method: "POST", body: upload });
+        if (!response.ok) throw new Error();
+        urls.push(((await response.json()) as { url: string }).url);
+      } catch {
+        showToast(t("Algumas fotografias não foram carregadas.", "Some photos could not be uploaded."));
+        break;
+      }
+    }
+    return urls;
+  }
+
   async function handleAddItem(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -239,18 +292,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
     const category = String(form.get("category") || categories[0] || t("Sem categoria", "Uncategorized"));
     const quantity = Number(form.get("quantity") || 1);
     if (!name) return;
-    let photoUrl = "";
-    const photo = form.get("photo");
-    if (photo instanceof File && photo.size) {
-      const upload = new FormData();
-      upload.append("file", photo);
-      try {
-        const response = await fetch("/api/item-image", { method: "POST", body: upload });
-        if (response.ok) photoUrl = (await response.json()).url;
-      } catch {
-        showToast(t("O item será guardado sem fotografia.", "The item will be saved without a photo."));
-      }
-    }
+    let photoUrls: string[] = [];
+    const photoFiles = form.getAll("photo").filter((value): value is File => value instanceof File && value.size > 0);
+    photoUrls = await uploadItemPhotos(photoFiles);
     const item: Item = {
       id: Date.now(),
       name,
@@ -262,14 +306,23 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       symbol: name.split(/\s+/).slice(0, 2).map((word) => word[0]).join("").toUpperCase(),
       price: Number(form.get("price") || 0),
       currency: String(form.get("currency") || "MZN"),
-      photoUrl,
+      photoUrl: photoUrls[0] || "",
       storageLocation: String(form.get("location") || ""),
       condition: String(form.get("condition") || t("Bom", "Good")),
+      description: String(form.get("description") || ""),
+      sku: String(form.get("sku") || ""),
+      replacementValue: Number(form.get("replacementValue") || 0),
+      minStock: Number(form.get("minStock") || 0),
     };
-    setItems((current) => [item, ...current]);
-    setAddOpen(false);
-    showToast(t(`${name} adicionado ao inventário`, `${name} added to Inventory`));
-    await persist("addItem", item);
+    if (await persist("addItem", item)) {
+      if (photoUrls.length > 1) {
+        await persist("addItemPhotos", { itemId: item.id, urls: photoUrls.slice(1) });
+      }
+      setItems((current) => [item, ...current]);
+      setAddOpen(false);
+      setReloadToken((value) => value + 1);
+      showToast(t(`${name} adicionado ao inventário`, `${name} added to Inventory`));
+    }
   }
 
   async function handleReservation(event: FormEvent<HTMLFormElement>) {
@@ -345,6 +398,139 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
     showToast(t(`${ids.length} itens removidos`, `${ids.length} items removed`));
   }
 
+  async function updateItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!managedItem) return;
+    const form = new FormData(event.currentTarget);
+    const quantity = Number(form.get("quantity"));
+    const available = Math.min(quantity, Number(form.get("available")));
+    const updated: Item = {
+      ...managedItem,
+      name: String(form.get("name") || "").trim(),
+      category: String(form.get("category") || ""),
+      quantity,
+      available,
+      status: String(form.get("status") || "Available") as ItemStatus,
+      price: Number(form.get("price") || 0),
+      currency: String(form.get("currency") || "MZN"),
+      storageLocation: String(form.get("storageLocation") || ""),
+      condition: String(form.get("condition") || ""),
+      description: String(form.get("description") || ""),
+      sku: String(form.get("sku") || ""),
+      replacementValue: Number(form.get("replacementValue") || 0),
+      minStock: Number(form.get("minStock") || 0),
+    };
+    if (await persist("updateItem", updated)) {
+      setItems((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setManagedItem(updated);
+      setReloadToken((value) => value + 1);
+      showToast(t("Ficha do artigo actualizada", "Item record updated"));
+    }
+  }
+
+  async function addPhotosToItem(files: File[]) {
+    if (!managedItem || !files.length) return;
+    const currentCount = photos.filter((photo) => photo.itemId === managedItem.id).length;
+    if (currentCount + files.length > 8) {
+      showToast(t("Cada artigo pode ter até 8 fotografias.", "Each item can have up to 8 photos."));
+      return;
+    }
+    const urls = await uploadItemPhotos(files);
+    if (urls.length && await persist("addItemPhotos", { itemId: managedItem.id, urls })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Galeria actualizada", "Gallery updated"));
+    }
+  }
+
+  async function removePhoto(photo: ItemPhoto) {
+    if (await persist("removeItemPhoto", { id: photo.id })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Fotografia removida", "Photo removed"));
+    }
+  }
+
+  async function adjustItemStock(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!managedItem) return;
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const delta = Number(form.get("delta"));
+    if (await persist("adjustStock", {
+      id: Date.now(),
+      itemId: managedItem.id,
+      delta,
+      type: String(form.get("type") || "adjustment"),
+      note: String(form.get("note") || ""),
+    })) {
+      setManagedItem({ ...managedItem, quantity: managedItem.quantity + delta, available: managedItem.available + delta });
+      setReloadToken((value) => value + 1);
+      formElement.reset();
+      showToast(t("Movimento de stock registado", "Stock movement recorded"));
+    }
+  }
+
+  async function addMaintenanceRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!managedItem) return;
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    if (await persist("addMaintenance", {
+      id: Date.now(),
+      itemId: managedItem.id,
+      type: String(form.get("type")),
+      status: "Open",
+      notes: String(form.get("notes") || ""),
+      cost: Number(form.get("cost") || 0),
+      scheduledDate: String(form.get("scheduledDate") || ""),
+      condition: t("Em manutenção", "In maintenance"),
+    })) {
+      setReloadToken((value) => value + 1);
+      formElement.reset();
+      showToast(t("Intervenção registada", "Maintenance record added"));
+    }
+  }
+
+  async function completeMaintenance(record: MaintenanceRecord) {
+    if (await persist("updateMaintenance", { id: record.id, status: "Completed" })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Intervenção concluída", "Maintenance completed"));
+    }
+  }
+
+  async function createKit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const entries = items.flatMap((item) => {
+      const selected = form.get(`kit-item-${item.id}`);
+      const quantity = Number(form.get(`kit-quantity-${item.id}`) || 1);
+      return selected ? [{ itemId: item.id, quantity }] : [];
+    });
+    if (!entries.length) {
+      showToast(t("Seleccione pelo menos um artigo para o kit.", "Select at least one item for the kit."));
+      return;
+    }
+    if (await persist("createKit", {
+      id: Date.now(),
+      name: String(form.get("name")),
+      description: String(form.get("description") || ""),
+      price: Number(form.get("price") || 0),
+      currency: "MZN",
+      items: entries,
+    })) {
+      setReloadToken((value) => value + 1);
+      formElement.reset();
+      showToast(t("Kit criado", "Kit created"));
+    }
+  }
+
+  async function deleteKit(kit: Kit) {
+    if (await persist("deleteKit", { id: kit.id })) {
+      setKits((current) => current.filter((entry) => entry.id !== kit.id));
+      showToast(t("Kit removido", "Kit removed"));
+    }
+  }
+
   function exportInventory() {
     const header = ["name", "category", "quantity", "available", "status", "price", "currency", "location", "condition"];
     const rows = items.map((item) => [item.name, item.category, item.quantity, item.available, item.status, item.price, item.currency, item.storageLocation, item.condition]);
@@ -355,29 +541,88 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   async function importInventory(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
-    const rows = text.split(/\r?\n/).filter(Boolean).slice(1);
-    const imported: Item[] = rows.map((row, index) => {
-      const [name, category, quantity, available, status, price, currency, storageLocation, condition] = parseCsvRow(row);
-      return {
-        id: Date.now() + index,
-        name: name || `${t("Item importado", "Imported item")} ${index + 1}`,
-        category: category || t("Sem categoria", "Uncategorized"),
-        quantity: Number(quantity) || 1,
-        available: Number(available) || Number(quantity) || 1,
-        status: (["Available", "Reserved", "Rented"].includes(status) ? status : "Available") as ItemStatus,
-        price: Number(price) || 0,
-        currency: currency || "MZN",
-        storageLocation: storageLocation || "",
-        condition: condition || t("Bom", "Good"),
-        tone: "sand",
-        symbol: (name || "IT").split(/\s+/).slice(0, 2).map((word) => word[0]).join("").toUpperCase(),
-      };
-    });
-    setItems((current) => [...imported, ...current]);
-    for (const item of imported) await persist("addItem", item);
-    showToast(t(`${imported.length} itens importados`, `${imported.length} items imported`));
-    event.target.value = "";
+    try {
+      let matrix: unknown[][];
+      if (file.name.toLowerCase().endsWith(".xlsx")) {
+        const { default: readXlsxFile } = await import("read-excel-file");
+        matrix = await readXlsxFile(file);
+      } else {
+        const content = await file.text();
+        matrix = content.split(/\r?\n/).filter(Boolean).map(parseCsvRow);
+      }
+      const headers = (matrix[0] || []).map((value) => String(value || "").trim().toLowerCase());
+      const required = ["name", "category", "quantity"];
+      const missing = required.filter((header) => !headers.includes(header));
+      if (missing.length) {
+        setImportReport({
+          title: t("Ficheiro não importado", "File not imported"),
+          detail: t(`Faltam colunas obrigatórias: ${missing.join(", ")}.`, `Missing required columns: ${missing.join(", ")}.`),
+          errors: [],
+        });
+        return;
+      }
+      const valueAt = (row: unknown[], name: string) => row[headers.indexOf(name)];
+      const errors: string[] = [];
+      const imported: Item[] = matrix.slice(1).filter((row) => row.some((value) => String(value ?? "").trim())).flatMap((row, index) => {
+        const line = index + 2;
+        const name = String(valueAt(row, "name") || "").trim();
+        const category = String(valueAt(row, "category") || "").trim();
+        const quantity = Number(valueAt(row, "quantity"));
+        const availableValue = valueAt(row, "available");
+        const available = availableValue === undefined || availableValue === "" ? quantity : Number(availableValue);
+        const price = Number(valueAt(row, "price") || 0);
+        if (!name) errors.push(t(`Linha ${line}: nome em falta.`, `Row ${line}: missing name.`));
+        if (!category) errors.push(t(`Linha ${line}: categoria em falta.`, `Row ${line}: missing category.`));
+        if (!Number.isSafeInteger(quantity) || quantity < 1) errors.push(t(`Linha ${line}: quantidade inválida.`, `Row ${line}: invalid quantity.`));
+        if (!Number.isSafeInteger(available) || available < 0 || available > quantity) errors.push(t(`Linha ${line}: disponibilidade inválida.`, `Row ${line}: invalid availability.`));
+        if (!Number.isSafeInteger(price) || price < 0) errors.push(t(`Linha ${line}: preço inválido.`, `Row ${line}: invalid price.`));
+        if (!name || !category || !Number.isSafeInteger(quantity) || quantity < 1 || !Number.isSafeInteger(available) || available < 0 || available > quantity || !Number.isSafeInteger(price) || price < 0) return [];
+        const statusValue = String(valueAt(row, "status") || "Available");
+        return [{
+          id: Date.now() + index,
+          name,
+          category,
+          quantity,
+          available,
+          status: (["Available", "Reserved", "Rented"].includes(statusValue) ? statusValue : "Available") as ItemStatus,
+          price,
+          currency: String(valueAt(row, "currency") || "MZN").toUpperCase(),
+          storageLocation: String(valueAt(row, "location") || ""),
+          condition: String(valueAt(row, "condition") || t("Bom", "Good")),
+          description: String(valueAt(row, "description") || ""),
+          sku: String(valueAt(row, "sku") || ""),
+          replacementValue: Number(valueAt(row, "replacementvalue") || 0),
+          minStock: Number(valueAt(row, "minstock") || 0),
+          tone: "sand",
+          symbol: initials(name),
+        }];
+      });
+      if (errors.length) {
+        setImportReport({
+          title: t("Validação encontrou erros", "Validation found errors"),
+          detail: t("Nenhum artigo foi gravado. Corrija o ficheiro e tente novamente.", "No items were saved. Fix the file and try again."),
+          errors: errors.slice(0, 30),
+        });
+        return;
+      }
+      if (!imported.length) throw new Error(t("O ficheiro não contém artigos.", "The file contains no items."));
+      if (await persist("importItems", { items: imported })) {
+        setImportReport({
+          title: t("Importação concluída", "Import complete"),
+          detail: t(`${imported.length} artigos foram validados e importados.`, `${imported.length} items were validated and imported.`),
+          errors: [],
+        });
+        setReloadToken((value) => value + 1);
+      }
+    } catch (error) {
+      setImportReport({
+        title: t("Não foi possível ler o ficheiro", "Could not read the file"),
+        detail: error instanceof Error ? error.message : t("Use um ficheiro CSV ou XLSX válido.", "Use a valid CSV or XLSX file."),
+        errors: [],
+      });
+    } finally {
+      event.target.value = "";
+    }
   }
 
   return (
@@ -461,6 +706,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
               openReserve={openReserve}
               exportInventory={exportInventory}
               importInventory={() => importRef.current?.click()}
+              openKits={() => canManageInventory ? setKitsOpen(true) : showToast(t("A sua função não permite gerir kits.", "Your role cannot manage kits."))}
+              manageItem={(item) => canManageInventory ? setManagedItem(item) : showToast(t("A sua função permite apenas consultar.", "Your role is view-only."))}
               bulkStatus={bulkStatus}
               bulkRemove={bulkRemove}
               removeItem={(item) => {
@@ -499,21 +746,27 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         ))}
         <button className={cls(view === "profile" && "active")} onClick={() => setView("profile")}><span>◇</span><small>{t("Perfil", "Profile")}</small></button>
       </nav>
-      <input className="visually-hidden" ref={importRef} type="file" accept=".csv,text/csv" onChange={importInventory} />
+      <input className="visually-hidden" ref={importRef} type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importInventory} />
 
       {addOpen && (
         <Modal title={t("Adicionar ao inventário", "Add to Inventory")} subtitle={t("Crie uma ficha completa que toda a equipa consegue consultar.", "Create a complete record your whole team can see.")} onClose={() => setAddOpen(false)}>
           <form onSubmit={handleAddItem} className="modal-form">
-            <label>{t("Fotografia do item", "Item photo")}<span className="photo-upload-field"><span>▧</span><span><strong>{t("Carregar fotografia", "Upload photo")}</strong><small>JPG ou PNG · máx. 5 MB</small></span><input name="photo" type="file" accept="image/png,image/jpeg" /></span></label>
+            <label>{t("Fotografias do item", "Item photos")}<span className="photo-upload-field"><span>▧</span><span><strong>{t("Carregar até 8 fotografias", "Upload up to 8 photos")}</strong><small>JPG ou PNG · máx. 5 MB cada</small></span><input name="photo" type="file" multiple accept="image/png,image/jpeg" /></span></label>
             <label>{t("Nome do item", "Item name")}<input name="name" placeholder={t("ex.: Plinto de travertino", "e.g. Travertine plinth")} autoFocus required /></label>
+            <label>{t("Descrição", "Description")}<textarea name="description" rows={3} placeholder={t("Dimensões, materiais e cuidados especiais…", "Dimensions, materials, and special care…")} /></label>
             <div className="form-grid">
               <label>{t("Categoria", "Category")}<select name="category">{categories.map((category) => <option key={category}>{category}</option>)}</select></label>
+              <label>SKU<input name="sku" placeholder="CAD-001" /></label>
+            </div>
+            <div className="form-grid">
               <label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min="1" defaultValue="1" required /></label>
+              <label>{t("Stock mínimo", "Minimum stock")}<input name="minStock" type="number" min="0" defaultValue="0" /></label>
             </div>
             <div className="form-grid">
               <label>{t("Preço de aluguer / dia", "Rental price / day")}<input name="price" type="number" min="0" defaultValue="500" required /></label>
               <label>{t("Moeda", "Currency")}<select name="currency" defaultValue="MZN"><option value="MZN">MZN · Metical</option><option value="ZAR">ZAR · Rand</option><option value="USD">USD · Dollar</option><option value="EUR">EUR · Euro</option></select></label>
             </div>
+            <label>{t("Valor de reposição (MZN)", "Replacement value (MZN)")}<input name="replacementValue" type="number" min="0" defaultValue="0" /></label>
             <div className="form-grid">
               <label>{t("Localização no armazém", "Storage location")}<input name="location" placeholder={t("Corredor B · Prateleira 04", "Aisle B · Shelf 04")} /></label>
               <label>{t("Condição", "Condition")}<select name="condition"><option>{t("Excelente", "Excellent")}</option><option>{t("Bom", "Good")}</option><option>{t("Requer inspecção", "Needs inspection")}</option><option>{t("Em manutenção", "In maintenance")}</option></select></label>
@@ -564,6 +817,41 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
               }
             }}
           />
+        </Modal>
+      )}
+
+      {managedItem && (
+        <Modal wide title={managedItem.name} subtitle={t("Ficha operacional, galeria, stock e manutenção.", "Operational record, gallery, stock, and maintenance.")} onClose={() => setManagedItem(null)}>
+          <ItemManager
+            item={managedItem}
+            categories={categories}
+            photos={photos.filter((photo) => photo.itemId === managedItem.id)}
+            movements={movements.filter((movement) => movement.itemId === managedItem.id)}
+            maintenance={maintenance.filter((record) => record.itemId === managedItem.id)}
+            language={language}
+            t={t}
+            onUpdate={updateItem}
+            onAddPhotos={addPhotosToItem}
+            onRemovePhoto={removePhoto}
+            onAdjustStock={adjustItemStock}
+            onAddMaintenance={addMaintenanceRecord}
+            onCompleteMaintenance={completeMaintenance}
+          />
+        </Modal>
+      )}
+
+      {kitsOpen && (
+        <Modal wide title={t("Kits e conjuntos", "Kits & sets")} subtitle={t("Agrupe artigos alugados em conjunto e defina um preço único.", "Group items rented together and set one price.")} onClose={() => setKitsOpen(false)}>
+          <KitManager items={items} kits={kits} language={language} t={t} onCreate={createKit} onDelete={deleteKit} />
+        </Modal>
+      )}
+
+      {importReport && (
+        <Modal title={importReport.title} subtitle={importReport.detail} onClose={() => setImportReport(null)}>
+          <div className="import-report">
+            {importReport.errors.length > 0 ? <ul>{importReport.errors.map((error, index) => <li key={`${error}-${index}`}>{error}</li>)}</ul> : <div className="import-success">✓</div>}
+            <div className="modal-actions"><button className="button-primary" onClick={() => setImportReport(null)}>{t("Fechar", "Close")}</button></div>
+          </div>
         </Modal>
       )}
 
@@ -622,7 +910,7 @@ function Overview({ language, t, items, reservations, userName, setView, openAdd
   );
 }
 
-function Storage({ items, allItems, language, t, categories, query, setQuery, filter, setFilter, categoryFilter, setCategoryFilter, sort, setSort, openAdd, openCategories, openReserve, removeItem, exportInventory, importInventory, bulkStatus, bulkRemove }: { items: Item[]; allItems: Item[]; language: Language; t: Translator; categories: string[]; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; categoryFilter: string; setCategoryFilter: (value: string) => void; sort: string; setSort: (value: string) => void; openAdd: () => void; openCategories: () => void; openReserve: (item: Item) => void; removeItem: (item: Item) => void; exportInventory: () => void; importInventory: () => void; bulkStatus: (ids: number[], status: ItemStatus) => void; bulkRemove: (ids: number[]) => void }) {
+function Storage({ items, allItems, language, t, categories, query, setQuery, filter, setFilter, categoryFilter, setCategoryFilter, sort, setSort, openAdd, openCategories, openKits, manageItem, openReserve, removeItem, exportInventory, importInventory, bulkStatus, bulkRemove }: { items: Item[]; allItems: Item[]; language: Language; t: Translator; categories: string[]; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; categoryFilter: string; setCategoryFilter: (value: string) => void; sort: string; setSort: (value: string) => void; openAdd: () => void; openCategories: () => void; openKits: () => void; manageItem: (item: Item) => void; openReserve: (item: Item) => void; removeItem: (item: Item) => void; exportInventory: () => void; importInventory: () => void; bulkStatus: (ids: number[], status: ItemStatus) => void; bulkRemove: (ids: number[]) => void }) {
   const [selected, setSelected] = useState<number[]>([]);
   const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
   return (
@@ -630,7 +918,8 @@ function Storage({ items, allItems, language, t, categories, query, setQuery, fi
       <PageHeading eyebrow={t("ARMAZÉM", "STORAGE")} title={t("Inventário", "Inventory")} detail={t("Fotografias, quantidades, localização, preço e disponibilidade num só lugar.", "Photos, quantities, location, price, and availability in one place.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
       <div className="inventory-actions">
         <button className="button-secondary" onClick={openCategories}>＋ {t("Gerir categorias", "Manage categories")}</button>
-        <button className="button-secondary" onClick={importInventory}>↑ {t("Importar CSV", "Import CSV")}</button>
+        <button className="button-secondary" onClick={openKits}>◇ {t("Kits e conjuntos", "Kits & sets")}</button>
+        <button className="button-secondary" onClick={importInventory}>↑ {t("Importar Excel / CSV", "Import Excel / CSV")}</button>
         <button className="button-secondary" onClick={exportInventory}>↓ {t("Exportar CSV", "Export CSV")}</button>
       </div>
       <div className="toolbar">
@@ -643,12 +932,12 @@ function Storage({ items, allItems, language, t, categories, query, setQuery, fi
       </div>
       {selected.length > 0 && <div className="bulk-bar"><strong>{selected.length} {t("seleccionados", "selected")}</strong><button onClick={() => { bulkStatus(selected, "Rented"); setSelected([]); }}>{t("Marcar como alugado", "Mark as rented")}</button><button onClick={() => { bulkStatus(selected, "Available"); setSelected([]); }}>{t("Marcar disponível", "Mark available")}</button><button className="danger" onClick={() => { bulkRemove(selected); setSelected([]); }}>{t("Eliminar", "Delete")}</button><button onClick={() => setSelected([])}>×</button></div>}
       <div className="collection-summary"><span><b>{items.length}</b> {t("tipos de item", "item types")}</span><span><b>{allItems.reduce((sum, item) => sum + item.quantity, 0)}</b> {t("peças individuais", "individual pieces")}</span><span><i />{t("Sincronizado agora", "Synced just now")}</span></div>
-      {items.length ? <div className="storage-grid">{items.map((item) => <ItemCard key={item.id} language={language} t={t} item={item} selected={selected.includes(item.id)} onSelect={() => toggle(item.id)} onReserve={() => openReserve(item)} onRemove={() => removeItem(item)} />)}</div> : <div className="empty-state"><span>⌕</span><h3>{t("Nenhum item encontrado", "No items found")}</h3><p>{t("Ajuste os filtros ou adicione um novo item.", "Adjust the filters or add something new.")}</p></div>}
+      {items.length ? <div className="storage-grid">{items.map((item) => <ItemCard key={item.id} language={language} t={t} item={item} selected={selected.includes(item.id)} onSelect={() => toggle(item.id)} onReserve={() => openReserve(item)} onManage={() => manageItem(item)} onRemove={() => removeItem(item)} />)}</div> : <div className="empty-state"><span>⌕</span><h3>{t("Nenhum item encontrado", "No items found")}</h3><p>{t("Ajuste os filtros ou adicione um novo item.", "Adjust the filters or add something new.")}</p></div>}
     </>
   );
 }
 
-function ItemCard({ item, language, t, compact, selected, onSelect, onReserve, onRemove }: { item: Item; language: Language; t: Translator; compact?: boolean; selected?: boolean; onSelect?: () => void; onReserve: () => void; onRemove?: () => void }) {
+function ItemCard({ item, language, t, compact, selected, onSelect, onReserve, onManage, onRemove }: { item: Item; language: Language; t: Translator; compact?: boolean; selected?: boolean; onSelect?: () => void; onReserve: () => void; onManage?: () => void; onRemove?: () => void }) {
   const statusLabel = item.status === "Available" ? t("Disponível", "Available") : item.status === "Reserved" ? t("Reservado", "Reserved") : t("Alugado", "Rented");
   return (
     <article className={cls("item-card", compact && "compact", selected && "selected")}>
@@ -658,7 +947,7 @@ function ItemCard({ item, language, t, compact, selected, onSelect, onReserve, o
         <h3>{item.name}</h3>
         <strong className="item-price">{formatMoney(item.price || 0, item.currency || "MZN", language)} <small>/ {t("dia", "day")}</small></strong>
         <div className="item-meta"><span><b>{item.available}</b> / {item.quantity} {t("disponíveis", "available")}</span><span className={cls("status-dot", item.status.toLowerCase())}>{statusLabel}</span></div>
-        {!compact && <><div className="item-extra"><span>⌖ {item.storageLocation || t("Local por definir", "Location not set")}</span><span>◇ {item.condition || t("Bom", "Good")}</span></div><div className="item-card-actions"><button onClick={onReserve}>{t("Reservar datas", "Reserve dates")}</button>{onRemove && <button onClick={onRemove} aria-label={t(`Remover ${item.name}`, `Remove ${item.name}`)}>•••</button>}</div></>}
+        {!compact && <><div className="item-extra"><span>⌖ {item.storageLocation || t("Local por definir", "Location not set")}</span><span>◇ {item.condition || t("Bom", "Good")}</span>{item.minStock > 0 && item.available <= item.minStock && <span className="low-stock">! {t("Stock baixo", "Low stock")}</span>}</div><div className="item-card-actions"><button onClick={onReserve}>{t("Reservar", "Reserve")}</button>{onManage && <button className="manage-item" onClick={onManage}>{t("Gerir", "Manage")}</button>}{onRemove && <button onClick={onRemove} aria-label={t(`Remover ${item.name}`, `Remove ${item.name}`)}>×</button>}</div></>}
       </div>
     </article>
   );
@@ -745,7 +1034,7 @@ function ProfileEditor({ t, profile, setProfile, save, saving }: { t: Translator
             try {
               const response = await fetch("/api/profile-image", { method: "POST", body });
               if (response.ok) {
-                const data = await response.json();
+                const data = await response.json() as { url: string };
                 update("avatarUrl", data.url);
               }
             } catch { /* Preview stays usable without upload binding. */ }
@@ -819,6 +1108,62 @@ function ReservationInspector({ language, t, reservation }: { language: Language
   </aside>;
 }
 
+function ItemManager({ item, categories, photos, movements, maintenance, language, t, onUpdate, onAddPhotos, onRemovePhoto, onAdjustStock, onAddMaintenance, onCompleteMaintenance }: {
+  item: Item;
+  categories: string[];
+  photos: ItemPhoto[];
+  movements: StockMovement[];
+  maintenance: MaintenanceRecord[];
+  language: Language;
+  t: Translator;
+  onUpdate: (event: FormEvent<HTMLFormElement>) => void;
+  onAddPhotos: (files: File[]) => void;
+  onRemovePhoto: (photo: ItemPhoto) => void;
+  onAdjustStock: (event: FormEvent<HTMLFormElement>) => void;
+  onAddMaintenance: (event: FormEvent<HTMLFormElement>) => void;
+  onCompleteMaintenance: (record: MaintenanceRecord) => void;
+}) {
+  const [tab, setTab] = useState<"details" | "gallery" | "stock" | "maintenance">("details");
+  return <div className="item-manager">
+    <nav className="manager-tabs">
+      <button className={cls(tab === "details" && "active")} onClick={() => setTab("details")}>{t("Ficha", "Details")}</button>
+      <button className={cls(tab === "gallery" && "active")} onClick={() => setTab("gallery")}>{t("Fotografias", "Photos")} <span>{photos.length}</span></button>
+      <button className={cls(tab === "stock" && "active")} onClick={() => setTab("stock")}>{t("Stock e histórico", "Stock & history")}</button>
+      <button className={cls(tab === "maintenance" && "active")} onClick={() => setTab("maintenance")}>{t("Manutenção", "Maintenance")} <span>{maintenance.filter((record) => record.status !== "Completed").length}</span></button>
+    </nav>
+    {tab === "details" && <form key={`details-${item.id}-${item.quantity}`} className="modal-form manager-panel" onSubmit={onUpdate}>
+      <div className="form-grid"><label>{t("Nome", "Name")}<input name="name" defaultValue={item.name} required /></label><label>SKU<input name="sku" defaultValue={item.sku} /></label></div>
+      <label>{t("Descrição", "Description")}<textarea name="description" rows={3} defaultValue={item.description} /></label>
+      <div className="form-grid"><label>{t("Categoria", "Category")}<select name="category" defaultValue={item.category}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label>{t("Estado", "Status")}<select name="status" defaultValue={item.status}><option value="Available">{t("Disponível", "Available")}</option><option value="Reserved">{t("Reservado", "Reserved")}</option><option value="Rented">{t("Alugado", "Rented")}</option></select></label></div>
+      <div className="form-grid"><label>{t("Quantidade total", "Total quantity")}<input name="quantity" type="number" min="1" defaultValue={item.quantity} required /></label><label>{t("Disponível", "Available")}<input name="available" type="number" min="0" defaultValue={item.available} required /></label></div>
+      <div className="form-grid"><label>{t("Preço / dia", "Price / day")}<input name="price" type="number" min="0" defaultValue={item.price} required /></label><label>{t("Moeda", "Currency")}<select name="currency" defaultValue={item.currency || "MZN"}><option value="MZN">MZN · Metical</option><option value="ZAR">ZAR · Rand</option><option value="USD">USD · Dollar</option><option value="EUR">EUR · Euro</option></select></label></div>
+      <div className="form-grid"><label>{t("Valor de reposição (MZN)", "Replacement value (MZN)")}<input name="replacementValue" type="number" min="0" defaultValue={item.replacementValue} /></label><label>{t("Stock mínimo", "Minimum stock")}<input name="minStock" type="number" min="0" defaultValue={item.minStock} /></label></div>
+      <label>{t("Condição", "Condition")}<select name="condition" defaultValue={item.condition}><option>{t("Excelente", "Excellent")}</option><option>{t("Bom", "Good")}</option><option>{t("Requer inspecção", "Needs inspection")}</option><option>{t("Em manutenção", "In maintenance")}</option><option>{t("Danificado", "Damaged")}</option></select></label>
+      <label>{t("Localização no armazém", "Storage location")}<input name="storageLocation" defaultValue={item.storageLocation} /></label>
+      <div className="modal-actions"><button className="button-primary">{t("Guardar ficha", "Save record")}</button></div>
+    </form>}
+    {tab === "gallery" && <section className="manager-panel">
+      <label className="photo-upload-field"><span>▧</span><span><strong>{t("Adicionar fotografias", "Add photos")}</strong><small>{8 - photos.length} {t("lugares disponíveis", "slots available")}</small></span><input type="file" multiple accept="image/png,image/jpeg" onChange={(event) => { onAddPhotos(Array.from(event.target.files || [])); event.target.value = ""; }} /></label>
+      {photos.length ? <div className="photo-gallery">{photos.map((photo, index) => <figure key={photo.id}><img src={photo.url} alt={`${item.name} ${index + 1}`} /><figcaption>{index === 0 ? t("Capa", "Cover") : `${index + 1}`}<button onClick={() => onRemovePhoto(photo)}>{t("Remover", "Remove")}</button></figcaption></figure>)}</div> : <div className="manager-empty">▧<strong>{t("Ainda não há fotografias", "No photos yet")}</strong></div>}
+    </section>}
+    {tab === "stock" && <section className="manager-panel manager-columns">
+      <form className="operation-form" onSubmit={onAdjustStock}><h3>{t("Registar movimento", "Record movement")}</h3><div className="stock-balance"><span><strong>{item.quantity}</strong><small>{t("total", "total")}</small></span><span><strong>{item.available}</strong><small>{t("disponível", "available")}</small></span></div><div className="form-grid"><label>{t("Tipo", "Type")}<select name="type"><option value="purchase">{t("Compra / entrada", "Purchase / incoming")}</option><option value="adjustment">{t("Acerto", "Adjustment")}</option><option value="damage">{t("Dano / perda", "Damage / loss")}</option><option value="retirement">{t("Abate", "Retirement")}</option></select></label><label>{t("Variação", "Change")}<input name="delta" type="number" placeholder="+5 ou -2" required /></label></div><label>{t("Nota", "Note")}<input name="note" placeholder={t("Factura, motivo ou responsável…", "Invoice, reason, or owner…")} /></label><button className="button-primary">{t("Registar movimento", "Record movement")}</button></form>
+      <div className="history-list"><h3>{t("Histórico", "History")}</h3>{movements.length ? movements.map((movement) => <article key={movement.id}><i className={movement.quantityDelta >= 0 ? "positive" : "negative"}>{movement.quantityDelta > 0 ? "+" : ""}{movement.quantityDelta}</i><span><strong>{movement.type}</strong><small>{movement.note || t("Sem nota", "No note")} · {new Date(movement.createdAt).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")}</small></span></article>) : <p>{t("Sem movimentos registados.", "No movements recorded.")}</p>}</div>
+    </section>}
+    {tab === "maintenance" && <section className="manager-panel manager-columns">
+      <form className="operation-form" onSubmit={onAddMaintenance}><h3>{t("Nova intervenção", "New intervention")}</h3><div className="form-grid"><label>{t("Tipo", "Type")}<select name="type"><option value="inspection">{t("Inspecção", "Inspection")}</option><option value="cleaning">{t("Limpeza", "Cleaning")}</option><option value="repair">{t("Reparação", "Repair")}</option><option value="damage">{t("Dano", "Damage")}</option></select></label><label>{t("Data prevista", "Scheduled date")}<input name="scheduledDate" type="date" /></label></div><label>{t("Custo (MZN)", "Cost (MZN)")}<input name="cost" type="number" min="0" defaultValue="0" /></label><label>{t("Notas", "Notes")}<textarea name="notes" rows={3} required /></label><button className="button-primary">{t("Registar intervenção", "Add intervention")}</button></form>
+      <div className="maintenance-list"><h3>{t("Intervenções", "Interventions")}</h3>{maintenance.length ? maintenance.map((record) => <article key={record.id}><span className={cls("maintenance-status", record.status === "Completed" && "completed")}>{record.status === "Completed" ? "✓" : "!"}</span><span><strong>{record.type}</strong><small>{record.notes}</small><em>{record.scheduledDate || t("Sem data", "No date")} · {formatMoney(record.cost, "MZN", language)}</em></span>{record.status !== "Completed" && <button onClick={() => onCompleteMaintenance(record)}>{t("Concluir", "Complete")}</button>}</article>) : <p>{t("Nenhuma intervenção registada.", "No maintenance records.")}</p>}</div>
+    </section>}
+  </div>;
+}
+
+function KitManager({ items, kits, language, t, onCreate, onDelete }: { items: Item[]; kits: Kit[]; language: Language; t: Translator; onCreate: (event: FormEvent<HTMLFormElement>) => void; onDelete: (kit: Kit) => void }) {
+  return <div className="kit-manager">
+    <form className="operation-form" onSubmit={onCreate}><h3>{t("Criar novo kit", "Create a new kit")}</h3><div className="form-grid"><label>{t("Nome", "Name")}<input name="name" placeholder={t("Mesa romântica para 10", "Romantic table for 10")} required /></label><label>{t("Preço do kit (MZN)", "Kit price (MZN)")}<input name="price" type="number" min="0" required /></label></div><label>{t("Descrição", "Description")}<textarea name="description" rows={2} /></label><div className="kit-item-picker">{items.map((item) => <label key={item.id}><input name={`kit-item-${item.id}`} type="checkbox" value={item.id} /><span><strong>{item.name}</strong><small>{item.available} {t("disponíveis", "available")}</small></span><input name={`kit-quantity-${item.id}`} type="number" min="1" max={item.quantity} defaultValue="1" aria-label={t(`Quantidade de ${item.name}`, `${item.name} quantity`)} /></label>)}</div><button className="button-primary">{t("Criar kit", "Create kit")}</button></form>
+    <div className="kit-list"><h3>{t("Kits activos", "Active kits")}</h3>{kits.length ? kits.map((kit) => <article key={kit.id}><div><span>◇</span><div><strong>{kit.name}</strong><small>{kit.items.map((entry) => `${entry.quantity}× ${items.find((item) => item.id === entry.itemId)?.name || t("Artigo removido", "Removed item")}`).join(" · ")}</small></div></div><footer><b>{formatMoney(kit.price, kit.currency, language)}</b><button onClick={() => onDelete(kit)}>{t("Remover", "Remove")}</button></footer></article>) : <div className="manager-empty">◇<strong>{t("Ainda não existem kits", "No kits yet")}</strong></div>}</div>
+  </div>;
+}
+
 function CategoryManager({ t, categories, addCategory, removeCategory }: { t: Translator; categories: string[]; addCategory: (name: string) => void; removeCategory: (name: string) => void }) {
   const [name, setName] = useState("");
   return <div className="category-manager"><form onSubmit={(event) => { event.preventDefault(); addCategory(name); setName(""); }}><input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("Nova categoria…", "New category…")} required /><button className="button-primary">{t("Adicionar", "Add")}</button></form><div>{categories.map((category) => <span key={category}><i>▦</i><b>{category}</b><button onClick={() => removeCategory(category)} aria-label={t(`Remover ${category}`, `Remove ${category}`)}>×</button></span>)}</div><p>{t("Ao remover uma categoria, os itens passam para “Sem categoria”.", "Removing a category moves its items to “Uncategorized”.")}</p></div>;
@@ -883,6 +1228,6 @@ function downloadCsv(filename: string, rows: (string | number | undefined)[][]) 
   URL.revokeObjectURL(url);
 }
 
-function Modal({ title, subtitle, onClose, children }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="modal" role="dialog" aria-modal="true" aria-label={title}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">TROVE STORAGE</span><h2>{title}</h2><p>{subtitle}</p>{children}</section></div>;
+function Modal({ title, subtitle, onClose, children, wide }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className={cls("modal", wide && "modal-wide")} role="dialog" aria-modal="true" aria-label={title}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">TROVE STORAGE</span><h2>{title}</h2><p>{subtitle}</p>{children}</section></div>;
 }

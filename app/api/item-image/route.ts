@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   if (!["image/jpeg", "image/png"].includes(file.type) || file.size > 5_000_000) {
     return Response.json({ error: "Use a JPG or PNG under 5 MB" }, { status: 400 });
   }
-  const key = `businesses/${context.businessId}/items/item-${Date.now()}.${file.type === "image/png" ? "png" : "jpg"}`;
+  const key = `businesses/${context.businessId}/items/item-${crypto.randomUUID()}.${file.type === "image/png" ? "png" : "jpg"}`;
   await env.MEDIA.put(key, file.stream(), { httpMetadata: { contentType: file.type } });
   return Response.json({ url: `/api/item-image?key=${encodeURIComponent(key)}` });
 }

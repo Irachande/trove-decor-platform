@@ -64,3 +64,47 @@ test("real accounts start without client-side demo inventory", async () => {
   assert.doesNotMatch(app, /const seedItems/);
   assert.doesNotMatch(app, /const seedReservations/);
 });
+
+test("phase 2 inventory entities are durable and tenant scoped", async () => {
+  const [schema, migration, workspace, api] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0003_sleepy_wolfpack.sql"),
+    source("app/workspace.ts"),
+    source("app/api/data/route.ts"),
+  ]);
+
+  for (const entity of [
+    "itemPhotos",
+    "inventoryMovements",
+    "maintenanceRecords",
+    "kits",
+    "kitItems",
+  ]) {
+    assert.match(schema, new RegExp(`export const ${entity}`));
+  }
+  assert.match(migration, /CREATE TABLE `inventory_movements`/);
+  assert.match(migration, /CREATE TABLE `maintenance_records`/);
+  assert.match(workspace, /item_photos_business_item_idx/);
+  assert.match(api, /addItemPhotos: "manageInventory"/);
+  assert.match(api, /adjustStock: "manageInventory"/);
+  assert.match(api, /createKit: "manageInventory"/);
+  assert.ok((api.match(/context\.businessId/g) ?? []).length >= 60);
+});
+
+test("phase 2 interface supports complete records and validated Excel imports", async () => {
+  const [app, styles, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("package.json"),
+  ]);
+
+  assert.match(app, /function ItemManager/);
+  assert.match(app, /function KitManager/);
+  assert.match(app, /read-excel-file/);
+  assert.match(app, /Nenhum artigo foi gravado/);
+  assert.match(app, /multiple accept="image\/png,image\/jpeg"/);
+  assert.match(styles, /\.photo-gallery/);
+  assert.match(styles, /\.history-list/);
+  assert.match(styles, /\.kit-manager/);
+  assert.match(manifest, /"read-excel-file": "5\.8\.8"/);
+});
