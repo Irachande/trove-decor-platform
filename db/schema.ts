@@ -115,7 +115,63 @@ export const reservations = sqliteTable("reservations", {
   notes: text("notes").notNull().default(""),
   quantity: integer("quantity").notNull().default(1),
   status: text("status").notNull().default("Confirmed"),
+  clientId: integer("client_id"),
+  eventId: integer("event_id"),
+  subtotal: integer("subtotal").notNull().default(0),
+  discount: integer("discount").notNull().default(0),
+  deliveryFee: integer("delivery_fee").notNull().default(0),
+  total: integer("total").notNull().default(0),
+  deposit: integer("deposit").notNull().default(0),
+  currency: text("currency").notNull().default("MZN"),
+  logistics: text("logistics").notNull().default(""),
+  paymentStatus: text("payment_status").notNull().default("Pending"),
+  checkedOutAt: text("checked_out_at"),
+  returnedAt: text("returned_at"),
+  cancelledAt: text("cancelled_at"),
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: text("created_at").notNull().default(""),
 });
+
+export const clients = sqliteTable("clients", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  name: text("name").notNull(),
+  email: text("email").notNull().default(""),
+  phone: text("phone").notNull().default(""),
+  notes: text("notes").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+});
+
+export const events = sqliteTable("events", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  clientId: integer("client_id").notNull(),
+  name: text("name").notNull(),
+  venue: text("venue").notNull().default(""),
+  startDate: text("start_date").notNull(),
+  endDate: text("end_date").notNull(),
+  setupTime: text("setup_time").notNull().default(""),
+  pickupTime: text("pickup_time").notNull().default(""),
+  notes: text("notes").notNull().default(""),
+  status: text("status").notNull().default("Planned"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const reservationItems = sqliteTable("reservation_items", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  reservationId: integer("reservation_id").notNull(),
+  itemId: integer("item_id").notNull(),
+  itemName: text("item_name").notNull(),
+  quantity: integer("quantity").notNull(),
+  unitPrice: integer("unit_price").notNull().default(0),
+  currency: text("currency").notNull().default("MZN"),
+}, (table) => [
+  uniqueIndex("reservation_items_reservation_item_idx").on(
+    table.reservationId,
+    table.itemId,
+  ),
+]);
 
 export const categories = sqliteTable("categories", {
   id: integer("id").primaryKey(),

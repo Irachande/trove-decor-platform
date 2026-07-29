@@ -104,6 +104,54 @@ async function migrateLegacyCategoriesConstraint() {
   ]);
 }
 
+async function migrateLegacyReservations() {
+  const legacy = await env.DB.prepare(
+    "SELECT id, business_id AS businessId, item, client, date, end_date AS endDate, event_name AS eventName, contact, notes, quantity, status FROM reservations WHERE client_id IS NULL OR event_id IS NULL ORDER BY id",
+  ).all<{
+    id: number;
+    businessId: number;
+    item: string;
+    client: string;
+    date: string;
+    endDate: string;
+    eventName: string;
+    contact: string;
+    notes: string;
+    quantity: number;
+    status: string;
+  }>();
+  for (const reservation of legacy.results) {
+    const clientId = reservation.id * 10 + 1;
+    const eventId = reservation.id * 10 + 2;
+    const reservationItemId = reservation.id * 10 + 3;
+    const inventory = await env.DB.prepare(
+      "SELECT id, name, price, currency FROM inventory_items WHERE business_id = ? ORDER BY length(name) DESC",
+    ).bind(reservation.businessId).all<{ id: number; name: string; price: number; currency: string }>();
+    const item = inventory.results.find(
+      (candidate) =>
+        reservation.item === candidate.name ||
+        reservation.item.startsWith(`${candidate.name} ×`),
+    );
+    const subtotal = item ? item.price * Math.max(1, reservation.quantity) : 0;
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO clients (id, business_id, name, email, phone, notes, created_at) VALUES (?, ?, ?, '', ?, '', ?)",
+      ).bind(clientId, reservation.businessId, reservation.client || "Cliente", reservation.contact || "", now()),
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO events (id, business_id, client_id, name, venue, start_date, end_date, setup_time, pickup_time, notes, status, created_at) VALUES (?, ?, ?, ?, '', ?, ?, '', '', ?, 'Planned', ?)",
+      ).bind(eventId, reservation.businessId, clientId, reservation.eventName || reservation.client || "Evento", reservation.date, reservation.endDate, reservation.notes || "", now()),
+      env.DB.prepare(
+        "UPDATE reservations SET client_id = ?, event_id = ?, subtotal = ?, total = ?, currency = ?, logistics = CASE WHEN logistics = '' THEN notes ELSE logistics END, created_at = CASE WHEN created_at = '' THEN ? ELSE created_at END WHERE id = ? AND business_id = ?",
+      ).bind(clientId, eventId, subtotal, subtotal, item?.currency || "MZN", now(), reservation.id, reservation.businessId),
+      ...(item
+        ? [env.DB.prepare(
+          "INSERT OR IGNORE INTO reservation_items (id, business_id, reservation_id, item_id, item_name, quantity, unit_price, currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ).bind(reservationItemId, reservation.businessId, reservation.id, item.id, item.name, Math.max(1, reservation.quantity), item.price, item.currency)]
+        : []),
+    ]);
+  }
+}
+
 export async function ensureWorkspaceDatabase() {
   const db = env.DB;
   await db.batch([
@@ -147,6 +195,15 @@ export async function ensureWorkspaceDatabase() {
       "CREATE TABLE IF NOT EXISTS kit_items (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, kit_id INTEGER NOT NULL, item_id INTEGER NOT NULL, quantity INTEGER NOT NULL, UNIQUE (kit_id, item_id))",
     ),
     db.prepare(
+      "CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, client_id INTEGER NOT NULL, name TEXT NOT NULL, venue TEXT NOT NULL DEFAULT '', start_date TEXT NOT NULL, end_date TEXT NOT NULL, setup_time TEXT NOT NULL DEFAULT '', pickup_time TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'Planned', created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS reservation_items (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, reservation_id INTEGER NOT NULL, item_id INTEGER NOT NULL, item_name TEXT NOT NULL, quantity INTEGER NOT NULL, unit_price INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'MZN', UNIQUE (reservation_id, item_id))",
+    ),
+    db.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS memberships_business_user_idx ON memberships (business_id, user_id)",
     ),
     db.prepare(
@@ -179,6 +236,27 @@ export async function ensureWorkspaceDatabase() {
     { name: "notes", sql: "notes TEXT NOT NULL DEFAULT ''" },
     { name: "quantity", sql: "quantity INTEGER NOT NULL DEFAULT 1" },
     { name: "status", sql: "status TEXT NOT NULL DEFAULT 'Confirmed'" },
+    { name: "client_id", sql: "client_id INTEGER" },
+    { name: "event_id", sql: "event_id INTEGER" },
+    { name: "subtotal", sql: "subtotal INTEGER NOT NULL DEFAULT 0" },
+    { name: "discount", sql: "discount INTEGER NOT NULL DEFAULT 0" },
+    {
+      name: "delivery_fee",
+      sql: "delivery_fee INTEGER NOT NULL DEFAULT 0",
+    },
+    { name: "total", sql: "total INTEGER NOT NULL DEFAULT 0" },
+    { name: "deposit", sql: "deposit INTEGER NOT NULL DEFAULT 0" },
+    { name: "currency", sql: "currency TEXT NOT NULL DEFAULT 'MZN'" },
+    { name: "logistics", sql: "logistics TEXT NOT NULL DEFAULT ''" },
+    {
+      name: "payment_status",
+      sql: "payment_status TEXT NOT NULL DEFAULT 'Pending'",
+    },
+    { name: "checked_out_at", sql: "checked_out_at TEXT" },
+    { name: "returned_at", sql: "returned_at TEXT" },
+    { name: "cancelled_at", sql: "cancelled_at TEXT" },
+    { name: "created_by_user_id", sql: "created_by_user_id INTEGER" },
+    { name: "created_at", sql: "created_at TEXT NOT NULL DEFAULT ''" },
   ]);
   await addMissingColumns("categories", [
     { name: "business_id", sql: "business_id INTEGER NOT NULL DEFAULT 1" },
@@ -190,6 +268,9 @@ export async function ensureWorkspaceDatabase() {
     { name: "business_id", sql: "business_id INTEGER NOT NULL DEFAULT 1" },
     { name: "invited_by_user_id", sql: "invited_by_user_id INTEGER" },
     { name: "created_at", sql: "created_at TEXT NOT NULL DEFAULT ''" },
+  ]);
+  await addMissingColumns("reservation_items", [
+    { name: "currency", sql: "currency TEXT NOT NULL DEFAULT 'MZN'" },
   ]);
 
   await migrateLegacyCategoriesConstraint();
@@ -226,6 +307,74 @@ export async function ensureWorkspaceDatabase() {
     db.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS kit_items_kit_item_idx ON kit_items (kit_id, item_id)",
     ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS clients_business_name_idx ON clients (business_id, name)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS events_business_dates_idx ON events (business_id, start_date, end_date)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS reservation_items_business_item_idx ON reservation_items (business_id, item_id, reservation_id)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS reservation_items_reservation_item_idx ON reservation_items (reservation_id, item_id)",
+    ),
+  ]);
+
+  await migrateLegacyReservations();
+
+  await db.batch([
+    db.prepare("DROP TRIGGER IF EXISTS reservation_items_availability_insert"),
+    db.prepare(`CREATE TRIGGER reservation_items_availability_insert
+      BEFORE INSERT ON reservation_items
+      BEGIN
+        SELECT CASE
+          WHEN NEW.quantity <= 0 THEN RAISE(ABORT, 'INVALID_RESERVATION_QUANTITY')
+          WHEN NOT EXISTS (
+            SELECT 1 FROM inventory_items
+            WHERE id = NEW.item_id AND business_id = NEW.business_id
+          ) THEN RAISE(ABORT, 'RESERVATION_ITEM_NOT_FOUND')
+          WHEN NEW.quantity > (
+            SELECT inventory_items.quantity - COALESCE((
+              SELECT SUM(existing.quantity)
+              FROM reservation_items AS existing
+              JOIN reservations AS booked
+                ON booked.id = existing.reservation_id
+               AND booked.business_id = existing.business_id
+              WHERE existing.business_id = NEW.business_id
+                AND existing.item_id = NEW.item_id
+                AND existing.reservation_id != NEW.reservation_id
+                AND booked.status NOT IN ('Cancelled', 'Returned')
+                AND booked.date <= (
+                  SELECT end_date FROM reservations
+                  WHERE id = NEW.reservation_id AND business_id = NEW.business_id
+                )
+                AND booked.end_date >= (
+                  SELECT date FROM reservations
+                  WHERE id = NEW.reservation_id AND business_id = NEW.business_id
+                )
+            ), 0)
+            FROM inventory_items
+            WHERE id = NEW.item_id AND business_id = NEW.business_id
+          ) THEN RAISE(ABORT, 'INSUFFICIENT_DATE_AVAILABILITY')
+        END;
+      END`),
+    db.prepare("DROP TRIGGER IF EXISTS reservations_checkout_stock"),
+    db.prepare(`CREATE TRIGGER reservations_checkout_stock
+      BEFORE UPDATE OF status ON reservations
+      WHEN NEW.status = 'CheckedOut' AND OLD.status = 'Confirmed'
+      BEGIN
+        SELECT CASE WHEN EXISTS (
+          SELECT 1
+          FROM reservation_items AS line
+          JOIN inventory_items AS stock
+            ON stock.id = line.item_id
+           AND stock.business_id = line.business_id
+          WHERE line.reservation_id = NEW.id
+            AND line.business_id = NEW.business_id
+            AND stock.available < line.quantity
+        ) THEN RAISE(ABORT, 'INSUFFICIENT_PHYSICAL_STOCK') END;
+      END`),
   ]);
 
   const businessCount = await db

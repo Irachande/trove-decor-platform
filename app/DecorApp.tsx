@@ -56,6 +56,9 @@ type MaintenanceRecord = { id: number; itemId: number; type: string; status: str
 type KitEntry = { id: number; kitId: number; itemId: number; quantity: number };
 type Kit = { id: number; name: string; description: string; price: number; currency: string; active: boolean; createdAt: string; items: KitEntry[] };
 type ImportReport = { title: string; detail: string; errors: string[] };
+type Client = { id: number; name: string; email: string; phone: string; notes: string; createdAt: string };
+type EventRecord = { id: number; clientId: number; name: string; venue: string; startDate: string; endDate: string; setupTime: string; pickupTime: string; notes: string; status: string; createdAt: string };
+type ReservationItem = { id: number; reservationId: number; itemId: number; itemName: string; quantity: number; unitPrice: number; currency: string };
 type WorkspaceData = {
   items?: Item[];
   reservations?: Reservation[];
@@ -67,6 +70,8 @@ type WorkspaceData = {
   movements?: StockMovement[];
   maintenance?: MaintenanceRecord[];
   kits?: Kit[];
+  clients?: Client[];
+  events?: EventRecord[];
 };
 
 type Reservation = {
@@ -81,6 +86,21 @@ type Reservation = {
   notes: string;
   quantity: number;
   status: string;
+  clientId?: number;
+  eventId?: number;
+  subtotal: number;
+  discount: number;
+  deliveryFee: number;
+  total: number;
+  deposit: number;
+  currency: string;
+  logistics: string;
+  paymentStatus: string;
+  checkedOutAt?: string;
+  returnedAt?: string;
+  cancelledAt?: string;
+  createdAt?: string;
+  items: ReservationItem[];
 };
 
 type Profile = {
@@ -145,6 +165,13 @@ function roleLabel(role: string, t: Translator) {
   return t("Consulta", "Viewer");
 }
 
+function reservationStatusLabel(status: string, t: Translator) {
+  if (status === "CheckedOut") return t("Em aluguer", "Checked out");
+  if (status === "Returned") return t("Devolvida", "Returned");
+  if (status === "Cancelled") return t("Cancelada", "Cancelled");
+  return t("Confirmada", "Confirmed");
+}
+
 export default function DecorApp({ initialUser }: { initialUser: SessionUser }) {
   const [view, setView] = useState<View>("home");
   const [language, setLanguage] = useState<Language>(() => {
@@ -162,6 +189,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [movements, setMovements] = useState<StockMovement[]>([]);
   const [maintenance, setMaintenance] = useState<MaintenanceRecord[]>([]);
   const [kits, setKits] = useState<Kit[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [events, setEvents] = useState<EventRecord[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All items");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -171,6 +200,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [teamOpen, setTeamOpen] = useState(false);
   const [reserveOpen, setReserveOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
+  const [managedReservation, setManagedReservation] = useState<Reservation | null>(null);
+  const [directoryOpen, setDirectoryOpen] = useState(false);
   const [managedItem, setManagedItem] = useState<Item | null>(null);
   const [kitsOpen, setKitsOpen] = useState(false);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
@@ -207,6 +238,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         if (Array.isArray(data.movements)) setMovements(data.movements);
         if (Array.isArray(data.maintenance)) setMaintenance(data.maintenance);
         if (Array.isArray(data.kits)) setKits(data.kits);
+        if (Array.isArray(data.clients)) setClients(data.clients);
+        if (Array.isArray(data.events)) setEvents(data.events);
       })
       .catch(() => {
         setToast("Não foi possível carregar o espaço da empresa.");
@@ -260,7 +293,16 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         window.location.href = "/signin-with-chatgpt?return_to=%2F";
         return false;
       }
-      if (!response.ok) throw new Error(result.error || "Unable to save");
+      if (!response.ok) {
+        const message = String(result.error || "Unable to save");
+        if (message.includes("unavailable for the selected dates")) {
+          throw new Error(t("Um ou mais artigos já não estão disponíveis para estas datas.", "One or more items are no longer available for these dates."));
+        }
+        if (message.includes("physical stock")) {
+          throw new Error(t("Não existe stock físico suficiente para registar a saída.", "There is not enough physical stock to check out."));
+        }
+        throw new Error(message);
+      }
       return true;
     } catch (error) {
       showToast(error instanceof Error ? error.message : t("Não foi possível guardar.", "Unable to save."));
@@ -328,28 +370,53 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   async function handleReservation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const itemId = Number(form.get("itemId") || selectedItem?.id);
-    const itemForReservation = items.find((item) => item.id === itemId);
-    if (!itemForReservation) return;
-    const quantity = Number(form.get("quantity") || 1);
-    const reservation: Reservation = {
-      id: Date.now(),
-      item: `${itemForReservation.name} × ${quantity}`,
-      client: String(form.get("client") || t("Nova reserva", "New reservation")),
-      eventName: String(form.get("eventName") || ""),
-      contact: String(form.get("contact") || ""),
+    const selectedLines = items.flatMap((item) => {
+      if (!form.get(`reservation-item-${item.id}`)) return [];
+      return [{ itemId: item.id, quantity: Number(form.get(`reservation-quantity-${item.id}`) || 1) }];
+    });
+    if (!selectedLines.length) {
+      showToast(t("Seleccione pelo menos um artigo.", "Select at least one item."));
+      return;
+    }
+    const clientChoice = String(form.get("clientChoice") || "new");
+    const chosenClient = clients.find((client) => client.id === Number(clientChoice));
+    const eventChoice = String(form.get("eventChoice") || "new");
+    const chosenEvent = events.find((entry) => entry.id === Number(eventChoice));
+    const stamp = Date.now();
+    const payload = {
+      id: managedReservation?.id || stamp,
+      clientId: chosenClient?.id || managedReservation?.clientId || stamp + 1,
+      clientName: chosenClient?.name || String(form.get("clientName") || ""),
+      clientEmail: chosenClient?.email || String(form.get("clientEmail") || ""),
+      clientPhone: chosenClient?.phone || String(form.get("clientPhone") || ""),
+      eventId: chosenEvent?.id || managedReservation?.eventId || stamp + 2,
+      eventName: chosenEvent?.name || String(form.get("eventName") || ""),
+      venue: String(form.get("venue") || chosenEvent?.venue || ""),
+      date: String(form.get("start") || chosenEvent?.startDate || ""),
+      endDate: String(form.get("end") || chosenEvent?.endDate || ""),
+      setupTime: String(form.get("setupTime") || chosenEvent?.setupTime || ""),
+      pickupTime: String(form.get("pickupTime") || chosenEvent?.pickupTime || ""),
+      eventNotes: String(form.get("eventNotes") || chosenEvent?.notes || ""),
       notes: String(form.get("notes") || ""),
-      date: String(form.get("start")),
-      endDate: String(form.get("end")),
+      logistics: String(form.get("logistics") || ""),
+      discount: Number(form.get("discount") || 0),
+      deliveryFee: Number(form.get("deliveryFee") || 0),
+      deposit: Number(form.get("deposit") || 0),
+      paymentStatus: String(form.get("paymentStatus") || "Pending"),
       color: profile.color,
-      quantity,
-      status: "Confirmed",
+      items: selectedLines,
     };
-    setReservations((current) => [reservation, ...current]);
-    setItems((current) => current.map((item) => item.id === itemForReservation.id ? { ...item, status: "Reserved" } : item));
-    setReserveOpen(false);
-    showToast(t(`Datas reservadas para ${itemForReservation.name}`, `Dates reserved for ${itemForReservation.name}`));
-    await persist("addReservation", reservation);
+    const action = managedReservation ? "updateReservation" : "addReservation";
+    if (await persist(action, payload)) {
+      setReserveOpen(false);
+      setManagedReservation(null);
+      setSelectedItem(null);
+      setReloadToken((value) => value + 1);
+      showToast(t(
+        managedReservation ? "Reserva actualizada" : "Reserva confirmada sem conflitos",
+        managedReservation ? "Reservation updated" : "Reservation confirmed without conflicts",
+      ));
+    }
   }
 
   async function saveProfile() {
@@ -367,7 +434,71 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       return;
     }
     setSelectedItem(item);
+    setManagedReservation(null);
     setReserveOpen(true);
+  }
+
+  function editReservation(reservation: Reservation) {
+    if (!canManageReservations) {
+      showToast(t("A sua função não permite editar reservas.", "Your role cannot edit reservations."));
+      return;
+    }
+    setManagedReservation(reservation);
+    setSelectedItem(null);
+    setReserveOpen(true);
+  }
+
+  async function transitionReservation(reservation: Reservation, status: string) {
+    if (!canManageReservations) return;
+    if (await persist("transitionReservation", { id: reservation.id, status })) {
+      setReloadToken((value) => value + 1);
+      showToast(
+        status === "Cancelled"
+          ? t("Reserva cancelada", "Reservation cancelled")
+          : status === "CheckedOut"
+            ? t("Saída registada e stock actualizado", "Checkout recorded and stock updated")
+            : t("Devolução registada e stock reposto", "Return recorded and stock restored"),
+      );
+    }
+  }
+
+  async function saveDirectoryClient(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    if (await persist("addClient", {
+      id: Date.now(),
+      name: String(form.get("name") || ""),
+      email: String(form.get("email") || ""),
+      phone: String(form.get("phone") || ""),
+      notes: String(form.get("notes") || ""),
+    })) {
+      formElement.reset();
+      setReloadToken((value) => value + 1);
+      showToast(t("Cliente adicionado", "Client added"));
+    }
+  }
+
+  async function saveDirectoryEvent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    if (await persist("addEvent", {
+      id: Date.now(),
+      clientId: Number(form.get("clientId")),
+      name: String(form.get("name") || ""),
+      venue: String(form.get("venue") || ""),
+      startDate: String(form.get("startDate") || ""),
+      endDate: String(form.get("endDate") || ""),
+      setupTime: String(form.get("setupTime") || ""),
+      pickupTime: String(form.get("pickupTime") || ""),
+      notes: String(form.get("notes") || ""),
+      status: "Planned",
+    })) {
+      formElement.reset();
+      setReloadToken((value) => value + 1);
+      showToast(t("Evento adicionado", "Event added"));
+    }
   }
 
   async function addCategory(name: string) {
@@ -717,7 +848,21 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
               }}
             />
           )}
-          {view === "calendar" && <Calendar language={language} t={t} reservations={reservations} openAdd={() => { if (canManageReservations) { setSelectedItem(null); setReserveOpen(true); } else showToast(t("A sua função não permite criar reservas.", "Your role cannot create reservations.")); }} />}
+          {view === "calendar" && <Calendar
+            language={language}
+            t={t}
+            reservations={reservations}
+            openAdd={() => {
+              if (canManageReservations) {
+                setSelectedItem(null);
+                setManagedReservation(null);
+                setReserveOpen(true);
+              } else showToast(t("A sua função não permite criar reservas.", "Your role cannot create reservations."));
+            }}
+            openDirectory={() => setDirectoryOpen(true)}
+            onEdit={editReservation}
+            onTransition={transitionReservation}
+          />}
           {view === "network" && (
             <Network
               plan={plan}
@@ -777,23 +922,24 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       )}
 
       {reserveOpen && (
-        <Modal title={t("Nova reserva", "New reservation")} subtitle={selectedItem?.name || t("Escolha o item e registe os detalhes do evento.", "Choose the item and record the event details.")} onClose={() => setReserveOpen(false)}>
-          <form onSubmit={handleReservation} className="modal-form">
-            <label>{t("Item", "Item")}<select name="itemId" defaultValue={selectedItem?.id || items[0]?.id}>{categories.map((category) => <optgroup label={category} key={category}>{items.filter((item) => item.category === category).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.available} {t("disponíveis", "available")}</option>)}</optgroup>)}</select></label>
-            <div className="form-grid">
-              <label>{t("Evento", "Event")}<input name="eventName" placeholder={t("ex.: Casamento Rivera", "e.g. Rivera wedding")} required /></label>
-              <label>{t("Cliente", "Client")}<input name="client" placeholder={t("Nome do cliente", "Client name")} required /></label>
-            </div>
-            <label>{t("Contacto do cliente", "Client contact")}<input name="contact" placeholder="+258 84 000 0000" /></label>
-            <div className="form-grid">
-              <label>{t("Data de início", "Start date")}<input name="start" type="date" defaultValue="2026-08-08" required /></label>
-              <label>{t("Data de fim", "End date")}<input name="end" type="date" defaultValue="2026-08-09" required /></label>
-            </div>
-            <label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min="1" max={selectedItem?.available || 999} defaultValue="1" required /></label>
-            <label>{t("Notas de logística", "Logistics notes")}<textarea name="notes" rows={3} placeholder={t("Horário de recolha, endereço, responsável, cuidados especiais…", "Pickup time, address, owner, special handling…")} /></label>
-            <div className="availability-note"><span>✓</span> {selectedItem?.available || items[0]?.available || 0} {t("unidades disponíveis neste momento", "units currently available")}</div>
-            <div className="modal-actions"><button type="button" className="button-secondary" onClick={() => setReserveOpen(false)}>{t("Cancelar", "Cancel")}</button><button className="button-primary">{t("Confirmar reserva", "Confirm reservation")}</button></div>
-          </form>
+        <Modal wide title={managedReservation ? t("Editar reserva", "Edit reservation") : t("Nova reserva", "New reservation")} subtitle={t("Cliente, evento, artigos, valores e logística numa única reserva.", "Client, event, items, pricing, and logistics in one reservation.")} onClose={() => { setReserveOpen(false); setManagedReservation(null); }}>
+          <ReservationComposer
+            items={items}
+            clients={clients}
+            events={events}
+            selectedItem={selectedItem}
+            initial={managedReservation}
+            language={language}
+            t={t}
+            onSubmit={handleReservation}
+            onCancel={() => { setReserveOpen(false); setManagedReservation(null); }}
+          />
+        </Modal>
+      )}
+
+      {directoryOpen && (
+        <Modal wide title={t("Clientes e eventos", "Clients & events")} subtitle={t("Mantenha os contactos e próximos trabalhos organizados.", "Keep contacts and upcoming jobs organized.")} onClose={() => setDirectoryOpen(false)}>
+          <RelationshipManager clients={clients} events={events} t={t} onAddClient={saveDirectoryClient} onAddEvent={saveDirectoryEvent} />
         </Modal>
       )}
 
@@ -868,7 +1014,7 @@ function Overview({ language, t, items, reservations, userName, setView, openAdd
   const total = items.reduce((sum, item) => sum + item.quantity, 0);
   const available = items.reduce((sum, item) => sum + item.available, 0);
   const utilization = total ? Math.round(((total - available) / total) * 100) : 0;
-  const estimatedRevenue = items.reduce((sum, item) => sum + (item.quantity - item.available) * (item.price || 0), 0);
+  const estimatedRevenue = reservations.filter((reservation) => reservation.status !== "Cancelled").reduce((sum, reservation) => sum + (reservation.total || 0), 0);
   return (
     <>
       <PageHeading eyebrow={t("O SEU ESPAÇO DE TRABALHO", "YOUR WORKSPACE")} title={t(`Olá, ${userName}.`, `Hello, ${userName}.`)} detail={t("Veja a operação, as reservas e o desempenho do seu inventário.", "See your operations, reservations, and inventory performance.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
@@ -953,10 +1099,91 @@ function ItemCard({ item, language, t, compact, selected, onSelect, onReserve, o
   );
 }
 
-function Calendar({ language, t, reservations, openAdd }: { language: Language; t: Translator; reservations: Reservation[]; openAdd: () => void }) {
+function ReservationComposer({ items, clients, events, selectedItem, initial, language, t, onSubmit, onCancel }: {
+  items: Item[];
+  clients: Client[];
+  events: EventRecord[];
+  selectedItem: Item | null;
+  initial: Reservation | null;
+  language: Language;
+  t: Translator;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onCancel: () => void;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const initialLines = Object.fromEntries(
+    (initial?.items || []).map((line) => [line.itemId, line.quantity]),
+  ) as Record<number, number>;
+  if (!initial && selectedItem) initialLines[selectedItem.id] = 1;
+  const [quantities, setQuantities] = useState<Record<number, number>>(initialLines);
+  const [clientChoice, setClientChoice] = useState(String(initial?.clientId || clients[0]?.id || "new"));
+  const [eventChoice, setEventChoice] = useState(String(initial?.eventId || "new"));
+  const initialEvent = events.find((entry) => entry.id === initial?.eventId);
+  const [eventName, setEventName] = useState(initial?.eventName || initialEvent?.name || "");
+  const [venue, setVenue] = useState(initialEvent?.venue || "");
+  const [start, setStart] = useState(initial?.date || initialEvent?.startDate || today);
+  const [end, setEnd] = useState(initial?.endDate || initialEvent?.endDate || today);
+  const [setupTime, setSetupTime] = useState(initialEvent?.setupTime || "");
+  const [pickupTime, setPickupTime] = useState(initialEvent?.pickupTime || "");
+  const [discount, setDiscount] = useState(initial?.discount || 0);
+  const [deliveryFee, setDeliveryFee] = useState(initial?.deliveryFee || 0);
+  const selectedLines = items.filter((item) => quantities[item.id] > 0);
+  const subtotal = selectedLines.reduce((sum, item) => sum + item.price * quantities[item.id], 0);
+  const currency = selectedLines[0]?.currency || initial?.currency || "MZN";
+  const currencies = new Set(selectedLines.map((item) => item.currency || "MZN"));
+  const chooseEvent = (value: string) => {
+    setEventChoice(value);
+    const chosen = events.find((entry) => entry.id === Number(value));
+    if (chosen) {
+      setClientChoice(String(chosen.clientId));
+      setEventName(chosen.name);
+      setVenue(chosen.venue);
+      setStart(chosen.startDate);
+      setEnd(chosen.endDate);
+      setSetupTime(chosen.setupTime);
+      setPickupTime(chosen.pickupTime);
+    }
+  };
+  return <form className="reservation-composer" onSubmit={onSubmit}>
+    <section className="composer-section"><header><span>01</span><div><h3>{t("Cliente e evento", "Client & event")}</h3><p>{t("Escolha registos existentes ou crie-os nesta reserva.", "Choose existing records or create them in this reservation.")}</p></div></header>
+      <div className="form-grid"><label>{t("Cliente", "Client")}<select name="clientChoice" value={clientChoice} onChange={(event) => setClientChoice(event.target.value)}><option value="new">{t("＋ Novo cliente", "＋ New client")}</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>{t("Evento", "Event")}<select name="eventChoice" value={eventChoice} onChange={(event) => chooseEvent(event.target.value)}><option value="new">{t("＋ Novo evento", "＋ New event")}</option>{events.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {entry.startDate}</option>)}</select></label></div>
+      {clientChoice === "new" && <div className="form-grid three"><label>{t("Nome do cliente", "Client name")}<input name="clientName" defaultValue={initial?.client || ""} required /></label><label>{t("Telefone", "Phone")}<input name="clientPhone" defaultValue={initial?.contact || ""} /></label><label>Email<input name="clientEmail" type="email" /></label></div>}
+      <div className="form-grid"><label>{t("Nome do evento", "Event name")}<input name="eventName" value={eventName} onChange={(event) => setEventName(event.target.value)} required /></label><label>{t("Local", "Venue")}<input name="venue" value={venue} onChange={(event) => setVenue(event.target.value)} placeholder={t("Salão, hotel ou morada", "Venue, hotel, or address")} /></label></div>
+      <div className="form-grid"><label>{t("Início", "Start")}<input name="start" type="date" value={start} onChange={(event) => setStart(event.target.value)} required /></label><label>{t("Fim", "End")}<input name="end" type="date" value={end} onChange={(event) => setEnd(event.target.value)} min={start} required /></label></div>
+      <div className="form-grid"><label>{t("Hora de montagem", "Setup time")}<input name="setupTime" type="time" value={setupTime} onChange={(event) => setSetupTime(event.target.value)} /></label><label>{t("Hora de recolha", "Pickup time")}<input name="pickupTime" type="time" value={pickupTime} onChange={(event) => setPickupTime(event.target.value)} /></label></div>
+      <label>{t("Notas do evento", "Event notes")}<textarea name="eventNotes" rows={2} defaultValue={initialEvent?.notes || ""} /></label>
+    </section>
+    <section className="composer-section"><header><span>02</span><div><h3>{t("Artigos", "Items")}</h3><p>{t("A disponibilidade final é confirmada de forma transaccional.", "Final availability is confirmed transactionally.")}</p></div></header>
+      <div className="reservation-item-picker">{items.map((item) => {
+        const checked = quantities[item.id] > 0;
+        return <label key={item.id} className={cls(checked && "selected")}><input name={`reservation-item-${item.id}`} type="checkbox" checked={checked} onChange={(event) => setQuantities((current) => ({ ...current, [item.id]: event.target.checked ? Math.max(1, current[item.id] || 1) : 0 }))} /><span className={cls("reservation-item-thumb", item.tone)}>{item.photoUrl ? <img src={item.photoUrl} alt="" /> : item.symbol}</span><span><strong>{item.name}</strong><small>{item.category} · {item.quantity} {t("em stock", "in stock")} · {formatMoney(item.price, item.currency, language)}/{t("dia", "day")}</small></span><input name={`reservation-quantity-${item.id}`} type="number" min="1" max={item.quantity} value={checked ? quantities[item.id] : 1} disabled={!checked} onChange={(event) => setQuantities((current) => ({ ...current, [item.id]: Number(event.target.value) }))} aria-label={t(`Quantidade de ${item.name}`, `${item.name} quantity`)} /></label>;
+      })}</div>
+      {!items.length && <div className="availability-note">{t("Adicione artigos ao inventário antes de criar uma reserva.", "Add inventory items before creating a reservation.")}</div>}
+      {currencies.size > 1 && <div className="form-warning">! {t("Seleccione artigos com a mesma moeda.", "Select items using the same currency.")}</div>}
+    </section>
+    <section className="composer-section composer-finance"><header><span>03</span><div><h3>{t("Valores e logística", "Pricing & logistics")}</h3><p>{t("Defina desconto, entrega, caução e instruções operacionais.", "Set discount, delivery, deposit, and operating instructions.")}</p></div></header>
+      <div className="form-grid three"><label>{t("Desconto", "Discount")}<input name="discount" type="number" min="0" max={subtotal} value={discount} onChange={(event) => setDiscount(Number(event.target.value))} /></label><label>{t("Entrega", "Delivery")}<input name="deliveryFee" type="number" min="0" value={deliveryFee} onChange={(event) => setDeliveryFee(Number(event.target.value))} /></label><label>{t("Caução", "Deposit")}<input name="deposit" type="number" min="0" defaultValue={initial?.deposit || 0} /></label></div>
+      <div className="form-grid"><label>{t("Pagamento", "Payment")}<select name="paymentStatus" defaultValue={initial?.paymentStatus || "Pending"}><option value="Pending">{t("Pendente", "Pending")}</option><option value="Partial">{t("Parcial", "Partial")}</option><option value="Paid">{t("Pago", "Paid")}</option></select></label><label>{t("Notas internas", "Internal notes")}<input name="notes" defaultValue={initial?.notes || ""} /></label></div>
+      <label>{t("Plano logístico", "Logistics plan")}<textarea name="logistics" rows={3} defaultValue={initial?.logistics || ""} placeholder={t("Responsável, viatura, entrega, montagem, recolha e cuidados…", "Owner, vehicle, delivery, setup, pickup, and special handling…")} /></label>
+      <div className="reservation-totals"><span><small>{t("Subtotal", "Subtotal")}</small><b>{formatMoney(subtotal, currency, language)}</b></span><span><small>{t("Desconto", "Discount")}</small><b>− {formatMoney(Math.min(discount, subtotal), currency, language)}</b></span><span><small>{t("Entrega", "Delivery")}</small><b>+ {formatMoney(deliveryFee, currency, language)}</b></span><span className="grand-total"><small>Total</small><b>{formatMoney(Math.max(0, subtotal - discount + deliveryFee), currency, language)}</b></span></div>
+    </section>
+    <div className="modal-actions"><button type="button" className="button-secondary" onClick={onCancel}>{t("Cancelar", "Cancel")}</button><button className="button-primary" disabled={!selectedLines.length || currencies.size > 1}>{initial ? t("Guardar alterações", "Save changes") : t("Confirmar reserva", "Confirm reservation")}</button></div>
+  </form>;
+}
+
+function RelationshipManager({ clients, events, t, onAddClient, onAddEvent }: { clients: Client[]; events: EventRecord[]; t: Translator; onAddClient: (event: FormEvent<HTMLFormElement>) => void; onAddEvent: (event: FormEvent<HTMLFormElement>) => void }) {
+  const today = new Date().toISOString().slice(0, 10);
+  return <div className="relationship-manager">
+    <section><form className="operation-form" onSubmit={onAddClient}><h3>{t("Novo cliente", "New client")}</h3><label>{t("Nome", "Name")}<input name="name" required /></label><div className="form-grid"><label>Email<input name="email" type="email" /></label><label>{t("Telefone", "Phone")}<input name="phone" /></label></div><label>{t("Notas", "Notes")}<textarea name="notes" rows={2} /></label><button className="button-primary">{t("Adicionar cliente", "Add client")}</button></form><div className="directory-list"><h3>{t("Clientes", "Clients")} <span>{clients.length}</span></h3>{clients.map((client) => <article key={client.id}><i>{initials(client.name)}</i><span><strong>{client.name}</strong><small>{client.phone || client.email || t("Sem contacto", "No contact")}</small></span></article>)}</div></section>
+    <section><form className="operation-form" onSubmit={onAddEvent}><h3>{t("Novo evento", "New event")}</h3><label>{t("Cliente", "Client")}<select name="clientId" required disabled={!clients.length}><option value="">{t("Seleccione…", "Select…")}</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>{t("Nome do evento", "Event name")}<input name="name" required /></label><label>{t("Local", "Venue")}<input name="venue" /></label><div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={today} required /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={today} required /></label></div><div className="form-grid"><label>{t("Montagem", "Setup")}<input name="setupTime" type="time" /></label><label>{t("Recolha", "Pickup")}<input name="pickupTime" type="time" /></label></div><label>{t("Notas", "Notes")}<textarea name="notes" rows={2} /></label><button className="button-primary" disabled={!clients.length}>{t("Adicionar evento", "Add event")}</button></form><div className="directory-list"><h3>{t("Eventos", "Events")} <span>{events.length}</span></h3>{events.map((entry) => <article key={entry.id}><i>□</i><span><strong>{entry.name}</strong><small>{entry.startDate} · {entry.venue || t("Local por definir", "Venue not set")}</small></span><em>{entry.status}</em></article>)}</div></section>
+  </div>;
+}
+
+function Calendar({ language, t, reservations, openAdd, openDirectory, onEdit, onTransition }: { language: Language; t: Translator; reservations: Reservation[]; openAdd: () => void; openDirectory: () => void; onEdit: (reservation: Reservation) => void; onTransition: (reservation: Reservation, status: string) => void }) {
   const [calendarView, setCalendarView] = useState<"month" | "week">("month");
-  const [cursor, setCursor] = useState(new Date(2026, 6, 27));
-  const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(reservations[0] || null);
+  const [cursor, setCursor] = useState(new Date());
+  const [selectedReservationId, setSelectedReservationId] = useState<number | null>(reservations[0]?.id || null);
+  const selectedReservation = reservations.find((reservation) => reservation.id === selectedReservationId) || reservations[0] || null;
   const days = calendarView === "month" ? getMonthCells(cursor) : getWeekDays(cursor);
   const title = calendarView === "month"
     ? cursor.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { month: "long", year: "numeric" })
@@ -967,29 +1194,29 @@ function Calendar({ language, t, reservations, openAdd }: { language: Language; 
     else next.setDate(next.getDate() + direction * 7);
     setCursor(next);
   };
-  const reservationsFor = (date: Date) => reservations.filter((reservation) => dateKey(date) >= reservation.date && dateKey(date) <= reservation.endDate);
+  const reservationsFor = (date: Date) => reservations.filter((reservation) => reservation.status !== "Cancelled" && dateKey(date) >= reservation.date && dateKey(date) <= reservation.endDate);
   return (
     <>
-      <PageHeading eyebrow={t("AGENDA PARTILHADA", "SHARED SCHEDULE")} title={t("Calendário", "Calendar")} detail={t("Veja eventos e reservas por semana ou mês — sem procurar item por item.", "See events and reservations by week or month—without browsing item by item.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Nova reserva", "New reservation")}</button>} />
+      <PageHeading eyebrow={t("AGENDA PARTILHADA", "SHARED SCHEDULE")} title={t("Calendário", "Calendar")} detail={t("Veja eventos e reservas por semana ou mês — sem procurar item por item.", "See events and reservations by week or month—without browsing item by item.")} action={<div className="heading-actions"><button className="button-secondary" onClick={openDirectory}>◎ {t("Clientes e eventos", "Clients & events")}</button><button className="button-primary" onClick={openAdd}><span>＋</span>{t("Nova reserva", "New reservation")}</button></div>} />
       <section className="calendar-layout">
         <article className="card calendar-card">
-          <div className="calendar-toolbar"><button onClick={() => move(-1)}>‹</button><h2>{title}</h2><button onClick={() => move(1)}>›</button><button className="today-button" onClick={() => setCursor(new Date(2026, 6, 27))}>{t("Hoje", "Today")}</button><div className="calendar-view-toggle"><button className={cls(calendarView === "week" && "active")} onClick={() => setCalendarView("week")}>{t("Semana", "Week")}</button><button className={cls(calendarView === "month" && "active")} onClick={() => setCalendarView("month")}>{t("Mês", "Month")}</button></div></div>
+          <div className="calendar-toolbar"><button onClick={() => move(-1)}>‹</button><h2>{title}</h2><button onClick={() => move(1)}>›</button><button className="today-button" onClick={() => setCursor(new Date())}>{t("Hoje", "Today")}</button><div className="calendar-view-toggle"><button className={cls(calendarView === "week" && "active")} onClick={() => setCalendarView("week")}>{t("Semana", "Week")}</button><button className={cls(calendarView === "month" && "active")} onClick={() => setCalendarView("month")}>{t("Mês", "Month")}</button></div></div>
           {calendarView === "month" ? <div className="calendar-grid">
             {(language === "pt" ? ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"] : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]).map((day) => <div className="weekday" key={day}>{day}</div>)}
             {days.map((day) => {
               const dayReservations = reservationsFor(day);
               const muted = day.getMonth() !== cursor.getMonth();
-              return <div className={cls("calendar-day", muted && "muted", dateKey(day) === "2026-07-27" && "today")} key={dateKey(day)}><span>{day.getDate()}</span>{dayReservations.slice(0, 3).map((reservation) => <button key={reservation.id} onClick={() => setSelectedReservation(reservation)} style={{ "--event": reservation.color } as React.CSSProperties}><b>{reservation.eventName || reservation.client}</b><small>{reservation.item}</small></button>)}{dayReservations.length > 3 && <em>+{dayReservations.length - 3}</em>}</div>;
+              return <div className={cls("calendar-day", muted && "muted", dateKey(day) === dateKey(new Date()) && "today")} key={dateKey(day)}><span>{day.getDate()}</span>{dayReservations.slice(0, 3).map((reservation) => <button key={reservation.id} onClick={() => setSelectedReservationId(reservation.id)} style={{ "--event": reservation.color } as React.CSSProperties}><b>{reservation.eventName || reservation.client}</b><small>{reservation.item}</small></button>)}{dayReservations.length > 3 && <em>+{dayReservations.length - 3}</em>}</div>;
             })}
           </div> : <div className="week-calendar">
-            {days.map((day) => <div className={cls("week-day", dateKey(day) === "2026-07-27" && "today")} key={dateKey(day)}><header><span>{day.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { weekday: "short" })}</span><strong>{day.getDate()}</strong></header><div className="week-day-body">{reservationsFor(day).map((reservation) => <button key={reservation.id} style={{ "--event": reservation.color } as React.CSSProperties} onClick={() => setSelectedReservation(reservation)}><small>09:30</small><strong>{reservation.eventName || reservation.client}</strong><span>{reservation.item}</span></button>)}{!reservationsFor(day).length && <span className="week-empty">—</span>}</div></div>)}
+            {days.map((day) => <div className={cls("week-day", dateKey(day) === dateKey(new Date()) && "today")} key={dateKey(day)}><header><span>{day.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { weekday: "short" })}</span><strong>{day.getDate()}</strong></header><div className="week-day-body">{reservationsFor(day).map((reservation) => <button key={reservation.id} style={{ "--event": reservation.color } as React.CSSProperties} onClick={() => setSelectedReservationId(reservation.id)}><small>09:30</small><strong>{reservation.eventName || reservation.client}</strong><span>{reservation.item}</span></button>)}{!reservationsFor(day).length && <span className="week-empty">—</span>}</div></div>)}
           </div>}
         </article>
-        <ReservationInspector language={language} t={t} reservation={selectedReservation} />
+        <ReservationInspector language={language} t={t} reservation={selectedReservation} onEdit={onEdit} onTransition={onTransition} />
       </section>
       <section className="card reservation-list">
         <div className="card-heading"><div><span className="eyebrow">{t("RESERVAS", "RESERVATIONS")}</span><h2>{t("Próximos eventos", "Upcoming events")}</h2></div><button onClick={() => downloadCsv("trove-reservas.csv", [["event", "client", "item", "start", "end", "contact", "notes"], ...reservations.map((r) => [r.eventName, r.client, r.item, r.date, r.endDate, r.contact, r.notes])])}>{t("Exportar agenda", "Export schedule")} ↓</button></div>
-        {reservations.map((reservation) => <button className="reservation-row" key={reservation.id} onClick={() => setSelectedReservation(reservation)}><i style={{ background: reservation.color }} /><span><strong>{reservation.eventName || reservation.item}</strong><small>{reservation.item} · {reservation.client}</small></span><span><strong>{new Date(`${reservation.date}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${reservation.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</strong><small>{reservation.contact || t("Sem contacto", "No contact")}</small></span><span className="status-pill pickup">{t("Confirmada", "Confirmed")}</span><span>›</span></button>)}
+        {reservations.map((reservation) => <button className="reservation-row" key={reservation.id} onClick={() => setSelectedReservationId(reservation.id)}><i style={{ background: reservation.color }} /><span><strong>{reservation.eventName || reservation.item}</strong><small>{reservation.item} · {reservation.client}</small></span><span><strong>{new Date(`${reservation.date}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${reservation.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</strong><small>{formatMoney(reservation.total || 0, reservation.currency || "MZN", language)}</small></span><span className={cls("status-pill", reservation.status === "Cancelled" ? "cancelled" : reservation.status === "Returned" ? "return" : reservation.status === "CheckedOut" ? "delivery" : "pickup")}>{reservationStatusLabel(reservation.status, t)}</span><span>›</span></button>)}
       </section>
     </>
   );
@@ -1077,7 +1304,7 @@ function Analytics({ language, t, items, reservations }: { language: Language; t
     return { category, rate: total ? Math.round((inUse / total) * 100) : 0 };
   }).sort((a, b) => b.rate - a.rate).slice(0, 5);
   const weekly = [42, 58, 36, 74, 67, 88, 62];
-  const revenue = items.reduce((sum, item) => sum + (item.quantity - item.available) * (item.price || 0), 0);
+  const revenue = reservations.filter((reservation) => reservation.status !== "Cancelled").reduce((sum, reservation) => sum + (reservation.total || 0), 0);
   return <section className="analytics-grid">
     <article className="card analytics-card">
       <div className="card-heading"><div><span className="eyebrow">{t("ANÁLISE", "ANALYTICS")}</span><h2>{t("Ocupação por categoria", "Utilization by category")}</h2></div><span className="analytics-period">{t("Últimos 30 dias", "Last 30 days")}</span></div>
@@ -1091,20 +1318,22 @@ function Analytics({ language, t, items, reservations }: { language: Language; t
   </section>;
 }
 
-function ReservationInspector({ language, t, reservation }: { language: Language; t: Translator; reservation: Reservation | null }) {
+function ReservationInspector({ language, t, reservation, onEdit, onTransition }: { language: Language; t: Translator; reservation: Reservation | null; onEdit: (reservation: Reservation) => void; onTransition: (reservation: Reservation, status: string) => void }) {
   if (!reservation) return <aside className="card agenda-card"><span className="eyebrow">{t("DETALHES", "DETAILS")}</span><div className="agenda-empty"><span>☼</span><strong>{t("Nenhuma reserva seleccionada", "No reservation selected")}</strong><p>{t("Seleccione um evento no calendário.", "Select an event on the calendar.")}</p></div></aside>;
   return <aside className="card agenda-card reservation-inspector">
     <span className="eyebrow">{t("DETALHES DA RESERVA", "RESERVATION DETAILS")}</span>
     <h2>{reservation.eventName || reservation.client}</h2>
-    <span className="status-pill delivery">{t("Confirmada", "Confirmed")}</span>
+    <span className={cls("status-pill", reservation.status === "Cancelled" ? "cancelled" : reservation.status === "Returned" ? "return" : reservation.status === "CheckedOut" ? "delivery" : "pickup")}>{reservationStatusLabel(reservation.status, t)}</span>
     <dl>
       <div><dt>{t("Cliente", "Client")}</dt><dd>{reservation.client}</dd></div>
-      <div><dt>{t("Item", "Item")}</dt><dd>{reservation.item}</dd></div>
+      <div><dt>{t("Artigos", "Items")}</dt><dd>{reservation.items.length ? <ul className="inspector-items">{reservation.items.map((line) => <li key={line.id}><span>{line.quantity}× {line.itemName}</span><b>{formatMoney(line.quantity * line.unitPrice, line.currency, language)}</b></li>)}</ul> : reservation.item}</dd></div>
       <div><dt>{t("Datas", "Dates")}</dt><dd>{new Date(`${reservation.date}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${reservation.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</dd></div>
       <div><dt>{t("Contacto", "Contact")}</dt><dd>{reservation.contact || "—"}</dd></div>
-      <div><dt>{t("Notas", "Notes")}</dt><dd>{reservation.notes || t("Sem notas adicionais.", "No additional notes.")}</dd></div>
+      <div><dt>{t("Valores", "Pricing")}</dt><dd><span className="inspector-price"><small>{t("Subtotal", "Subtotal")} {formatMoney(reservation.subtotal || 0, reservation.currency || "MZN", language)} · {t("Desconto", "Discount")} {formatMoney(reservation.discount || 0, reservation.currency || "MZN", language)} · {t("Entrega", "Delivery")} {formatMoney(reservation.deliveryFee || 0, reservation.currency || "MZN", language)}</small><strong>{t("Total", "Total")}: {formatMoney(reservation.total || 0, reservation.currency || "MZN", language)}</strong><em>{t("Caução", "Deposit")}: {formatMoney(reservation.deposit || 0, reservation.currency || "MZN", language)} · {reservation.paymentStatus || t("Pendente", "Pending")}</em></span></dd></div>
+      <div><dt>{t("Logística", "Logistics")}</dt><dd>{reservation.logistics || reservation.notes || t("Sem instruções adicionais.", "No additional instructions.")}</dd></div>
     </dl>
-    <div className="inspector-actions"><button className="button-secondary">{t("Editar", "Edit")}</button><button className="button-primary">{t("Contactar", "Contact")}</button></div>
+    {reservation.status === "Confirmed" && <div className="inspector-actions lifecycle-actions"><button className="button-secondary" onClick={() => onEdit(reservation)}>{t("Editar", "Edit")}</button><button className="button-secondary danger-outline" onClick={() => onTransition(reservation, "Cancelled")}>{t("Cancelar", "Cancel")}</button><button className="button-primary" onClick={() => onTransition(reservation, "CheckedOut")}>{t("Registar saída", "Check out")}</button></div>}
+    {reservation.status === "CheckedOut" && <div className="inspector-actions"><button className="button-primary" onClick={() => onTransition(reservation, "Returned")}>✓ {t("Registar devolução", "Record return")}</button></div>}
   </aside>;
 }
 

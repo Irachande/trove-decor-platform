@@ -98,9 +98,12 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 
 ### Reservas e calendário
 
-- Criação de reservas com cliente, evento, contacto e notas.
-- Datas de início e fim.
-- Quantidade e estado da reserva.
+- Clientes e eventos como entidades próprias e reutilizáveis.
+- Reservas com vários artigos, quantidades e preços registados por linha.
+- Verificação transaccional da disponibilidade por artigo e período.
+- Subtotal, desconto, entrega, total, caução, pagamento e logística.
+- Alteração, confirmação, cancelamento, saída e devolução de reservas.
+- Datas do evento, montagem e recolha, contacto, local e notas.
 - Calendário mensal e semanal.
 - Consulta dos detalhes da reserva.
 - Exportação de reservas.
@@ -139,8 +142,8 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 | Inventário básico | Funcional | Isolado por empresa e protegido por função |
 | Categorias | Funcional | Isoladas por empresa |
 | Upload de imagens | Funcional | JPG/PNG até 5 MB, autenticado e separado por empresa |
-| Reservas | Parcial | Falta detectar conflitos de forma transaccional |
-| Calendário | Funcional | Baseado nas reservas existentes |
+| Reservas | Funcional | Multiartigo, conflitos atómicos, preços e ciclo operacional |
+| Calendário | Funcional | Visões mensal/semanal, detalhes e reservas canceladas excluídas |
 | Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
 | Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
 | Perfil público | Parcial | Editor existe; falta rota pública independente |
@@ -151,7 +154,7 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 | Rede local | Demonstração | Os artigos e negócios são dados estáticos |
 | Aplicação mobile | Parcial | Web responsiva; ainda não é PWA ou aplicação nativa |
 | Notificações | Não implementado | Falta email, push e lembretes |
-| Testes automatizados | Parcial | Build, lint e testes estruturais de autenticação/isolamento |
+| Testes automatizados | Parcial | Testes estruturais e integração da API de reservas; cobertura integral ainda pendente |
 
 ## 7. Arquitectura actual
 
@@ -195,7 +198,10 @@ Next.js / Vinext
 - `maintenance_records`: inspecções, limpezas, reparações e danos.
 - `kits`: conjuntos comerciais com preço próprio.
 - `kit_items`: composição e quantidade de cada artigo num kit.
-- `reservations`: reservas associadas actualmente ao nome de um artigo.
+- `clients`: clientes reutilizáveis, isolados por empresa.
+- `events`: eventos associados a clientes e reservas.
+- `reservations`: período, valores, logística e estado do ciclo de aluguer.
+- `reservation_items`: artigos, quantidades e preços de cada reserva.
 - `categories`: categorias isoladas por empresa.
 - `collaborators`: convites pendentes e funções.
 - `business_profile`: perfil de cada empresa.
@@ -214,10 +220,10 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `inventory_movements` — implementado
 - `maintenance_records` — implementado
 - `kits` e `kit_items` — implementado
-- `clients`
-- `events`
+- `clients` — implementado
+- `events` — implementado
 - `reservations`
-- `reservation_items`
+- `reservation_items` — implementado
 - `marketplace_listings`
 - `rental_requests`
 - `payments`
@@ -295,11 +301,11 @@ produto para a distribuição fora do ambiente Sites.
 
 ### Fase 3 — Reservas robustas
 
-- [ ] Clientes e eventos como entidades próprias.
-- [ ] Vários artigos por reserva.
-- [ ] Verificação atómica de disponibilidade.
-- [ ] Preço total, desconto, caução e logística.
-- [ ] Alteração, cancelamento, saída e devolução.
+- [x] Clientes e eventos como entidades próprias.
+- [x] Vários artigos por reserva.
+- [x] Verificação atómica de disponibilidade.
+- [x] Preço total, desconto, caução e logística.
+- [x] Alteração, cancelamento, saída e devolução.
 
 ### Fase 4 — Equipa e comunicação
 
@@ -377,6 +383,29 @@ pnpm run db:generate
 - Política de verificação das empresas da rede.
 
 ## 17. Histórico de iterações
+
+### 29 de Julho de 2026 — Fase 3: reservas robustas
+
+- Criadas as entidades `clients`, `events` e `reservation_items`, todas
+  isoladas por `business_id`, e ampliado o modelo financeiro e operacional das
+  reservas.
+- Implementada a migração automática das reservas anteriores para o novo
+  modelo, preservando clientes, eventos e artigos existentes.
+- Adicionada composição de reservas com vários artigos e quantidades, preços
+  capturados por linha, desconto, entrega, total, caução, pagamento e logística.
+- A disponibilidade passou a ser validada atomicamente no D1 por artigo,
+  quantidade e intervalo de datas, impedindo sobre-reservas concorrentes.
+- Adicionados directório de clientes e eventos, edição de reservas e estados
+  de confirmação, cancelamento, saída e devolução.
+- Saídas e devoluções actualizam o stock disponível e criam movimentos de
+  inventário na mesma transacção.
+- O calendário passa a usar a data actual, exclui cancelamentos e mantém as
+  visões mensal e semanal com acesso ao detalhe operacional.
+- Adicionada a migração `0004_numerous_slyde.sql`, testes estruturais e um teste
+  integrado da API que cobre criação multiartigo, conflito, edição, saída,
+  devolução e cancelamento.
+- Validação: `pnpm run test:phase3-api`, `pnpm test`, `pnpm run lint`,
+  `pnpm run typecheck`, `pnpm run build` e `git diff --check`.
 
 ### 29 de Julho de 2026 — Fase 2: inventário operacional
 

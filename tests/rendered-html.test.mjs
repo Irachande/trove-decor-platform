@@ -108,3 +108,42 @@ test("phase 2 interface supports complete records and validated Excel imports", 
   assert.match(styles, /\.kit-manager/);
   assert.match(manifest, /"read-excel-file": "5\.8\.8"/);
 });
+
+test("phase 3 reservations use durable clients, events and line items", async () => {
+  const [schema, migration, workspace, api] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0004_numerous_slyde.sql"),
+    source("app/workspace.ts"),
+    source("app/api/data/route.ts"),
+  ]);
+
+  assert.match(schema, /export const clients/);
+  assert.match(schema, /export const events/);
+  assert.match(schema, /export const reservationItems/);
+  assert.match(migration, /CREATE TABLE `clients`/);
+  assert.match(migration, /CREATE TABLE `events`/);
+  assert.match(migration, /CREATE TABLE `reservation_items`/);
+  assert.match(workspace, /reservation_items_availability_insert/);
+  assert.match(workspace, /INSUFFICIENT_DATE_AVAILABILITY/);
+  assert.match(workspace, /reservations_checkout_stock/);
+  assert.match(api, /updateReservation: "manageReservations"/);
+  assert.match(api, /transitionReservation: "manageReservations"/);
+  assert.match(api, /env\.DB\.batch\(\[/);
+});
+
+test("phase 3 interface supports multi-item pricing and lifecycle actions", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /function ReservationComposer/);
+  assert.match(app, /function RelationshipManager/);
+  assert.match(app, /reservation-item-/);
+  assert.match(app, /Registar saída/);
+  assert.match(app, /Registar devolução/);
+  assert.match(app, /Clientes e eventos/);
+  assert.match(styles, /\.reservation-item-picker/);
+  assert.match(styles, /\.reservation-totals/);
+  assert.match(styles, /\.relationship-manager/);
+});
