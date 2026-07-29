@@ -189,6 +189,38 @@ export const collaborators = sqliteTable("collaborators", {
   status: text("status").notNull().default("Pending"),
   invitedByUserId: integer("invited_by_user_id"),
   createdAt: text("created_at").notNull().default(""),
+  expiresAt: text("expires_at").notNull().default(""),
+  acceptedAt: text("accepted_at"),
+  acceptedByUserId: integer("accepted_by_user_id"),
+  revokedAt: text("revoked_at"),
+});
+
+export const notifications = sqliteTable("notifications", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessId: integer("business_id").notNull(),
+  userId: integer("user_id").notNull(),
+  type: text("type").notNull(),
+  titlePt: text("title_pt").notNull(),
+  titleEn: text("title_en").notNull(),
+  bodyPt: text("body_pt").notNull().default(""),
+  bodyEn: text("body_en").notNull().default(""),
+  link: text("link").notNull().default(""),
+  sourceKey: text("source_key").notNull(),
+  readAt: text("read_at"),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("notifications_user_source_idx").on(table.userId, table.sourceKey),
+]);
+
+export const auditLogs = sqliteTable("audit_logs", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessId: integer("business_id").notNull(),
+  userId: integer("user_id"),
+  action: text("action").notNull(),
+  entityType: text("entity_type").notNull(),
+  entityId: text("entity_id").notNull().default(""),
+  summary: text("summary").notNull(),
+  createdAt: text("created_at").notNull(),
 });
 
 export const businessProfile = sqliteTable("business_profile", {

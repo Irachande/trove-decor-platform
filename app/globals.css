@@ -59,6 +59,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .icon-button:hover { background: var(--cream); }
 .notification { position: relative; }
 .notification i { width: 6px; height: 6px; background: var(--brand); border-radius: 50%; position: absolute; right: 7px; top: 6px; }
+.notification em { position: absolute; right: -5px; top: -7px; min-width: 16px; height: 16px; padding: 0 4px; display: grid; place-items: center; border-radius: 9px; background: var(--brand); color: white; font-size: 7px; font-style: normal; border: 2px solid white; }
 .team-faces { border-left: 1px solid var(--line); margin-left: 5px; padding-left: 20px; display: flex; align-items: center; }
 .team-faces span, .team-faces button { width: 31px; height: 31px; border-radius: 50%; border: 2px solid var(--white); margin-left: -7px; display: grid; place-items: center; font-size: 9px; font-weight: bold; color: #49382f; }
 .team-faces span:nth-child(1) { background: #d3ad8d; }
@@ -428,6 +429,50 @@ h1, h2, h3, p { margin-top: 0; }
 .inspector-price strong { font: 400 13px Georgia, serif; }
 .lifecycle-actions { grid-template-columns: 1fr 1fr 1.35fr; }
 .danger-outline { color: #984c3b; border-color: #dfc4ba !important; }
+.workspace-chip select { width: 100%; max-width: 140px; border: 0; background: transparent; color: var(--ink); font-size: 9px; font-weight: bold; outline: 0; }
+.mobile-workspace-picker { display: none; max-width: 120px; min-height: 34px; border: 1px solid var(--line); border-radius: 7px; background: white; padding: 0 7px; font-size: 8px; color: var(--ink); }
+.invitation-banner { display: grid; grid-template-columns: 34px 1fr auto auto; align-items: center; gap: 10px; margin-bottom: 18px; padding: 13px 15px; border: 1px solid color-mix(in srgb, var(--brand) 28%, #e5ded3); border-radius: 11px; background: color-mix(in srgb, var(--brand) 7%, white); }
+.invitation-banner > span { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; background: var(--brand); color: white; }
+.invitation-banner > div { display: flex; flex-direction: column; gap: 4px; }
+.invitation-banner strong { font-size: 10px; }
+.invitation-banner small { color: var(--muted); font-size: 8px; }
+.phase-four-team > header { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+.phase-four-team .team-members > span { grid-template-columns: 34px minmax(150px, 1fr) 130px auto; gap: 10px; }
+.phase-four-team .team-members > span.pending-member { background: #fcfaf5; }
+.phase-four-team .team-members select { min-height: 32px; border: 1px solid var(--line); border-radius: 6px; background: white; padding: 5px 8px; font-size: 8px; }
+.member-actions { display: flex; gap: 5px; }
+.member-actions button, .member-remove { border: 0; border-radius: 5px; background: #eee9df; color: #774c3e; padding: 6px 8px; font-size: 7px; cursor: pointer; }
+.member-remove { justify-self: end; }
+.invite-link { margin-top: 13px; padding: 12px; border-radius: 8px; background: #e8eee3; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.invite-link span { display: flex; flex-direction: column; gap: 4px; }
+.invite-link strong { font-size: 9px; }
+.invite-link small { color: var(--muted); font-size: 7px; }
+.notification-center > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.notification-center > header > button:last-child { border: 0; background: transparent; color: var(--brand); font-size: 8px; cursor: pointer; }
+.notification-center > div { max-height: 480px; overflow-y: auto; border: 1px solid var(--line); border-radius: 9px; }
+.notification-center > div > button { width: 100%; border: 0; border-bottom: 1px solid #eee9e1; background: white; display: grid; grid-template-columns: 34px 1fr; gap: 10px; text-align: left; padding: 12px; cursor: pointer; }
+.notification-center > div > button.unread { background: color-mix(in srgb, var(--brand) 6%, white); }
+.notification-center > div > button > i { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; background: #eee7dc; color: var(--brand); font-style: normal; }
+.notification-center > div > button > span { display: flex; flex-direction: column; gap: 4px; }
+.notification-center strong { font-size: 9px; }
+.notification-center small, .notification-center em { color: var(--muted); font-size: 7px; font-style: normal; line-height: 1.45; }
+.notification-center > p { margin: 12px 0 0; color: var(--muted); font-size: 8px; line-height: 1.5; }
+.activity-log { border: 1px solid var(--line); border-radius: 10px; max-height: 600px; overflow-y: auto; }
+.activity-log article { display: grid; grid-template-columns: 36px 1fr auto; gap: 10px; align-items: center; padding: 12px 14px; border-bottom: 1px solid #eee9e1; }
+.activity-log article > i { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: #e9e4d9; color: var(--brand); font-style: normal; font-size: 8px; font-weight: bold; }
+.activity-log article > span { display: flex; flex-direction: column; gap: 4px; }
+.activity-log strong { font-size: 9px; }
+.activity-log small, .activity-log time { color: var(--muted); font-size: 7px; }
+
+@media (max-width: 700px) {
+  .mobile-workspace-picker { display: block; }
+  .invitation-banner { grid-template-columns: 32px 1fr; }
+  .invitation-banner > button { width: 100%; }
+  .phase-four-team .team-members > span { grid-template-columns: 34px 1fr; }
+  .phase-four-team .team-members select, .phase-four-team .member-actions, .phase-four-team .member-remove { grid-column: 2; justify-self: stretch; }
+  .activity-log article { grid-template-columns: 34px 1fr; }
+  .activity-log time { grid-column: 2; }
+}
 .mobile-nav { display: none; }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
 

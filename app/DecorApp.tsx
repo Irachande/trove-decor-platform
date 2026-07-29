@@ -28,7 +28,12 @@ type Member = {
   displayName?: string;
   role: string;
   status: string;
+  createdAt?: string;
+  expiresAt?: string;
 };
+type NotificationRecord = { id: number; type: string; titlePt: string; titleEn: string; bodyPt: string; bodyEn: string; link: string; readAt?: string; createdAt: string };
+type AuditEntry = { id: number; action: string; entityType: string; entityId: string; summary: string; createdAt: string; actorName?: string; actorEmail?: string };
+type Invitation = { id: number; businessId: number; businessName: string; role: string; createdAt: string; expiresAt: string };
 
 type Item = {
   id: number;
@@ -72,6 +77,10 @@ type WorkspaceData = {
   kits?: Kit[];
   clients?: Client[];
   events?: EventRecord[];
+  notifications?: NotificationRecord[];
+  auditLogs?: AuditEntry[];
+  invitations?: Invitation[];
+  workspaces?: Workspace[];
 };
 
 type Reservation = {
@@ -191,6 +200,10 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [kits, setKits] = useState<Kit[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
+  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All items");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -198,6 +211,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [addOpen, setAddOpen] = useState(false);
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
   const [reserveOpen, setReserveOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [managedReservation, setManagedReservation] = useState<Reservation | null>(null);
@@ -211,6 +226,11 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [saving, setSaving] = useState(false);
   const [plan, setPlan] = useState<"Basic" | "Network">("Basic");
   const [reloadToken, setReloadToken] = useState(0);
+  const [activeBusinessId, setActiveBusinessId] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const saved = Number(window.localStorage.getItem("trove-business-id"));
+    return Number.isSafeInteger(saved) && saved > 0 ? saved : null;
+  });
   const importRef = useRef<HTMLInputElement>(null);
   const t: Translator = (pt, en) => language === "pt" ? pt : en;
   const navigation = navItems(t);
@@ -219,9 +239,13 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const canManageReservations = ["owner", "manager", "reservations"].includes(role);
   const canManageTeam = ["owner", "manager"].includes(role);
   const canManageProfile = ["owner", "manager"].includes(role);
+  const activeMembers = members.filter((member) => member.status === "Active");
+  const unreadCount = notifications.filter((entry) => !entry.readAt).length;
 
   useEffect(() => {
-    fetch("/api/data")
+    fetch("/api/data", {
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+    })
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((raw) => {
         const data = raw as WorkspaceData;
@@ -232,6 +256,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         if (data.workspace) {
           setWorkspace(data.workspace);
           setPlan(data.workspace.plan);
+          setActiveBusinessId(data.workspace.id);
+          window.localStorage.setItem("trove-business-id", String(data.workspace.id));
         }
         if (Array.isArray(data.members)) setMembers(data.members);
         if (Array.isArray(data.photos)) setPhotos(data.photos);
@@ -240,11 +266,15 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         if (Array.isArray(data.kits)) setKits(data.kits);
         if (Array.isArray(data.clients)) setClients(data.clients);
         if (Array.isArray(data.events)) setEvents(data.events);
+        if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+        if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
+        if (Array.isArray(data.invitations)) setInvitations(data.invitations);
+        if (Array.isArray(data.workspaces)) setWorkspaces(data.workspaces);
       })
       .catch(() => {
         setToast("Não foi possível carregar o espaço da empresa.");
       });
-  }, [reloadToken]);
+  }, [reloadToken, activeBusinessId]);
 
   function changeLanguage(next: Language) {
     setLanguage(next);
@@ -285,7 +315,10 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
     try {
       const response = await fetch("/api/data", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
         body: JSON.stringify({ action, payload }),
       });
       const result = await response.json().catch(() => ({})) as { error?: string };
@@ -303,12 +336,74 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         }
         throw new Error(message);
       }
-      return true;
+      return result as { ok?: boolean; inviteUrl?: string; workspaceId?: number };
     } catch (error) {
       showToast(error instanceof Error ? error.message : t("Não foi possível guardar.", "Unable to save."));
       return false;
     }
   }
+
+  function switchWorkspace(id: number) {
+    if (id === activeBusinessId) return;
+    window.localStorage.setItem("trove-business-id", String(id));
+    setActiveBusinessId(id);
+    setView("home");
+  }
+
+  async function acceptInvitation(invitation: Invitation) {
+    const result = await persist("acceptInvitation", { id: invitation.id });
+    if (!result) return;
+    const workspaceId = result.workspaceId || invitation.businessId;
+    window.localStorage.setItem("trove-business-id", String(workspaceId));
+    setActiveBusinessId(workspaceId);
+    setInvitations((current) => current.filter((entry) => entry.id !== invitation.id));
+    showToast(t(`Entrou na equipa de ${invitation.businessName}`, `You joined ${invitation.businessName}`));
+  }
+
+  async function declineInvitation(invitation: Invitation) {
+    if (await persist("declineInvitation", { id: invitation.id })) {
+      setInvitations((current) => current.filter((entry) => entry.id !== invitation.id));
+      showToast(t("Convite recusado", "Invitation declined"));
+    }
+  }
+
+  async function markNotification(notification: NotificationRecord) {
+    if (!notification.readAt && await persist("markNotificationRead", { id: notification.id })) {
+      setNotifications((current) => current.map((entry) =>
+        entry.id === notification.id ? { ...entry, readAt: new Date().toISOString() } : entry,
+      ));
+    }
+  }
+
+  async function markAllNotifications() {
+    if (await persist("markAllNotificationsRead", {})) {
+      const readAt = new Date().toISOString();
+      setNotifications((current) => current.map((entry) => ({ ...entry, readAt: entry.readAt || readAt })));
+    }
+  }
+
+  async function enableBrowserAlerts() {
+    if (!("Notification" in window)) {
+      showToast(t("Este navegador não suporta alertas.", "This browser does not support alerts."));
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    showToast(permission === "granted"
+      ? t("Alertas activos enquanto a Trove estiver aberta.", "Alerts are active while Trove is open.")
+      : t("Permissão de alertas não concedida.", "Alert permission was not granted."));
+  }
+
+  useEffect(() => {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const unread = notifications.find((entry) => !entry.readAt);
+    if (!unread) return;
+    const key = `trove-notified-${unread.id}`;
+    if (window.localStorage.getItem(key)) return;
+    new Notification(language === "pt" ? unread.titlePt : unread.titleEn, {
+      body: language === "pt" ? unread.bodyPt : unread.bodyEn,
+    });
+    window.localStorage.setItem(key, "1");
+  }, [notifications, language]);
 
   async function uploadItemPhotos(files: File[]) {
     const urls: string[] = [];
@@ -765,7 +860,12 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         </button>
         <div className="workspace-chip">
           <span className="workspace-avatar">{initials(workspace?.name || profile.businessName).slice(0, 1)}</span>
-          <span><strong>{workspace?.name || profile.businessName}</strong><small>{plan} plan</small></span>
+          <span>
+            {workspaces.length > 1
+              ? <select aria-label={t("Empresa activa", "Active business")} value={workspace?.id || ""} onChange={(event) => switchWorkspace(Number(event.target.value))}>{workspaces.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
+              : <strong>{workspace?.name || profile.businessName}</strong>}
+            <small>{plan} plan</small>
+          </span>
           <b title={roleLabel(role, t)}>●</b>
         </div>
         <nav aria-label={t("Navegação principal", "Primary navigation")}>
@@ -794,17 +894,24 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         <header className="topbar">
           <button className="mobile-logo" onClick={() => setView("home")}><span className="brand-mark"><i /><i /><i /></span>Trove</button>
           <div className="topbar-actions">
+            {workspaces.length > 1 && <select className="mobile-workspace-picker" aria-label={t("Empresa activa", "Active business")} value={workspace?.id || ""} onChange={(event) => switchWorkspace(Number(event.target.value))}>{workspaces.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>}
             <label className="language-picker" aria-label={t("Idioma", "Language")}><span>文</span><select value={language} onChange={(event) => changeLanguage(event.target.value as Language)}><option value="pt">PT</option><option value="en">EN</option></select></label>
             <button className="icon-button" aria-label={t("Pesquisar", "Search")} onClick={() => setView("storage")}>⌕</button>
-            <button className="icon-button notification" aria-label={t("Notificações", "Notifications")}>♢<i /></button>
-            <div className="team-faces" aria-label={t(`${members.length} membros da equipa`, `${members.length} team members`)}>
-              {members.slice(0, 3).map((member) => <span key={`${member.id}-${member.email}`}>{initials(member.displayName || member.email)}</span>)}
+            <button className="icon-button notification" aria-label={t("Notificações", "Notifications")} onClick={() => setNotificationOpen(true)}>♢{unreadCount > 0 && <i />} {unreadCount > 0 && <em>{unreadCount > 9 ? "9+" : unreadCount}</em>}</button>
+            <div className="team-faces" aria-label={t(`${activeMembers.length} membros da equipa`, `${activeMembers.length} team members`)}>
+              {activeMembers.slice(0, 3).map((member) => <span key={`${member.id}-${member.email}`}>{initials(member.displayName || member.email)}</span>)}
               {canManageTeam && <button onClick={() => setTeamOpen(true)} aria-label={t("Convidar colaborador", "Invite teammate")}>+</button>}
             </div>
           </div>
         </header>
 
         <div className="page-content">
+          {invitations.length > 0 && <section className="invitation-banner">
+            <span>✦</span>
+            <div><strong>{t("Convite para colaborar", "Invitation to collaborate")}</strong><small>{t(`${invitations[0].businessName} convidou-o como ${roleLabel(invitations[0].role, t)}.`, `${invitations[0].businessName} invited you as ${roleLabel(invitations[0].role, t)}.`)}</small></div>
+            <button className="button-secondary" onClick={() => declineInvitation(invitations[0])}>{t("Recusar", "Decline")}</button>
+            <button className="button-primary" onClick={() => acceptInvitation(invitations[0])}>{t("Aceitar", "Accept")}</button>
+          </section>}
           {view === "home" && (
             <Overview
               language={language}
@@ -950,19 +1057,67 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       )}
 
       {teamOpen && (
-        <Modal title={t("Equipa e permissões", "Team & permissions")} subtitle={t("Convide colaboradores e defina quem pode editar, reservar ou apenas consultar.", "Invite collaborators and choose who can edit, reserve, or only view.")} onClose={() => setTeamOpen(false)}>
+        <Modal wide title={t("Equipa e permissões", "Team & permissions")} subtitle={t("Convide colaboradores, acompanhe a validade e controle os acessos.", "Invite collaborators, track expiry, and control access.")} onClose={() => setTeamOpen(false)}>
           <TeamManager
             t={t}
             members={members}
             canInvite={canManageTeam}
             onInvite={async (email, role) => {
               const id = Date.now();
-              if (await persist("inviteMember", { id, email, role })) {
-                setMembers((current) => [...current.filter((member) => member.email.toLowerCase() !== email.toLowerCase()), { id, email, role, status: "Pending" }]);
-                showToast(t("Convite registado como pendente", "Invitation recorded as pending"));
+              const result = await persist("inviteMember", { id, email, role });
+              if (!result) return "";
+              setReloadToken((value) => value + 1);
+              showToast(t("Convite válido por 7 dias", "Invitation valid for 7 days"));
+              return result.inviteUrl || "";
+            }}
+            onResend={async (member) => {
+              const result = await persist("resendInvitation", { id: member.id });
+              if (result) {
+                setReloadToken((value) => value + 1);
+                showToast(t("Convite renovado por 7 dias", "Invitation renewed for 7 days"));
+                return result.inviteUrl || "";
+              }
+              return "";
+            }}
+            onRevoke={async (member) => {
+              if (await persist("revokeInvitation", { id: member.id })) {
+                setReloadToken((value) => value + 1);
+                showToast(t("Convite revogado", "Invitation revoked"));
               }
             }}
+            onRole={async (member, nextRole) => {
+              if (await persist("updateMemberRole", { memberId: member.id, role: nextRole })) {
+                setReloadToken((value) => value + 1);
+                showToast(t("Permissão actualizada", "Permission updated"));
+              }
+            }}
+            onRemove={async (member) => {
+              if (await persist("removeMember", { memberId: member.id })) {
+                setReloadToken((value) => value + 1);
+                showToast(t("Membro removido", "Member removed"));
+              }
+            }}
+            onActivity={() => { setTeamOpen(false); setActivityOpen(true); }}
           />
+        </Modal>
+      )}
+
+      {notificationOpen && (
+        <Modal title={t("Notificações", "Notifications")} subtitle={t("Reservas, inventário e actividade da equipa num só lugar.", "Reservations, inventory, and team activity in one place.")} onClose={() => setNotificationOpen(false)}>
+          <NotificationCenter
+            notifications={notifications}
+            language={language}
+            t={t}
+            onRead={markNotification}
+            onReadAll={markAllNotifications}
+            onEnableBrowser={enableBrowserAlerts}
+          />
+        </Modal>
+      )}
+
+      {activityOpen && (
+        <Modal wide title={t("Histórico de actividade", "Activity history")} subtitle={t("Registo cronológico das alterações importantes da empresa.", "Chronological record of important business changes.")} onClose={() => setActivityOpen(false)}>
+          <ActivityLog entries={auditLogs} language={language} t={t} />
         </Modal>
       )}
 
@@ -1398,10 +1553,73 @@ function CategoryManager({ t, categories, addCategory, removeCategory }: { t: Tr
   return <div className="category-manager"><form onSubmit={(event) => { event.preventDefault(); addCategory(name); setName(""); }}><input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("Nova categoria…", "New category…")} required /><button className="button-primary">{t("Adicionar", "Add")}</button></form><div>{categories.map((category) => <span key={category}><i>▦</i><b>{category}</b><button onClick={() => removeCategory(category)} aria-label={t(`Remover ${category}`, `Remove ${category}`)}>×</button></span>)}</div><p>{t("Ao remover uma categoria, os itens passam para “Sem categoria”.", "Removing a category moves its items to “Uncategorized”.")}</p></div>;
 }
 
-function TeamManager({ t, members, canInvite, onInvite }: { t: Translator; members: Member[]; canInvite: boolean; onInvite: (email: string, role: string) => void }) {
+function TeamManager({ t, members, canInvite, onInvite, onResend, onRevoke, onRole, onRemove, onActivity }: {
+  t: Translator;
+  members: Member[];
+  canInvite: boolean;
+  onInvite: (email: string, role: string) => Promise<string>;
+  onResend: (member: Member) => Promise<string>;
+  onRevoke: (member: Member) => void;
+  onRole: (member: Member, role: string) => void;
+  onRemove: (member: Member) => void;
+  onActivity: () => void;
+}) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("inventory");
-  return <div className="team-manager"><div className="team-members">{members.map((member, index) => <span key={`${member.id}-${member.email}`}><i className={["clay", "olive", "gold"][index % 3]}>{initials(member.displayName || member.email)}</i><b>{member.displayName || member.email}<small>{roleLabel(member.role, t)}</small></b><em>{member.status === "Pending" ? t("Pendente", "Pending") : t("Activo", "Active")}</em></span>)}</div>{canInvite && <form onSubmit={(event) => { event.preventDefault(); onInvite(email, role); setEmail(""); }}><label>{t("Email do colaborador", "Collaborator email")}<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@empresa.co.mz" required /></label><label>{t("Permissão", "Permission")}<select value={role} onChange={(event) => setRole(event.target.value)}><option value="inventory">{t("Gestão de inventário", "Inventory manager")}</option><option value="reservations">{t("Gestão de reservas", "Booking manager")}</option><option value="viewer">{t("Apenas consulta", "View only")}</option></select></label><button className="button-primary">{t("Registar convite", "Record invitation")}</button></form>}<p>{t("A conta convidada obtém acesso quando iniciar sessão com este endereço. O envio automático de email será ligado na Fase 4.", "The invited account gets access when it signs in with this address. Automatic invitation email will be connected in Phase 4.")}</p></div>;
+  const [inviteUrl, setInviteUrl] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const url = await onInvite(email, role);
+    if (url) {
+      setInviteUrl(url);
+      setEmail("");
+    }
+  }
+  async function copyInvite(url: string) {
+    await navigator.clipboard.writeText(url);
+    setInviteUrl(url);
+  }
+  return <div className="team-manager phase-four-team">
+    <header><button className="button-secondary" onClick={onActivity}>{t("Ver histórico de actividade", "View activity history")}</button></header>
+    <div className="team-members">{members.map((member, index) => <span key={`${member.id}-${member.email}`} className={cls(member.status !== "Active" && "pending-member")}>
+      <i className={["clay", "olive", "gold"][index % 3]}>{initials(member.displayName || member.email)}</i>
+      <b>{member.displayName || member.email}<small>{member.status === "Pending" && member.expiresAt ? t(`Expira em ${new Date(member.expiresAt).toLocaleDateString("pt-MZ")}`, `Expires ${new Date(member.expiresAt).toLocaleDateString("en-MZ")}`) : roleLabel(member.role, t)}</small></b>
+      {member.status === "Active" && member.role !== "owner" && canInvite
+        ? <select aria-label={t(`Permissão de ${member.email}`, `${member.email} permission`)} value={member.role} onChange={(event) => onRole(member, event.target.value)}><option value="manager">{t("Gestor", "Manager")}</option><option value="inventory">{t("Inventário", "Inventory")}</option><option value="reservations">{t("Reservas", "Reservations")}</option><option value="viewer">{t("Consulta", "Viewer")}</option></select>
+        : <em>{member.status === "Active" ? t("Activo", "Active") : member.status}</em>}
+      {canInvite && member.status === "Pending" && <div className="member-actions"><button onClick={async () => copyInvite(await onResend(member))}>{t("Renovar e copiar", "Renew & copy")}</button><button onClick={() => onRevoke(member)}>{t("Revogar", "Revoke")}</button></div>}
+      {canInvite && member.status === "Active" && member.role !== "owner" && <button className="member-remove" onClick={() => onRemove(member)}>{t("Remover", "Remove")}</button>}
+    </span>)}</div>
+    {canInvite && <form onSubmit={submit}><label>{t("Email do colaborador", "Collaborator email")}<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@empresa.co.mz" required /></label><label>{t("Permissão", "Permission")}<select value={role} onChange={(event) => setRole(event.target.value)}><option value="manager">{t("Gestor", "Manager")}</option><option value="inventory">{t("Gestão de inventário", "Inventory manager")}</option><option value="reservations">{t("Gestão de reservas", "Booking manager")}</option><option value="viewer">{t("Apenas consulta", "View only")}</option></select></label><button className="button-primary">{t("Criar convite", "Create invitation")}</button></form>}
+    {inviteUrl && <div className="invite-link"><span><strong>{t("Convite pronto", "Invitation ready")}</strong><small>{t("Partilhe este link com o endereço convidado. É válido por 7 dias.", "Share this link with the invited address. It is valid for 7 days.")}</small></span><button className="button-secondary" onClick={() => copyInvite(inviteUrl)}>{t("Copiar link", "Copy link")}</button></div>}
+    <p>{t("A aceitação exige sessão iniciada com o mesmo email. O envio automático por email será activado quando for escolhido um fornecedor de correio.", "Acceptance requires signing in with the same email. Automatic email delivery will be enabled after an email provider is selected.")}</p>
+  </div>;
+}
+
+function NotificationCenter({ notifications, language, t, onRead, onReadAll, onEnableBrowser }: {
+  notifications: NotificationRecord[];
+  language: Language;
+  t: Translator;
+  onRead: (notification: NotificationRecord) => void;
+  onReadAll: () => void;
+  onEnableBrowser: () => void;
+}) {
+  return <div className="notification-center">
+    <header><button className="button-secondary" onClick={onEnableBrowser}>{t("Activar alertas do navegador", "Enable browser alerts")}</button><button onClick={onReadAll}>{t("Marcar tudo como lido", "Mark all as read")}</button></header>
+    <div>{notifications.length ? notifications.map((notification) => <button key={notification.id} className={cls(!notification.readAt && "unread")} onClick={() => onRead(notification)}>
+      <i>{notification.type === "reminder" ? "□" : notification.type === "team" ? "◎" : "◇"}</i>
+      <span><strong>{language === "pt" ? notification.titlePt : notification.titleEn}</strong><small>{language === "pt" ? notification.bodyPt : notification.bodyEn}</small><em>{new Date(notification.createdAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ", { dateStyle: "medium", timeStyle: "short" })}</em></span>
+    </button>) : <div className="manager-empty">◇<strong>{t("Sem notificações", "No notifications")}</strong></div>}</div>
+    <p>{t("Os alertas do navegador funcionam enquanto a Trove está aberta. Email e push em segundo plano dependem do fornecedor de comunicação.", "Browser alerts work while Trove is open. Background email and push depend on the communication provider.")}</p>
+  </div>;
+}
+
+function ActivityLog({ entries, language, t }: { entries: AuditEntry[]; language: Language; t: Translator }) {
+  return <div className="activity-log">{entries.length ? entries.map((entry) => <article key={entry.id}>
+    <i>{initials(entry.actorName || entry.actorEmail || "Trove")}</i>
+    <span><strong>{entry.summary}</strong><small>{entry.actorName || entry.actorEmail || t("Sistema", "System")} · {entry.entityType}</small></span>
+    <time>{new Date(entry.createdAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ", { dateStyle: "medium", timeStyle: "short" })}</time>
+  </article>) : <div className="manager-empty">◇<strong>{t("Ainda sem actividade registada", "No recorded activity yet")}</strong></div>}</div>;
 }
 
 function getMonthCells(cursor: Date) {

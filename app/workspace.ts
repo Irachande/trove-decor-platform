@@ -180,6 +180,12 @@ export async function ensureWorkspaceDatabase() {
       "CREATE TABLE IF NOT EXISTS collaborators (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL DEFAULT 1, email TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Pending', invited_by_user_id INTEGER, created_at TEXT NOT NULL DEFAULT '')",
     ),
     db.prepare(
+      "CREATE TABLE IF NOT EXISTS notifications (id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER NOT NULL, user_id INTEGER NOT NULL, type TEXT NOT NULL, title_pt TEXT NOT NULL, title_en TEXT NOT NULL, body_pt TEXT NOT NULL DEFAULT '', body_en TEXT NOT NULL DEFAULT '', link TEXT NOT NULL DEFAULT '', source_key TEXT NOT NULL, read_at TEXT, created_at TEXT NOT NULL, UNIQUE (user_id, source_key))",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER NOT NULL, user_id INTEGER, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL, created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
       "CREATE TABLE IF NOT EXISTS item_photos (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, item_id INTEGER NOT NULL, url TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)",
     ),
     db.prepare(
@@ -268,6 +274,10 @@ export async function ensureWorkspaceDatabase() {
     { name: "business_id", sql: "business_id INTEGER NOT NULL DEFAULT 1" },
     { name: "invited_by_user_id", sql: "invited_by_user_id INTEGER" },
     { name: "created_at", sql: "created_at TEXT NOT NULL DEFAULT ''" },
+    { name: "expires_at", sql: "expires_at TEXT NOT NULL DEFAULT ''" },
+    { name: "accepted_at", sql: "accepted_at TEXT" },
+    { name: "accepted_by_user_id", sql: "accepted_by_user_id INTEGER" },
+    { name: "revoked_at", sql: "revoked_at TEXT" },
   ]);
   await addMissingColumns("reservation_items", [
     { name: "currency", sql: "currency TEXT NOT NULL DEFAULT 'MZN'" },
@@ -318,6 +328,15 @@ export async function ensureWorkspaceDatabase() {
     ),
     db.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS reservation_items_reservation_item_idx ON reservation_items (reservation_id, item_id)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS notifications_user_source_idx ON notifications (user_id, source_key)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS notifications_business_user_date_idx ON notifications (business_id, user_id, created_at)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS audit_logs_business_date_idx ON audit_logs (business_id, created_at)",
     ),
   ]);
 
@@ -464,27 +483,6 @@ async function resolveWorkspace(
     .bind(user.email.toLowerCase())
     .first<{ id: number }>();
   if (!storedUser) throw new Error("Unable to resolve user");
-
-  const invitations = await env.DB.prepare(
-    "SELECT id, business_id AS businessId, role FROM collaborators WHERE lower(email) = ? AND status = 'Pending'",
-  )
-    .bind(user.email.toLowerCase())
-    .all<{ id: number; businessId: number; role: string }>();
-  for (const invite of invitations.results) {
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT OR IGNORE INTO memberships (business_id, user_id, role, status, created_at) VALUES (?, ?, ?, 'Active', ?)",
-      ).bind(
-        invite.businessId,
-        storedUser.id,
-        normalizeRole(invite.role),
-        now(),
-      ),
-      env.DB.prepare(
-        "UPDATE collaborators SET status = 'Active' WHERE id = ? AND business_id = ?",
-      ).bind(invite.id, invite.businessId),
-    ]);
-  }
 
   let memberships = await env.DB.prepare(
     "SELECT m.business_id AS businessId, m.role, b.name, b.handle, b.plan FROM memberships m JOIN businesses b ON b.id = m.business_id WHERE m.user_id = ? AND m.status = 'Active' ORDER BY m.id",

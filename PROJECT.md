@@ -110,8 +110,15 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 
 ### Equipa e perfil
 
-- Convites registados por email e aceites automaticamente no primeiro login.
+- Convites seguros dirigidos a um email, válidos por sete dias.
+- Aceitação ou recusa explícita pelo utilizador autenticado com o mesmo email.
+- Renovação e revogação de convites pendentes.
 - Funções de proprietário, gestor, inventário, reservas e consulta.
+- Alteração de funções, remoção de membros e troca entre empresas autorizadas.
+- Centro de notificações internas com leitura individual ou em massa.
+- Lembretes internos para reservas nos três dias seguintes.
+- Alertas do navegador enquanto a aplicação está aberta.
+- Histórico cronológico das alterações importantes e respectivos autores.
 - Perfil público com fotografia, biografia, contactos, localização e cor.
 - Persistência de perfil, inventário, reservas e categorias.
 
@@ -147,14 +154,15 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 | Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
 | Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
 | Perfil público | Parcial | Editor existe; falta rota pública independente |
-| Equipa | Parcial | Memberships e funções funcionam; falta envio automático de email |
+| Equipa | Funcional | Convites com aceitação/expiração, funções, remoção e troca de empresa |
 | Autenticação | Funcional no Sites | Usa Sign in with ChatGPT; fornecedor público definitivo continua pendente |
 | Multiempresa | Funcional | Consultas, alterações e imagens são isoladas por `business_id` |
 | Subscrições | Demonstração | Não existe checkout, webhook ou facturação |
 | Rede local | Demonstração | Os artigos e negócios são dados estáticos |
 | Aplicação mobile | Parcial | Web responsiva; ainda não é PWA ou aplicação nativa |
-| Notificações | Não implementado | Falta email, push e lembretes |
-| Testes automatizados | Parcial | Testes estruturais e integração da API de reservas; cobertura integral ainda pendente |
+| Notificações | Parcial | Centro interno, lembretes e alertas com app aberta; falta email/push em segundo plano |
+| Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
+| Testes automatizados | Parcial | Testes estruturais e integração das APIs de reservas e equipa |
 
 ## 7. Arquitectura actual
 
@@ -203,7 +211,9 @@ Next.js / Vinext
 - `reservations`: período, valores, logística e estado do ciclo de aluguer.
 - `reservation_items`: artigos, quantidades e preços de cada reserva.
 - `categories`: categorias isoladas por empresa.
-- `collaborators`: convites pendentes e funções.
+- `collaborators`: convites, validade, aceitação e revogação.
+- `notifications`: avisos e lembretes por utilizador e empresa.
+- `audit_logs`: histórico de alterações importantes e respectivos autores.
 - `business_profile`: perfil de cada empresa.
 
 ## 9. Modelo de dados pretendido
@@ -227,8 +237,8 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `marketplace_listings`
 - `rental_requests`
 - `payments`
-- `notifications`
-- `audit_logs`
+- `notifications` — implementado
+- `audit_logs` — implementado
 
 Todas as entidades pertencentes a uma empresa deverão possuir `business_id` e
 ser filtradas e autorizadas no servidor.
@@ -310,10 +320,14 @@ produto para a distribuição fora do ambiente Sites.
 ### Fase 4 — Equipa e comunicação
 
 - [ ] Convites por email.
-- [ ] Aceitação e expiração de convites.
-- [ ] Notificações internas.
+- [x] Aceitação e expiração de convites.
+- [x] Notificações internas.
 - [ ] Lembretes por email e push.
-- [ ] Histórico de actividade.
+- [x] Histórico de actividade.
+
+Nota: os links de convite podem ser copiados e partilhados, e os alertas do
+navegador funcionam com a aplicação aberta. O envio automático de email e push
+em segundo plano depende da escolha e configuração de um fornecedor externo.
 
 ### Fase 5 — Subscrições
 
@@ -381,8 +395,33 @@ pnpm run db:generate
 - Limites exactos de cada plano.
 - Estratégia PWA versus aplicações nativas.
 - Política de verificação das empresas da rede.
+- Fornecedor e remetente verificado para email transaccional.
+- Fornecedor de push e gestão das respectivas chaves.
 
 ## 17. Histórico de iterações
+
+### 29 de Julho de 2026 — Fase 4: equipa e comunicação
+
+- Os convites deixaram de conceder acesso automaticamente: exigem aceitação
+  explícita por uma sessão com o mesmo email e expiram ao fim de sete dias.
+- Adicionadas renovação, revogação e recusa de convites, com link partilhável e
+  estados visíveis na gestão da equipa.
+- Implementadas alteração de funções, remoção de membros e troca entre empresas
+  às quais o utilizador pertence.
+- Criado centro de notificações internas, leitura individual/em massa e
+  lembretes automáticos para reservas nos três dias seguintes.
+- Adicionados alertas nativos do navegador enquanto a Trove está aberta.
+- Criado histórico de actividade com empresa, utilizador, acção, entidade e
+  data, aplicado às alterações importantes da API.
+- Criadas as entidades `notifications` e `audit_logs`, e ampliados os convites
+  com validade, aceitação e revogação.
+- Adicionada a migração `0005_reflective_exiles.sql`, testes estruturais e um
+  teste integrado com proprietário e colaborador, cobrindo convite, aceitação,
+  recusa, mudança de função, permissões, notificações e histórico.
+- O envio automático de email e push em segundo plano permanece pendente até à
+  escolha de fornecedores e configuração segura das credenciais.
+- Validação: `pnpm run test:phase4-api`, `pnpm test`, `pnpm run lint`,
+  `pnpm run typecheck`, `pnpm run build` e `git diff --check`.
 
 ### 29 de Julho de 2026 — Fase 3: reservas robustas
 

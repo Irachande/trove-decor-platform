@@ -147,3 +147,42 @@ test("phase 3 interface supports multi-item pricing and lifecycle actions", asyn
   assert.match(styles, /\.reservation-totals/);
   assert.match(styles, /\.relationship-manager/);
 });
+
+test("phase 4 communication data is durable, scoped, and permissioned", async () => {
+  const [schema, migration, workspace, api] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0005_reflective_exiles.sql"),
+    source("app/workspace.ts"),
+    source("app/api/data/route.ts"),
+  ]);
+
+  assert.match(schema, /export const notifications/);
+  assert.match(schema, /export const auditLogs/);
+  assert.match(migration, /CREATE TABLE `notifications`/);
+  assert.match(migration, /CREATE TABLE `audit_logs`/);
+  assert.match(migration, /ADD `expires_at`/);
+  assert.match(workspace, /notifications_business_user_date_idx/);
+  assert.match(workspace, /audit_logs_business_date_idx/);
+  assert.match(api, /acceptInvitation: "read"/);
+  assert.match(api, /revokeInvitation: "manageTeam"/);
+  assert.match(api, /ensureReservationReminders/);
+  assert.match(api, /writeAudit/);
+});
+
+test("phase 4 interface exposes invitations, notifications, roles, and activity", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /function NotificationCenter/);
+  assert.match(app, /function ActivityLog/);
+  assert.match(app, /acceptInvitation/);
+  assert.match(app, /enableBrowserAlerts/);
+  assert.match(app, /updateMemberRole/);
+  assert.match(app, /trove-business-id/);
+  assert.match(styles, /\.invitation-banner/);
+  assert.match(styles, /\.notification-center/);
+  assert.match(styles, /\.activity-log/);
+  assert.match(styles, /\.phase-four-team/);
+});

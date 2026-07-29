@@ -51,6 +51,14 @@ const ACTION_PERMISSIONS: Record<string, WorkspacePermission> = {
   addCategory: "manageCategories",
   removeCategory: "manageCategories",
   inviteMember: "manageTeam",
+  resendInvitation: "manageTeam",
+  revokeInvitation: "manageTeam",
+  updateMemberRole: "manageTeam",
+  removeMember: "manageTeam",
+  acceptInvitation: "read",
+  declineInvitation: "read",
+  markNotificationRead: "read",
+  markAllNotificationsRead: "read",
   updateProfile: "manageProfile",
 };
 
@@ -100,7 +108,7 @@ function clientError(error: unknown) {
       ? "There is not enough physical stock to check out this reservation"
       : rawMessage;
   const validation =
-    /required|too long|too small|too large|must be|select between|invalid|not found|exceeds|duplicate|unavailable|not enough|transition/i.test(
+    /required|too long|too small|too large|must be|select between|invalid|not found|exceeds|duplicate|unavailable|not enough|transition|already|cannot|expired/i.test(
       message,
     );
   return Response.json({ error: message }, { status: validation ? 400 : 500 });
@@ -128,6 +136,163 @@ function reservationLines(payload: Payload) {
     throw new Error("Duplicate reservation item");
   }
   return lines satisfies ReservationLineInput[];
+}
+
+function addDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function normalizedRole(value: string) {
+  return ["manager", "inventory", "reservations", "viewer"].includes(value)
+    ? value
+    : "viewer";
+}
+
+function actionEntity(action: string) {
+  if (action.includes("Reservation")) return "reservation";
+  if (action.includes("Invitation") || action === "inviteMember") return "invitation";
+  if (action.includes("Member")) return "membership";
+  if (action.includes("Item") || action === "adjustStock") return "inventory_item";
+  if (action.includes("Maintenance")) return "maintenance";
+  if (action.includes("Kit")) return "kit";
+  if (action.includes("Client")) return "client";
+  if (action.includes("Event")) return "event";
+  if (action.includes("Category")) return "category";
+  if (action.includes("Profile")) return "business_profile";
+  return "workspace";
+}
+
+function actionSummary(action: string) {
+  const summaries: Record<string, string> = {
+    addReservation: "Reserva criada",
+    updateReservation: "Reserva actualizada",
+    transitionReservation: "Estado da reserva alterado",
+    inviteMember: "Convite de equipa criado",
+    resendInvitation: "Convite de equipa renovado",
+    revokeInvitation: "Convite de equipa revogado",
+    acceptInvitation: "Convite de equipa aceite",
+    declineInvitation: "Convite de equipa recusado",
+    updateMemberRole: "Função de membro actualizada",
+    removeMember: "Membro removido da equipa",
+    adjustStock: "Stock ajustado",
+    addMaintenance: "Intervenção registada",
+    updateMaintenance: "Intervenção actualizada",
+  };
+  return summaries[action] || action.replace(/([A-Z])/g, " $1").trim();
+}
+
+async function writeAudit(
+  businessId: number,
+  userId: number,
+  action: string,
+  payload: Payload,
+  createdAt: string,
+) {
+  const rawId = payload.id ?? payload.itemId ?? payload.memberId ?? "";
+  await env.DB.prepare(
+    "INSERT INTO audit_logs (business_id, user_id, action, entity_type, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).bind(
+    businessId,
+    userId,
+    action,
+    actionEntity(action),
+    String(rawId),
+    actionSummary(action),
+    createdAt,
+  ).run();
+}
+
+async function notifyBusinessMembers(
+  businessId: number,
+  type: string,
+  titlePt: string,
+  titleEn: string,
+  bodyPt: string,
+  bodyEn: string,
+  sourceKey: string,
+  createdAt: string,
+) {
+  const members = await env.DB.prepare(
+    "SELECT user_id AS userId FROM memberships WHERE business_id = ? AND status = 'Active'",
+  ).bind(businessId).all<{ userId: number }>();
+  if (!members.results.length) return;
+  await env.DB.batch(
+    members.results.map((member) =>
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO notifications (business_id, user_id, type, title_pt, title_en, body_pt, body_en, link, source_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+      ).bind(
+        businessId,
+        member.userId,
+        type,
+        titlePt,
+        titleEn,
+        bodyPt,
+        bodyEn,
+        `${sourceKey}:${member.userId}`,
+        createdAt,
+      ),
+    ),
+  );
+}
+
+async function ensureReservationReminders(
+  businessId: number,
+  createdAt: string,
+) {
+  const today = createdAt.slice(0, 10);
+  const until = addDays(new Date(createdAt), 3).toISOString().slice(0, 10);
+  const upcoming = await env.DB.prepare(
+    "SELECT id, event_name AS eventName, date FROM reservations WHERE business_id = ? AND status IN ('Confirmed', 'CheckedOut') AND date >= ? AND date <= ? ORDER BY date",
+  ).bind(businessId, today, until).all<{
+    id: number;
+    eventName: string;
+    date: string;
+  }>();
+  for (const reservation of upcoming.results) {
+    await notifyBusinessMembers(
+      businessId,
+      "reminder",
+      "Reserva próxima",
+      "Upcoming reservation",
+      `${reservation.eventName || "Evento"} começa em ${reservation.date}.`,
+      `${reservation.eventName || "Event"} starts on ${reservation.date}.`,
+      `reservation-reminder:${reservation.id}:${reservation.date}`,
+      createdAt,
+    );
+  }
+}
+
+async function emitActionNotification(
+  action: string,
+  businessId: number,
+  payload: Payload,
+  createdAt: string,
+) {
+  const id = String(payload.id ?? payload.itemId ?? createdAt);
+  const messages: Record<string, [string, string, string, string, string]> = {
+    addReservation: ["reservation", "Nova reserva", "New reservation", "Foi criada uma reserva para a equipa.", "A reservation was created for the team."],
+    updateReservation: ["reservation", "Reserva actualizada", "Reservation updated", "Os detalhes de uma reserva foram alterados.", "Reservation details were changed."],
+    transitionReservation: ["reservation", "Estado da reserva alterado", "Reservation status changed", `Novo estado: ${String(payload.status || "")}.`, `New status: ${String(payload.status || "")}.`],
+    adjustStock: ["inventory", "Stock actualizado", "Stock updated", "A quantidade disponível de um artigo foi alterada.", "An item's available quantity was changed."],
+    addMaintenance: ["maintenance", "Intervenção registada", "Maintenance recorded", "Foi adicionada uma intervenção ao inventário.", "An inventory maintenance record was added."],
+    updateMaintenance: ["maintenance", "Intervenção concluída", "Maintenance completed", "Uma intervenção foi actualizada.", "A maintenance record was updated."],
+    updateMemberRole: ["team", "Permissão actualizada", "Permission updated", "A função de um membro da equipa foi alterada.", "A team member's role was changed."],
+    removeMember: ["team", "Equipa actualizada", "Team updated", "Um membro foi removido da empresa.", "A member was removed from the business."],
+  };
+  const message = messages[action];
+  if (!message) return;
+  await notifyBusinessMembers(
+    businessId,
+    message[0],
+    message[1],
+    message[2],
+    message[3],
+    message[4],
+    `activity:${action}:${id}:${createdAt}`,
+    createdAt,
+  );
 }
 
 function validateItem(input: Payload): ImportedItem {
@@ -201,6 +366,11 @@ export async function GET(request: Request) {
   try {
     const context = await authorize(request);
     if (isAuthorizationResponse(context)) return context;
+    const loadedAt = new Date().toISOString();
+    await env.DB.prepare(
+      "UPDATE collaborators SET status = 'Expired' WHERE status = 'Pending' AND expires_at != '' AND expires_at <= ? AND (business_id = ? OR lower(email) = ?)",
+    ).bind(loadedAt, context.businessId, context.user.email.toLowerCase()).run();
+    await ensureReservationReminders(context.businessId, loadedAt);
 
     const [
       items,
@@ -217,6 +387,10 @@ export async function GET(request: Request) {
       clients,
       events,
       bookedItems,
+      notifications,
+      auditLogs,
+      invitations,
+      workspaces,
     ] = await Promise.all([
       env.DB.prepare(
         "SELECT id, name, category, quantity, available, status, tone, symbol, price, currency, photo_url AS photoUrl, storage_location AS storageLocation, condition, description, sku, replacement_value AS replacementValue, min_stock AS minStock FROM inventory_items WHERE business_id = ? ORDER BY id DESC",
@@ -234,7 +408,7 @@ export async function GET(request: Request) {
         "SELECT u.id, u.email, u.display_name AS displayName, m.role, m.status FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.business_id = ? AND m.status = 'Active' ORDER BY m.id",
       ).bind(context.businessId).all(),
       env.DB.prepare(
-        "SELECT id, email, role, status FROM collaborators WHERE business_id = ? AND status = 'Pending' ORDER BY id",
+        "SELECT id, email, role, status, created_at AS createdAt, expires_at AS expiresAt, accepted_at AS acceptedAt, revoked_at AS revokedAt FROM collaborators WHERE business_id = ? AND status IN ('Pending', 'Expired', 'Revoked', 'Declined') ORDER BY id DESC LIMIT 100",
       ).bind(context.businessId).all(),
       env.DB.prepare(
         "SELECT id, item_id AS itemId, url, sort_order AS sortOrder FROM item_photos WHERE business_id = ? ORDER BY item_id, sort_order, id",
@@ -260,6 +434,18 @@ export async function GET(request: Request) {
       env.DB.prepare(
         "SELECT id, reservation_id AS reservationId, item_id AS itemId, item_name AS itemName, quantity, unit_price AS unitPrice, currency FROM reservation_items WHERE business_id = ? ORDER BY reservation_id, id",
       ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, type, title_pt AS titlePt, title_en AS titleEn, body_pt AS bodyPt, body_en AS bodyEn, link, read_at AS readAt, created_at AS createdAt FROM notifications WHERE business_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 100",
+      ).bind(context.businessId, context.userId).all(),
+      env.DB.prepare(
+        "SELECT a.id, a.action, a.entity_type AS entityType, a.entity_id AS entityId, a.summary, a.created_at AS createdAt, u.display_name AS actorName, u.email AS actorEmail FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id WHERE a.business_id = ? ORDER BY a.created_at DESC LIMIT 150",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT c.id, c.business_id AS businessId, b.name AS businessName, c.role, c.created_at AS createdAt, c.expires_at AS expiresAt FROM collaborators c JOIN businesses b ON b.id = c.business_id WHERE lower(c.email) = ? AND c.status = 'Pending' AND (c.expires_at = '' OR c.expires_at > ?) ORDER BY c.created_at DESC",
+      ).bind(context.user.email.toLowerCase(), loadedAt).all(),
+      env.DB.prepare(
+        "SELECT b.id, b.name, b.handle, b.plan, m.role FROM memberships m JOIN businesses b ON b.id = m.business_id WHERE m.user_id = ? AND m.status = 'Active' ORDER BY b.name",
+      ).bind(context.userId).all(),
     ]);
 
     return Response.json({
@@ -281,6 +467,10 @@ export async function GET(request: Request) {
       }),
       clients: clients.results,
       events: events.results,
+      notifications: notifications.results,
+      auditLogs: auditLogs.results,
+      invitations: invitations.results,
+      workspaces: workspaces.results,
       categories: categories.results,
       profile,
       members: [...activeMembers.results, ...pendingMembers.results],
@@ -320,6 +510,8 @@ export async function POST(request: Request) {
     const context = await authorize(request, permission);
     if (isAuthorizationResponse(context)) return context;
     const createdAt = new Date().toISOString();
+    let auditBusinessId = context.businessId;
+    let result: Record<string, unknown> = { ok: true };
 
     if (action === "addItem") {
       const item = validateItem(payload);
@@ -764,11 +956,110 @@ export async function POST(request: Request) {
       const email = text(payload, "email", { required: true, max: 254 }).toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Invalid email address");
       if (email === context.user.email) throw new Error("You already belong to this business");
-      const role = text(payload, "role", { required: true, max: 40 });
+      const existingMember = await env.DB.prepare(
+        "SELECT m.id FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.business_id = ? AND lower(u.email) = ? AND m.status = 'Active'",
+      ).bind(context.businessId, email).first();
+      if (existingMember) throw new Error("This person already belongs to the business");
+      const role = normalizedRole(text(payload, "role", { required: true, max: 40 }));
+      const invitationId = integer(payload, "id", { min: 1 });
+      const expiresAt = addDays(new Date(createdAt), 7).toISOString();
       await env.DB.batch([
         env.DB.prepare("DELETE FROM collaborators WHERE business_id = ? AND lower(email) = ? AND status = 'Pending'").bind(context.businessId, email),
-        env.DB.prepare("INSERT INTO collaborators (id, business_id, email, role, status, invited_by_user_id, created_at) VALUES (?, ?, ?, ?, 'Pending', ?, ?)").bind(integer(payload, "id", { min: 1 }), context.businessId, email, role, context.userId, createdAt),
+        env.DB.prepare("INSERT INTO collaborators (id, business_id, email, role, status, invited_by_user_id, created_at, expires_at) VALUES (?, ?, ?, ?, 'Pending', ?, ?, ?)").bind(invitationId, context.businessId, email, role, context.userId, createdAt, expiresAt),
       ]);
+      result = {
+        ok: true,
+        invitationId,
+        expiresAt,
+        inviteUrl: `${new URL(request.url).origin}/?invitation=${invitationId}`,
+      };
+    } else if (action === "resendInvitation") {
+      const id = integer(payload, "id", { min: 1 });
+      const expiresAt = addDays(new Date(createdAt), 7).toISOString();
+      const updated = await env.DB.prepare(
+        "UPDATE collaborators SET status = 'Pending', created_at = ?, expires_at = ?, revoked_at = NULL WHERE id = ? AND business_id = ? AND status IN ('Pending', 'Expired', 'Revoked')",
+      ).bind(createdAt, expiresAt, id, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Invitation not found");
+      result = {
+        ok: true,
+        invitationId: id,
+        expiresAt,
+        inviteUrl: `${new URL(request.url).origin}/?invitation=${id}`,
+      };
+    } else if (action === "revokeInvitation") {
+      const id = integer(payload, "id", { min: 1 });
+      const updated = await env.DB.prepare(
+        "UPDATE collaborators SET status = 'Revoked', revoked_at = ? WHERE id = ? AND business_id = ? AND status = 'Pending'",
+      ).bind(createdAt, id, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Pending invitation not found");
+    } else if (action === "acceptInvitation") {
+      const id = integer(payload, "id", { min: 1 });
+      const invitation = await env.DB.prepare(
+        "SELECT business_id AS businessId, role, expires_at AS expiresAt FROM collaborators WHERE id = ? AND lower(email) = ? AND status = 'Pending'",
+      ).bind(id, context.user.email.toLowerCase()).first<{
+        businessId: number;
+        role: string;
+        expiresAt: string;
+      }>();
+      if (!invitation) throw new Error("Invitation not found");
+      if (invitation.expiresAt && invitation.expiresAt <= createdAt) {
+        await env.DB.prepare(
+          "UPDATE collaborators SET status = 'Expired' WHERE id = ?",
+        ).bind(id).run();
+        throw new Error("Invitation has expired");
+      }
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO memberships (business_id, user_id, role, status, created_at) VALUES (?, ?, ?, 'Active', ?) ON CONFLICT(business_id, user_id) DO UPDATE SET role = excluded.role, status = 'Active'",
+        ).bind(invitation.businessId, context.userId, normalizedRole(invitation.role), createdAt),
+        env.DB.prepare(
+          "UPDATE collaborators SET status = 'Accepted', accepted_at = ?, accepted_by_user_id = ? WHERE id = ? AND business_id = ?",
+        ).bind(createdAt, context.userId, id, invitation.businessId),
+      ]);
+      auditBusinessId = invitation.businessId;
+      result = { ok: true, workspaceId: invitation.businessId };
+      await notifyBusinessMembers(
+        invitation.businessId,
+        "team",
+        "Convite aceite",
+        "Invitation accepted",
+        `${context.user.displayName} entrou na equipa.`,
+        `${context.user.displayName} joined the team.`,
+        `invitation-accepted:${id}`,
+        createdAt,
+      );
+    } else if (action === "declineInvitation") {
+      const id = integer(payload, "id", { min: 1 });
+      const invitation = await env.DB.prepare(
+        "SELECT business_id AS businessId FROM collaborators WHERE id = ? AND lower(email) = ? AND status = 'Pending'",
+      ).bind(id, context.user.email.toLowerCase()).first<{ businessId: number }>();
+      if (!invitation) throw new Error("Invitation not found");
+      await env.DB.prepare(
+        "UPDATE collaborators SET status = 'Declined' WHERE id = ? AND business_id = ?",
+      ).bind(id, invitation.businessId).run();
+      auditBusinessId = invitation.businessId;
+    } else if (action === "updateMemberRole") {
+      const memberId = integer(payload, "memberId", { min: 1 });
+      const role = normalizedRole(text(payload, "role", { required: true, max: 40 }));
+      const updated = await env.DB.prepare(
+        "UPDATE memberships SET role = ? WHERE business_id = ? AND user_id = ? AND role != 'owner'",
+      ).bind(role, context.businessId, memberId).run();
+      if (!updated.meta.changes) throw new Error("Member cannot be updated");
+    } else if (action === "removeMember") {
+      const memberId = integer(payload, "memberId", { min: 1 });
+      if (memberId === context.userId) throw new Error("You cannot remove yourself");
+      const updated = await env.DB.prepare(
+        "UPDATE memberships SET status = 'Removed' WHERE business_id = ? AND user_id = ? AND role != 'owner'",
+      ).bind(context.businessId, memberId).run();
+      if (!updated.meta.changes) throw new Error("Member cannot be removed");
+    } else if (action === "markNotificationRead") {
+      await env.DB.prepare(
+        "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE id = ? AND business_id = ? AND user_id = ?",
+      ).bind(createdAt, integer(payload, "id", { min: 1 }), context.businessId, context.userId).run();
+    } else if (action === "markAllNotificationsRead") {
+      await env.DB.prepare(
+        "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE business_id = ? AND user_id = ?",
+      ).bind(createdAt, context.businessId, context.userId).run();
     } else if (action === "updateProfile") {
       const businessName = text(payload, "businessName", { required: true, max: 120 });
       const handle = text(payload, "handle", { required: true, max: 60 }).toLowerCase().replace(/[^a-z0-9-]/g, "");
@@ -778,7 +1069,11 @@ export async function POST(request: Request) {
         env.DB.prepare("UPDATE businesses SET name = ?, handle = ? WHERE id = ?").bind(businessName, handle, context.businessId),
       ]);
     }
-    return Response.json({ ok: true });
+    if (!["markNotificationRead", "markAllNotificationsRead"].includes(action)) {
+      await writeAudit(auditBusinessId, context.userId, action, payload, createdAt);
+      await emitActionNotification(action, auditBusinessId, payload, createdAt);
+    }
+    return Response.json(result);
   } catch (error) {
     return clientError(error);
   }
