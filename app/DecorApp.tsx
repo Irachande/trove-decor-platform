@@ -6,6 +6,29 @@ type View = "home" | "storage" | "calendar" | "network" | "profile" | "plans";
 type ItemStatus = "Available" | "Reserved" | "Rented";
 type Language = "pt" | "en";
 type Translator = (pt: string, en: string) => string;
+type WorkspaceRole = "owner" | "manager" | "inventory" | "reservations" | "viewer";
+
+type SessionUser = {
+  displayName: string;
+  email: string;
+  fullName: string | null;
+};
+
+type Workspace = {
+  id: number;
+  name: string;
+  handle: string;
+  role: WorkspaceRole;
+  plan: "Basic" | "Network";
+};
+
+type Member = {
+  id: number;
+  email: string;
+  displayName?: string;
+  role: string;
+  status: string;
+};
 
 type Item = {
   id: number;
@@ -48,28 +71,13 @@ type Profile = {
   avatarUrl?: string;
 };
 
-const seedItems: Item[] = [
-  { id: 1, name: "Cadeira Bentwood", category: "Mobiliário", quantity: 48, available: 36, status: "Reserved", tone: "sand", symbol: "CB", price: 650, currency: "MZN", storageLocation: "Corredor A · Prateleira 2", condition: "Excelente", photoUrl: "https://images.unsplash.com/photo-1503602642458-232111445657?auto=format&fit=crop&w=900&q=80" },
-  { id: 2, name: "Jarra âmbar pequena", category: "Mesa", quantity: 72, available: 72, status: "Available", tone: "amber", symbol: "JA", price: 180, currency: "MZN", storageLocation: "Corredor C · Caixa 14", condition: "Bom", photoUrl: "https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&w=900&q=80" },
-  { id: 3, name: "Guardanapo de linho · Sálvia", category: "Têxteis", quantity: 120, available: 84, status: "Rented", tone: "sage", symbol: "GL", price: 75, currency: "MZN", storageLocation: "Corredor B · Caixa 6", condition: "Excelente", photoUrl: "https://images.unsplash.com/photo-1493663284031-b7e3aefcae8e?auto=format&fit=crop&w=900&q=80" },
-  { id: 4, name: "Lanterna de rattan · Grande", category: "Iluminação", quantity: 18, available: 14, status: "Reserved", tone: "clay", symbol: "LR", price: 900, currency: "MZN", storageLocation: "Corredor D · Chão 3", condition: "Bom", photoUrl: "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=80" },
-  { id: 5, name: "Plinto canelado · Marfim", category: "Estruturas", quantity: 8, available: 8, status: "Available", tone: "ivory", symbol: "PC", price: 2500, currency: "MZN", storageLocation: "Zona E · Posição 5", condition: "Excelente", photoUrl: "https://images.unsplash.com/photo-1615873968403-89e068629265?auto=format&fit=crop&w=900&q=80" },
-  { id: 6, name: "Castiçal de pedra", category: "Mesa", quantity: 34, available: 28, status: "Available", tone: "stone", symbol: "CP", price: 220, currency: "MZN", storageLocation: "Corredor C · Caixa 9", condition: "Requer inspeção", photoUrl: "https://images.unsplash.com/photo-1602874801006-e26b7af32e9f?auto=format&fit=crop&w=900&q=80" },
-];
-
-const seedReservations: Reservation[] = [
-  { id: 1, item: "Cadeiras Bentwood × 12", client: "Maya & Tom", eventName: "Casamento na Casa Flora", contact: "+258 84 221 1002", notes: "Levantamento pela equipa do cliente às 09:30.", date: "2026-07-28", endDate: "2026-07-29", color: "#bb6242", quantity: 12, status: "Confirmed" },
-  { id: 2, item: "Lanternas de rattan × 4", client: "Luma Events", eventName: "Jantar corporativo", contact: "eventos@luma.co.mz", notes: "Entrega no Hotel Polana, entrada de serviço.", date: "2026-07-30", endDate: "2026-07-31", color: "#778567", quantity: 4, status: "Confirmed" },
-  { id: 3, item: "Guardanapos de linho × 36", client: "Sofia & Liam", eventName: "Celebração no Glasshouse", contact: "+258 86 446 8821", notes: "Confirmar contagem no regresso.", date: "2026-08-01", endDate: "2026-08-02", color: "#c3974d", quantity: 36, status: "Confirmed" },
-];
-
 const seedProfile: Profile = {
-  businessName: "Terra & Table",
-  handle: "terraandtable",
-  bio: "Warm, considered event styling and soulful tablescapes for weddings and intimate gatherings.",
-  location: "Maputo, Mozambique",
-  phone: "+258 84 555 0192",
-  email: "hello@terraandtable.co",
+  businessName: "Trove Studio",
+  handle: "trove-studio",
+  bio: "",
+  location: "Maputo, Moçambique",
+  phone: "",
+  email: "",
   color: "#b75d3f",
 };
 
@@ -79,8 +87,6 @@ const networkItems = [
   { name: "Tenda sailcloth branca", owner: "Marée Rentals", distance: "8,1 km", available: 2, price: "15 500 MZN / dia", symbol: "TS", tone: "ivory", rating: "5.0" },
   { name: "Conjunto lounge em cana", owner: "Olive House", distance: "11 km", available: 3, price: "5 500 MZN / dia", symbol: "LC", tone: "sage", rating: "4.7" },
 ];
-
-const seedCategories = ["Mobiliário", "Mesa", "Têxteis", "Iluminação", "Estruturas"];
 
 function formatMoney(value: number, currency = "MZN", language: Language = "pt") {
   return new Intl.NumberFormat(language === "pt" ? "pt-MZ" : "en-MZ", {
@@ -104,13 +110,31 @@ function cls(...names: (string | false | undefined)[]) {
   return names.filter(Boolean).join(" ");
 }
 
-export default function DecorApp() {
+function initials(value: string) {
+  return value.split(/\s+|@/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+}
+
+function roleLabel(role: string, t: Translator) {
+  if (role === "owner") return t("Proprietária", "Owner");
+  if (role === "manager") return t("Gestor", "Manager");
+  if (role === "inventory") return t("Inventário", "Inventory");
+  if (role === "reservations") return t("Reservas", "Reservations");
+  return t("Consulta", "Viewer");
+}
+
+export default function DecorApp({ initialUser }: { initialUser: SessionUser }) {
   const [view, setView] = useState<View>("home");
-  const [language, setLanguage] = useState<Language>("pt");
-  const [items, setItems] = useState<Item[]>(seedItems);
-  const [reservations, setReservations] = useState<Reservation[]>(seedReservations);
-  const [categories, setCategories] = useState<string[]>(seedCategories);
-  const [profile, setProfile] = useState<Profile>(seedProfile);
+  const [language, setLanguage] = useState<Language>(() => {
+    if (typeof window === "undefined") return "pt";
+    const saved = window.localStorage.getItem("trove-language");
+    return saved === "en" ? "en" : "pt";
+  });
+  const [items, setItems] = useState<Item[]>([]);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [profile, setProfile] = useState<Profile>({ ...seedProfile, email: initialUser.email });
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All items");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -124,28 +148,33 @@ export default function DecorApp() {
   const [requested, setRequested] = useState<string[]>([]);
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
-  const [plan, setPlan] = useState<"Basic" | "Network">("Network");
+  const [plan, setPlan] = useState<"Basic" | "Network">("Basic");
   const importRef = useRef<HTMLInputElement>(null);
   const t: Translator = (pt, en) => language === "pt" ? pt : en;
   const navigation = navItems(t);
+  const role = workspace?.role || "viewer";
+  const canManageInventory = ["owner", "manager", "inventory"].includes(role);
+  const canManageReservations = ["owner", "manager", "reservations"].includes(role);
+  const canManageTeam = ["owner", "manager"].includes(role);
+  const canManageProfile = ["owner", "manager"].includes(role);
 
   useEffect(() => {
     fetch("/api/data")
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((data) => {
-        if (data.items?.length) setItems(data.items);
-        if (data.reservations?.length) setReservations(data.reservations);
-        if (data.categories?.length) setCategories(data.categories.map((entry: { name: string }) => entry.name));
+        if (Array.isArray(data.items)) setItems(data.items);
+        if (Array.isArray(data.reservations)) setReservations(data.reservations);
+        if (Array.isArray(data.categories)) setCategories(data.categories.map((entry: { name: string }) => entry.name));
         if (data.profile) setProfile({ ...seedProfile, ...data.profile });
+        if (data.workspace) {
+          setWorkspace(data.workspace);
+          setPlan(data.workspace.plan);
+        }
+        if (Array.isArray(data.members)) setMembers(data.members);
       })
       .catch(() => {
-        // The seeded demo remains fully usable if local database bindings are unavailable.
+        setToast("Não foi possível carregar o espaço da empresa.");
       });
-  }, []);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem("trove-language");
-    if (saved === "pt" || saved === "en") setLanguage(saved);
   }, []);
 
   function changeLanguage(next: Language) {
@@ -185,13 +214,21 @@ export default function DecorApp() {
 
   async function persist(action: string, payload: unknown) {
     try {
-      await fetch("/api/data", {
+      const response = await fetch("/api/data", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ action, payload }),
       });
-    } catch {
-      // Optimistic UI stays available in a local-only preview.
+      const result = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        window.location.href = "/signin-with-chatgpt?return_to=%2F";
+        return false;
+      }
+      if (!response.ok) throw new Error(result.error || "Unable to save");
+      return true;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("Não foi possível guardar.", "Unable to save."));
+      return false;
     }
   }
 
@@ -272,6 +309,10 @@ export default function DecorApp() {
   }
 
   function openReserve(item: Item) {
+    if (!canManageReservations) {
+      showToast(t("A sua função não permite criar reservas.", "Your role cannot create reservations."));
+      return;
+    }
     setSelectedItem(item);
     setReserveOpen(true);
   }
@@ -347,9 +388,9 @@ export default function DecorApp() {
           <span>Trove</span>
         </button>
         <div className="workspace-chip">
-          <span className="workspace-avatar">T</span>
-          <span><strong>Terra & Table</strong><small>{plan} plan</small></span>
-          <b>⌄</b>
+          <span className="workspace-avatar">{initials(workspace?.name || profile.businessName).slice(0, 1)}</span>
+          <span><strong>{workspace?.name || profile.businessName}</strong><small>{plan} plan</small></span>
+          <b title={roleLabel(role, t)}>●</b>
         </div>
         <nav aria-label={t("Navegação principal", "Primary navigation")}>
           {navigation.map((item) => (
@@ -365,11 +406,11 @@ export default function DecorApp() {
             <span><strong>{t("Plano", "Plan")} {plan}</strong><small>{plan === "Network" ? t("Equipa ilimitada · Aluguer local", "Unlimited team · Local rentals") : t("Gestão essencial", "Inventory essentials")}</small></span>
             <span>›</span>
           </button>
-          <button className="user-row" onClick={() => setView("profile")}>
-            <span className="user-avatar">AM</span>
-            <span><strong>Amelia Moss</strong><small>{t("Proprietária", "Owner")}</small></span>
-            <span>•••</span>
-          </button>
+          <div className="user-row">
+            <span className="user-avatar">{initials(initialUser.displayName)}</span>
+            <button onClick={() => setView("profile")}><strong>{initialUser.displayName}</strong><small>{roleLabel(role, t)}</small></button>
+            <a href="/signout-with-chatgpt?return_to=%2F" aria-label={t("Terminar sessão", "Sign out")} title={t("Terminar sessão", "Sign out")}>↗</a>
+          </div>
         </div>
       </aside>
 
@@ -380,9 +421,9 @@ export default function DecorApp() {
             <label className="language-picker" aria-label={t("Idioma", "Language")}><span>文</span><select value={language} onChange={(event) => changeLanguage(event.target.value as Language)}><option value="pt">PT</option><option value="en">EN</option></select></label>
             <button className="icon-button" aria-label={t("Pesquisar", "Search")} onClick={() => setView("storage")}>⌕</button>
             <button className="icon-button notification" aria-label={t("Notificações", "Notifications")}>♢<i /></button>
-            <div className="team-faces" aria-label={t("3 membros da equipa", "3 team members")}>
-              <span>AM</span><span>JR</span><span>SK</span>
-              <button onClick={() => setTeamOpen(true)} aria-label={t("Convidar colaborador", "Invite teammate")}>+</button>
+            <div className="team-faces" aria-label={t(`${members.length} membros da equipa`, `${members.length} team members`)}>
+              {members.slice(0, 3).map((member) => <span key={`${member.id}-${member.email}`}>{initials(member.displayName || member.email)}</span>)}
+              {canManageTeam && <button onClick={() => setTeamOpen(true)} aria-label={t("Convidar colaborador", "Invite teammate")}>+</button>}
             </div>
           </div>
         </header>
@@ -394,8 +435,9 @@ export default function DecorApp() {
               t={t}
               items={items}
               reservations={reservations}
+              userName={initialUser.fullName || initialUser.displayName.split("@")[0]}
               setView={setView}
-              openAdd={() => setAddOpen(true)}
+              openAdd={() => canManageInventory ? setAddOpen(true) : showToast(t("A sua função não permite alterar o inventário.", "Your role cannot change inventory."))}
               openReserve={openReserve}
             />
           )}
@@ -414,8 +456,8 @@ export default function DecorApp() {
               setCategoryFilter={setCategoryFilter}
               sort={sort}
               setSort={setSort}
-              openAdd={() => setAddOpen(true)}
-              openCategories={() => setCategoryOpen(true)}
+              openAdd={() => canManageInventory ? setAddOpen(true) : showToast(t("A sua função não permite alterar o inventário.", "Your role cannot change inventory."))}
+              openCategories={() => canManageInventory ? setCategoryOpen(true) : showToast(t("A sua função não permite gerir categorias.", "Your role cannot manage categories."))}
               openReserve={openReserve}
               exportInventory={exportInventory}
               importInventory={() => importRef.current?.click()}
@@ -428,7 +470,7 @@ export default function DecorApp() {
               }}
             />
           )}
-          {view === "calendar" && <Calendar language={language} t={t} reservations={reservations} openAdd={() => { setSelectedItem(null); setReserveOpen(true); }} />}
+          {view === "calendar" && <Calendar language={language} t={t} reservations={reservations} openAdd={() => { if (canManageReservations) { setSelectedItem(null); setReserveOpen(true); } else showToast(t("A sua função não permite criar reservas.", "Your role cannot create reservations.")); }} />}
           {view === "network" && (
             <Network
               plan={plan}
@@ -444,7 +486,7 @@ export default function DecorApp() {
               openPlans={() => setView("plans")}
             />
           )}
-          {view === "profile" && <ProfileEditor t={t} profile={profile} setProfile={setProfile} save={saveProfile} saving={saving} />}
+          {view === "profile" && <ProfileEditor t={t} profile={profile} setProfile={setProfile} save={canManageProfile ? saveProfile : () => showToast(t("A sua função não permite editar o perfil.", "Your role cannot edit the profile."))} saving={saving} />}
           {view === "plans" && <Plans t={t} plan={plan} choose={(next) => { setPlan(next); showToast(t(`Plano ${next} seleccionado`, `${next} plan selected`)); }} />}
         </div>
       </section>
@@ -510,7 +552,18 @@ export default function DecorApp() {
 
       {teamOpen && (
         <Modal title={t("Equipa e permissões", "Team & permissions")} subtitle={t("Convide colaboradores e defina quem pode editar, reservar ou apenas consultar.", "Invite collaborators and choose who can edit, reserve, or only view.")} onClose={() => setTeamOpen(false)}>
-          <TeamManager t={t} onInvite={(email, role) => { persist("inviteMember", { id: Date.now(), email, role }); showToast(t("Convite registado como pendente", "Invitation recorded as pending")); }} />
+          <TeamManager
+            t={t}
+            members={members}
+            canInvite={canManageTeam}
+            onInvite={async (email, role) => {
+              const id = Date.now();
+              if (await persist("inviteMember", { id, email, role })) {
+                setMembers((current) => [...current.filter((member) => member.email.toLowerCase() !== email.toLowerCase()), { id, email, role, status: "Pending" }]);
+                showToast(t("Convite registado como pendente", "Invitation recorded as pending"));
+              }
+            }}
+          />
         </Modal>
       )}
 
@@ -523,14 +576,14 @@ function PageHeading({ eyebrow, title, detail, action }: { eyebrow?: string; tit
   return <div className="page-heading"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{detail}</p></div>{action}</div>;
 }
 
-function Overview({ language, t, items, reservations, setView, openAdd, openReserve }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[]; setView: (view: View) => void; openAdd: () => void; openReserve: (item: Item) => void }) {
+function Overview({ language, t, items, reservations, userName, setView, openAdd, openReserve }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[]; userName: string; setView: (view: View) => void; openAdd: () => void; openReserve: (item: Item) => void }) {
   const total = items.reduce((sum, item) => sum + item.quantity, 0);
   const available = items.reduce((sum, item) => sum + item.available, 0);
   const utilization = total ? Math.round(((total - available) / total) * 100) : 0;
   const estimatedRevenue = items.reduce((sum, item) => sum + (item.quantity - item.available) * (item.price || 0), 0);
   return (
     <>
-      <PageHeading eyebrow={t("SEGUNDA-FEIRA, 27 DE JULHO", "MONDAY, 27 JULY")} title={t("Bom dia, Amelia.", "Good morning, Amelia.")} detail={t("Veja a operação, as reservas e o desempenho do seu inventário.", "See your operations, reservations, and inventory performance.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
+      <PageHeading eyebrow={t("O SEU ESPAÇO DE TRABALHO", "YOUR WORKSPACE")} title={t(`Olá, ${userName}.`, `Hello, ${userName}.`)} detail={t("Veja a operação, as reservas e o desempenho do seu inventário.", "See your operations, reservations, and inventory performance.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
       <section className="stat-grid">
         <article><div className="stat-icon terracotta">▦</div><div><span>{t("Total de peças", "Total pieces")}</span><strong>{total}</strong><small><b>+12</b> {t("este mês", "this month")}</small></div></article>
         <article><div className="stat-icon olive">✓</div><div><span>{t("Disponíveis agora", "Available now")}</span><strong>{available}</strong><small>{Math.round((available / Math.max(total, 1)) * 100)}% {t("da colecção", "of collection")}</small></div></article>
@@ -771,11 +824,10 @@ function CategoryManager({ t, categories, addCategory, removeCategory }: { t: Tr
   return <div className="category-manager"><form onSubmit={(event) => { event.preventDefault(); addCategory(name); setName(""); }}><input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("Nova categoria…", "New category…")} required /><button className="button-primary">{t("Adicionar", "Add")}</button></form><div>{categories.map((category) => <span key={category}><i>▦</i><b>{category}</b><button onClick={() => removeCategory(category)} aria-label={t(`Remover ${category}`, `Remove ${category}`)}>×</button></span>)}</div><p>{t("Ao remover uma categoria, os itens passam para “Sem categoria”.", "Removing a category moves its items to “Uncategorized”.")}</p></div>;
 }
 
-function TeamManager({ t, onInvite }: { t: Translator; onInvite: (email: string, role: string) => void }) {
+function TeamManager({ t, members, canInvite, onInvite }: { t: Translator; members: Member[]; canInvite: boolean; onInvite: (email: string, role: string) => void }) {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("Editor");
-  const members = [{ initials: "AM", name: "Amelia Moss", role: t("Proprietária", "Owner"), tone: "clay" }, { initials: "JR", name: "Jonah Reis", role: t("Gestor", "Manager"), tone: "olive" }, { initials: "SK", name: "Sara Khan", role: t("Consulta", "Viewer"), tone: "gold" }];
-  return <div className="team-manager"><div className="team-members">{members.map((member) => <span key={member.name}><i className={member.tone}>{member.initials}</i><b>{member.name}<small>{member.role}</small></b><em>{t("Activo", "Active")}</em></span>)}</div><form onSubmit={(event) => { event.preventDefault(); onInvite(email, role); setEmail(""); }}><label>{t("Email do colaborador", "Collaborator email")}<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@empresa.co.mz" required /></label><label>{t("Permissão", "Permission")}<select value={role} onChange={(event) => setRole(event.target.value)}><option>Editor</option><option>{t("Gestor de reservas", "Booking manager")}</option><option>{t("Apenas consulta", "View only")}</option></select></label><button className="button-primary">{t("Enviar convite", "Send invite")}</button></form><p>{t("Os convites ficam pendentes até ligar um serviço de autenticação e email.", "Invites remain pending until an authentication and email service is connected.")}</p></div>;
+  const [role, setRole] = useState("inventory");
+  return <div className="team-manager"><div className="team-members">{members.map((member, index) => <span key={`${member.id}-${member.email}`}><i className={["clay", "olive", "gold"][index % 3]}>{initials(member.displayName || member.email)}</i><b>{member.displayName || member.email}<small>{roleLabel(member.role, t)}</small></b><em>{member.status === "Pending" ? t("Pendente", "Pending") : t("Activo", "Active")}</em></span>)}</div>{canInvite && <form onSubmit={(event) => { event.preventDefault(); onInvite(email, role); setEmail(""); }}><label>{t("Email do colaborador", "Collaborator email")}<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@empresa.co.mz" required /></label><label>{t("Permissão", "Permission")}<select value={role} onChange={(event) => setRole(event.target.value)}><option value="inventory">{t("Gestão de inventário", "Inventory manager")}</option><option value="reservations">{t("Gestão de reservas", "Booking manager")}</option><option value="viewer">{t("Apenas consulta", "View only")}</option></select></label><button className="button-primary">{t("Registar convite", "Record invitation")}</button></form>}<p>{t("A conta convidada obtém acesso quando iniciar sessão com este endereço. O envio automático de email será ligado na Fase 4.", "The invited account gets access when it signs in with this address. Automatic invitation email will be connected in Phase 4.")}</p></div>;
 }
 
 function getMonthCells(cursor: Date) {

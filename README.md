@@ -30,12 +30,12 @@ Requisitos:
 Comandos:
 
 ```bash
-npm install
-npm run dev
-npm run build
-npm test
-npm run lint
-npm run db:generate
+pnpm install
+pnpm run dev
+pnpm run build
+pnpm test
+pnpm run lint
+pnpm run db:generate
 ```
 
 ## Ligações

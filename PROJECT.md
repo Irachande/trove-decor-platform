@@ -16,7 +16,7 @@ Uma iteração só é considerada concluída quando, no mesmo commit:
 4. uma entrada for adicionada ao histórico de iterações;
 5. os comandos de validação executados estiverem registados.
 
-Última actualização: **27 de Julho de 2026**
+Última actualização: **28 de Julho de 2026**
 
 ## 1. Visão
 
@@ -102,9 +102,19 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 
 ### Equipa e perfil
 
-- Interface para convidar colaboradores e escolher funções.
+- Convites registados por email e aceites automaticamente no primeiro login.
+- Funções de proprietário, gestor, inventário, reservas e consulta.
 - Perfil público com fotografia, biografia, contactos, localização e cor.
 - Persistência de perfil, inventário, reservas e categorias.
+
+### Identidade e empresas
+
+- Entrada obrigatória através de Sign in with ChatGPT no ambiente Sites.
+- Criação automática de utilizador, empresa e membership.
+- Empresas novas começam sem artigos ou reservas demonstrativas.
+- A primeira conta proprietária preserva e reclama os dados existentes.
+- Dados, imagens e operações isolados através de `business_id`.
+- Permissões verificadas no servidor em todas as operações privadas.
 
 ### Infraestrutura
 
@@ -120,21 +130,21 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 | Área | Estado | Observação |
 |---|---|---|
 | Interface web responsiva | Funcional | Disponível no ambiente publicado |
-| Inventário básico | Funcional | Ainda sem isolamento por empresa |
-| Categorias | Funcional | Ainda sem isolamento por empresa |
-| Upload de imagens | Funcional | JPG e PNG até 5 MB |
+| Inventário básico | Funcional | Isolado por empresa e protegido por função |
+| Categorias | Funcional | Isoladas por empresa |
+| Upload de imagens | Funcional | JPG/PNG até 5 MB, autenticado e separado por empresa |
 | Reservas | Parcial | Falta detectar conflitos de forma transaccional |
 | Calendário | Funcional | Baseado nas reservas existentes |
 | Importação/exportação | Parcial | CSV disponível; falta Excel e validação avançada |
 | Perfil público | Parcial | Editor existe; falta rota pública independente |
-| Equipa | Demonstração | Convites ficam pendentes e não enviam email |
-| Autenticação | Parcial | Existe suporte do ambiente, mas a API não está protegida |
-| Multiempresa | Não implementado | Todos os dados usam o mesmo espaço |
+| Equipa | Parcial | Memberships e funções funcionam; falta envio automático de email |
+| Autenticação | Funcional no Sites | Usa Sign in with ChatGPT; fornecedor público definitivo continua pendente |
+| Multiempresa | Funcional | Consultas, alterações e imagens são isoladas por `business_id` |
 | Subscrições | Demonstração | Não existe checkout, webhook ou facturação |
 | Rede local | Demonstração | Os artigos e negócios são dados estáticos |
 | Aplicação mobile | Parcial | Web responsiva; ainda não é PWA ou aplicação nativa |
 | Notificações | Não implementado | Falta email, push e lembretes |
-| Testes automatizados | Mínimo | O build é a validação principal actual |
+| Testes automatizados | Parcial | Build, lint e testes estruturais de autenticação/isolamento |
 
 ## 7. Arquitectura actual
 
@@ -144,6 +154,8 @@ Navegador
    ▼
 Next.js / Vinext
    ├── Interface React
+   ├── Identidade Sign in with ChatGPT
+   ├── Contexto de empresa e permissões
    ├── /api/data
    ├── /api/item-image
    └── /api/profile-image
@@ -159,6 +171,7 @@ Next.js / Vinext
 - `app/api/item-image/route.ts`: armazenamento das fotografias dos artigos.
 - `app/api/profile-image/route.ts`: armazenamento da fotografia do perfil.
 - `app/chatgpt-auth.ts`: utilitários de identidade do ambiente publicado.
+- `app/workspace.ts`: criação de empresas, memberships e autorização.
 - `db/schema.ts`: entidades do banco de dados.
 - `drizzle/`: migrações do banco de dados.
 - `app/globals.css`: sistema visual e adaptação responsiva.
@@ -166,11 +179,14 @@ Next.js / Vinext
 
 ## 8. Modelo de dados actual
 
-- `inventory_items`: artigos e quantidades.
+- `users`: identidades autenticadas.
+- `businesses`: empresas e plano actual.
+- `memberships`: relação entre utilizadores, empresas e funções.
+- `inventory_items`: artigos e quantidades, isolados por empresa.
 - `reservations`: reservas associadas actualmente ao nome de um artigo.
-- `categories`: categorias do inventário.
+- `categories`: categorias isoladas por empresa.
 - `collaborators`: convites pendentes e funções.
-- `business_profile`: perfil único da empresa.
+- `business_profile`: perfil de cada empresa.
 
 ## 9. Modelo de dados pretendido
 
@@ -245,11 +261,14 @@ Antes de aceitar clientes reais, são obrigatórios:
 
 ### Fase 1 — Fundação segura
 
-- [ ] Registo, login e recuperação de acesso.
-- [ ] Empresas, utilizadores e memberships.
-- [ ] `business_id` em todas as entidades privadas.
-- [ ] Funções e permissões aplicadas na API.
-- [ ] Remoção dos dados de demonstração das contas reais.
+- [x] Registo, login e recuperação através da identidade do ambiente Sites.
+- [x] Empresas, utilizadores e memberships.
+- [x] `business_id` em todas as entidades privadas.
+- [x] Funções e permissões aplicadas na API.
+- [x] Remoção dos dados de demonstração das contas novas.
+
+Nota: autenticação pública por email, Google ou Apple continua uma decisão de
+produto para a distribuição fora do ambiente Sites.
 
 ### Fase 2 — Inventário operacional
 
@@ -324,12 +343,12 @@ Uma funcionalidade está concluída quando:
 ## 15. Comandos principais
 
 ```bash
-npm install
-npm run dev
-npm run build
-npm test
-npm run lint
-npm run db:generate
+pnpm install
+pnpm run dev
+pnpm run build
+pnpm test
+pnpm run lint
+pnpm run db:generate
 ```
 
 ## 16. Decisões pendentes
@@ -343,6 +362,24 @@ npm run db:generate
 - Política de verificação das empresas da rede.
 
 ## 17. Histórico de iterações
+
+### 28 de Julho de 2026 — Fase 1: fundação segura
+
+- Adicionado ecrã de entrada obrigatório com Sign in with ChatGPT.
+- Criadas as entidades `users`, `businesses` e `memberships`.
+- Adicionado `business_id` a inventário, reservas, categorias, perfil e
+  colaboradores.
+- Implementado isolamento por empresa em todas as consultas e alterações.
+- Aplicadas permissões no servidor para inventário, reservas, equipa e perfil.
+- Fotografias passaram a ser autenticadas e separadas por empresa no R2.
+- Convites passam a conceder a função definida quando o email convidado entra.
+- Contas novas começam vazias; os dados anteriores são preservados para o
+  primeiro proprietário.
+- Criada migração segura para bases antigas, incluindo a restrição composta de
+  categorias.
+- Validação: `pnpm test`, `pnpm run lint`, simulação local de duas empresas,
+  resposta `401` sem sessão e resposta `403` para tentativa de escrita por uma
+  função de consulta.
 
 ### 27 de Julho de 2026 — Documento central do projecto
 
@@ -366,4 +403,3 @@ npm run db:generate
 - Criada a experiência visual da Trove.
 - Implementados dashboard, inventário, reservas, perfil, planos e rede.
 - Configuradas persistência D1, imagens R2 e publicação com Sites.
-

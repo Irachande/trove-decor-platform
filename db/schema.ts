@@ -1,7 +1,34 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+
+export const users = sqliteTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),
+  displayName: text("display_name").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const businesses = sqliteTable("businesses", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  handle: text("handle").notNull().unique(),
+  plan: text("plan").notNull().default("Basic"),
+  createdAt: text("created_at").notNull(),
+});
+
+export const memberships = sqliteTable("memberships", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessId: integer("business_id").notNull(),
+  userId: integer("user_id").notNull(),
+  role: text("role").notNull(),
+  status: text("status").notNull().default("Active"),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("memberships_business_user_idx").on(table.businessId, table.userId),
+]);
 
 export const inventoryItems = sqliteTable("inventory_items", {
   id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull().default(1),
   name: text("name").notNull(),
   category: text("category").notNull(),
   quantity: integer("quantity").notNull(),
@@ -18,6 +45,7 @@ export const inventoryItems = sqliteTable("inventory_items", {
 
 export const reservations = sqliteTable("reservations", {
   id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull().default(1),
   item: text("item").notNull(),
   client: text("client").notNull(),
   date: text("date").notNull(),
@@ -32,18 +60,25 @@ export const reservations = sqliteTable("reservations", {
 
 export const categories = sqliteTable("categories", {
   id: integer("id").primaryKey(),
-  name: text("name").notNull().unique(),
-});
+  businessId: integer("business_id").notNull().default(1),
+  name: text("name").notNull(),
+}, (table) => [
+  uniqueIndex("categories_business_name_idx").on(table.businessId, table.name),
+]);
 
 export const collaborators = sqliteTable("collaborators", {
   id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull().default(1),
   email: text("email").notNull(),
   role: text("role").notNull(),
   status: text("status").notNull().default("Pending"),
+  invitedByUserId: integer("invited_by_user_id"),
+  createdAt: text("created_at").notNull().default(""),
 });
 
 export const businessProfile = sqliteTable("business_profile", {
   id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull().default(1).unique(),
   businessName: text("business_name").notNull(),
   handle: text("handle").notNull(),
   bio: text("bio").notNull(),

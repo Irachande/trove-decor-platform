@@ -18,6 +18,12 @@ const CALLBACK_PATH = "/callback";
 
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   const requestHeaders = await headers();
+  return getUserFromHeaders(requestHeaders);
+}
+
+export function getUserFromHeaders(
+  requestHeaders: Pick<Headers, "get">,
+): ChatGPTUser | null {
   const email = requestHeaders.get(USER_EMAIL_HEADER);
   if (!email) return null;
 
@@ -30,7 +36,7 @@ export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
 
   return {
     displayName: fullName ?? email,
-    email,
+    email: email.toLowerCase(),
     fullName,
   };
 }
