@@ -5,6 +5,11 @@ import {
   type WorkspacePermission,
 } from "../../workspace";
 import { paymentConfiguration, PLAN_CATALOG } from "../../billing";
+import {
+  emailConfiguration,
+  invitationEmail,
+  sendTransactionalEmail,
+} from "../../email";
 import { sendPushToUsers } from "../../web-push";
 
 type Payload = Record<string, unknown>;
@@ -64,6 +69,7 @@ const ACTION_PERMISSIONS: Record<string, WorkspacePermission> = {
   cancelSubscription: "manageBilling",
   resumeSubscription: "manageBilling",
   updateProfile: "manageProfile",
+  updateEnquiryStatus: "manageReservations",
 };
 
 function text(
@@ -166,6 +172,7 @@ function actionEntity(action: string) {
   if (action.includes("Event")) return "event";
   if (action.includes("Category")) return "category";
   if (action.includes("Profile")) return "business_profile";
+  if (action.includes("Enquiry")) return "public_enquiry";
   return "workspace";
 }
 
@@ -186,6 +193,7 @@ function actionSummary(action: string) {
     adjustStock: "Stock ajustado",
     addMaintenance: "Intervenção registada",
     updateMaintenance: "Intervenção actualizada",
+    updateEnquiryStatus: "Estado do pedido público alterado",
   };
   return summaries[action] || action.replace(/([A-Z])/g, " $1").trim();
 }
@@ -411,6 +419,8 @@ export async function GET(request: Request) {
       workspaces,
       subscription,
       payments,
+      publicEnquiries,
+      emailDeliveries,
     ] = await Promise.all([
       env.DB.prepare(
         "SELECT id, name, category, quantity, available, status, tone, symbol, price, currency, photo_url AS photoUrl, storage_location AS storageLocation, condition, description, sku, replacement_value AS replacementValue, min_stock AS minStock FROM inventory_items WHERE business_id = ? ORDER BY id DESC",
@@ -422,7 +432,7 @@ export async function GET(request: Request) {
         "SELECT id, name FROM categories WHERE business_id = ? ORDER BY name",
       ).bind(context.businessId).all(),
       env.DB.prepare(
-        "SELECT business_name AS businessName, handle, bio, location, phone, email, color, avatar_url AS avatarUrl FROM business_profile WHERE business_id = ?",
+        "SELECT business_name AS businessName, handle, bio, location, phone, email, color, avatar_url AS avatarUrl, website, instagram, services, is_public AS isPublic, accepts_enquiries AS acceptsEnquiries FROM business_profile WHERE business_id = ?",
       ).bind(context.businessId).first(),
       env.DB.prepare(
         "SELECT u.id, u.email, u.display_name AS displayName, m.role, m.status FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.business_id = ? AND m.status = 'Active' ORDER BY m.id",
@@ -472,6 +482,12 @@ export async function GET(request: Request) {
       env.DB.prepare(
         "SELECT id, provider, provider_payment_id AS providerPaymentId, reference, kind, plan, amount, currency, status, checkout_url AS checkoutUrl, method, paid_at AS paidAt, failure_reason AS failureReason, receipt_number AS receiptNumber, created_at AS createdAt, updated_at AS updatedAt FROM payments WHERE business_id = ? ORDER BY created_at DESC LIMIT 100",
       ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, name, email, phone, event_date AS eventDate, message, status, created_at AS createdAt FROM public_enquiries WHERE business_id = ? ORDER BY created_at DESC LIMIT 100",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, recipient, template, provider, provider_message_id AS providerMessageId, status, error, created_at AS createdAt, updated_at AS updatedAt FROM email_deliveries WHERE business_id = ? ORDER BY created_at DESC LIMIT 30",
+      ).bind(context.businessId).all(),
     ]);
 
     return Response.json({
@@ -501,13 +517,27 @@ export async function GET(request: Request) {
         ? { ...subscription, cancelAtPeriodEnd: Boolean((subscription as Record<string, unknown>).cancelAtPeriodEnd) }
         : null,
       payments: payments.results,
+      publicEnquiries: publicEnquiries.results,
+      emailDeliveries: emailDeliveries.results,
       billing: {
         provider: "PaySuite",
         configured: Boolean(paymentConfiguration().apiToken),
         catalog: PLAN_CATALOG,
       },
+      communication: {
+        provider: "Resend",
+        configured: Boolean(
+          emailConfiguration().apiKey && emailConfiguration().from,
+        ),
+      },
       categories: categories.results,
-      profile,
+      profile: profile
+        ? {
+          ...profile,
+          isPublic: Boolean((profile as Record<string, unknown>).isPublic),
+          acceptsEnquiries: Boolean((profile as Record<string, unknown>).acceptsEnquiries),
+        }
+        : profile,
       members: [...activeMembers.results, ...pendingMembers.results],
       photos: photos.results,
       movements: movements.results,
@@ -1031,24 +1061,64 @@ export async function POST(request: Request) {
         env.DB.prepare("DELETE FROM collaborators WHERE business_id = ? AND lower(email) = ? AND status = 'Pending'").bind(context.businessId, email),
         env.DB.prepare("INSERT INTO collaborators (id, business_id, email, role, status, invited_by_user_id, created_at, expires_at) VALUES (?, ?, ?, ?, 'Pending', ?, ?, ?)").bind(invitationId, context.businessId, email, role, context.userId, createdAt, expiresAt),
       ]);
+      const inviteUrl = `${emailConfiguration().publicAppUrl.replace(/\/$/, "")}/?invitation=${invitationId}`;
+      const message = invitationEmail({
+        businessName: context.businessName,
+        inviterName: context.user.displayName,
+        role,
+        inviteUrl,
+        expiresAt,
+      });
+      const delivery = await sendTransactionalEmail({
+        businessId: context.businessId,
+        recipient: email,
+        template: "team-invitation",
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+      });
       result = {
         ok: true,
         invitationId,
         expiresAt,
-        inviteUrl: `${new URL(request.url).origin}/?invitation=${invitationId}`,
+        inviteUrl,
+        emailConfigured: delivery.configured,
+        emailSent: delivery.sent,
       };
     } else if (action === "resendInvitation") {
       const id = integer(payload, "id", { min: 1 });
       const expiresAt = addDays(new Date(createdAt), 7).toISOString();
+      const invitation = await env.DB.prepare(
+        "SELECT email, role FROM collaborators WHERE id = ? AND business_id = ? AND status IN ('Pending', 'Expired', 'Revoked')",
+      ).bind(id, context.businessId).first<{ email: string; role: string }>();
+      if (!invitation) throw new Error("Invitation not found");
       const updated = await env.DB.prepare(
         "UPDATE collaborators SET status = 'Pending', created_at = ?, expires_at = ?, revoked_at = NULL WHERE id = ? AND business_id = ? AND status IN ('Pending', 'Expired', 'Revoked')",
       ).bind(createdAt, expiresAt, id, context.businessId).run();
       if (!updated.meta.changes) throw new Error("Invitation not found");
+      const inviteUrl = `${emailConfiguration().publicAppUrl.replace(/\/$/, "")}/?invitation=${id}`;
+      const message = invitationEmail({
+        businessName: context.businessName,
+        inviterName: context.user.displayName,
+        role: invitation.role,
+        inviteUrl,
+        expiresAt,
+      });
+      const delivery = await sendTransactionalEmail({
+        businessId: context.businessId,
+        recipient: invitation.email,
+        template: "team-invitation",
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+      });
       result = {
         ok: true,
         invitationId: id,
         expiresAt,
-        inviteUrl: `${new URL(request.url).origin}/?invitation=${id}`,
+        inviteUrl,
+        emailConfigured: delivery.configured,
+        emailSent: delivery.sent,
       };
     } else if (action === "revokeInvitation") {
       const id = integer(payload, "id", { min: 1 });
@@ -1140,10 +1210,36 @@ export async function POST(request: Request) {
       const businessName = text(payload, "businessName", { required: true, max: 120 });
       const handle = text(payload, "handle", { required: true, max: 60 }).toLowerCase().replace(/[^a-z0-9-]/g, "");
       if (!handle) throw new Error("Invalid profile handle");
+      const website = text(payload, "website", { max: 300 });
+      if (website) {
+        let parsed: URL;
+        try {
+          parsed = new URL(website);
+        } catch {
+          throw new Error("Invalid website");
+        }
+        if (!["http:", "https:"].includes(parsed.protocol)) {
+          throw new Error("Invalid website");
+        }
+      }
+      const instagram = text(payload, "instagram", { max: 31 }).replace(/^@/, "");
+      if (instagram && !/^[a-zA-Z0-9._]{1,30}$/.test(instagram)) {
+        throw new Error("Invalid Instagram handle");
+      }
       await env.DB.batch([
-        env.DB.prepare("UPDATE business_profile SET business_name = ?, handle = ?, bio = ?, location = ?, phone = ?, email = ?, color = ?, avatar_url = ? WHERE business_id = ?").bind(businessName, handle, text(payload, "bio", { max: 1000 }), text(payload, "location", { max: 160 }), text(payload, "phone", { max: 80 }), text(payload, "email", { max: 254 }), text(payload, "color", { max: 20 }) || "#b75d3f", text(payload, "avatarUrl", { max: 1000 }) || null, context.businessId),
+        env.DB.prepare("UPDATE business_profile SET business_name = ?, handle = ?, bio = ?, location = ?, phone = ?, email = ?, color = ?, avatar_url = ?, website = ?, instagram = ?, services = ?, is_public = ?, accepts_enquiries = ? WHERE business_id = ?").bind(businessName, handle, text(payload, "bio", { max: 1000 }), text(payload, "location", { max: 160 }), text(payload, "phone", { max: 80 }), text(payload, "email", { max: 254 }), text(payload, "color", { max: 20 }) || "#b75d3f", text(payload, "avatarUrl", { max: 1000 }) || null, website, instagram, text(payload, "services", { max: 500 }), payload.isPublic === false ? 0 : 1, payload.acceptsEnquiries === false ? 0 : 1, context.businessId),
         env.DB.prepare("UPDATE businesses SET name = ?, handle = ? WHERE id = ?").bind(businessName, handle, context.businessId),
       ]);
+    } else if (action === "updateEnquiryStatus") {
+      const id = integer(payload, "id", { min: 1 });
+      const status = text(payload, "status", { required: true, max: 20 });
+      if (!["New", "Contacted", "Closed"].includes(status)) {
+        throw new Error("Invalid enquiry status");
+      }
+      const updated = await env.DB.prepare(
+        "UPDATE public_enquiries SET status = ? WHERE id = ? AND business_id = ?",
+      ).bind(status, id, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Enquiry not found");
     }
     if (!["markNotificationRead", "markAllNotificationsRead"].includes(action)) {
       await writeAudit(auditBusinessId, context.userId, action, payload, createdAt);

@@ -385,6 +385,32 @@ export const betaFeedback = sqliteTable("beta_feedback", {
   createdAt: text("created_at").notNull(),
 });
 
+export const publicEnquiries = sqliteTable("public_enquiries", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  name: text("name").notNull(),
+  email: text("email").notNull(),
+  phone: text("phone").notNull().default(""),
+  eventDate: text("event_date").notNull().default(""),
+  message: text("message").notNull(),
+  status: text("status").notNull().default("New"),
+  ipHash: text("ip_hash").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export const emailDeliveries = sqliteTable("email_deliveries", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  recipient: text("recipient").notNull(),
+  template: text("template").notNull(),
+  provider: text("provider").notNull().default("Resend"),
+  providerMessageId: text("provider_message_id"),
+  status: text("status").notNull(),
+  error: text("error").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const businessProfile = sqliteTable("business_profile", {
   id: integer("id").primaryKey(),
   businessId: integer("business_id").notNull().default(1).unique(),
@@ -396,4 +422,9 @@ export const businessProfile = sqliteTable("business_profile", {
   email: text("email").notNull(),
   color: text("color").notNull(),
   avatarUrl: text("avatar_url"),
+  website: text("website").notNull().default(""),
+  instagram: text("instagram").notNull().default(""),
+  services: text("services").notNull().default(""),
+  isPublic: integer("is_public", { mode: "boolean" }).notNull().default(true),
+  acceptsEnquiries: integer("accepts_enquiries", { mode: "boolean" }).notNull().default(true),
 });

@@ -302,6 +302,12 @@ export async function ensureWorkspaceDatabase() {
       "CREATE TABLE IF NOT EXISTS beta_feedback (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, user_id INTEGER NOT NULL, category TEXT NOT NULL, rating INTEGER NOT NULL, message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'New', created_at TEXT NOT NULL)",
     ),
     db.prepare(
+      "CREATE TABLE IF NOT EXISTS public_enquiries (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL, phone TEXT NOT NULL DEFAULT '', event_date TEXT NOT NULL DEFAULT '', message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'New', ip_hash TEXT NOT NULL, created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS email_deliveries (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, recipient TEXT NOT NULL, template TEXT NOT NULL, provider TEXT NOT NULL DEFAULT 'Resend', provider_message_id TEXT, status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    ),
+    db.prepare(
       "CREATE TABLE IF NOT EXISTS item_photos (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, item_id INTEGER NOT NULL, url TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)",
     ),
     db.prepare(
@@ -415,6 +421,11 @@ export async function ensureWorkspaceDatabase() {
   ]);
   await addMissingColumns("business_profile", [
     { name: "business_id", sql: "business_id INTEGER NOT NULL DEFAULT 1" },
+    { name: "website", sql: "website TEXT NOT NULL DEFAULT ''" },
+    { name: "instagram", sql: "instagram TEXT NOT NULL DEFAULT ''" },
+    { name: "services", sql: "services TEXT NOT NULL DEFAULT ''" },
+    { name: "is_public", sql: "is_public INTEGER NOT NULL DEFAULT 1" },
+    { name: "accepts_enquiries", sql: "accepts_enquiries INTEGER NOT NULL DEFAULT 1" },
   ]);
   await addMissingColumns("collaborators", [
     { name: "business_id", sql: "business_id INTEGER NOT NULL DEFAULT 1" },
@@ -495,6 +506,15 @@ export async function ensureWorkspaceDatabase() {
     ),
     db.prepare(
       "CREATE INDEX IF NOT EXISTS beta_feedback_business_date_idx ON beta_feedback (business_id, created_at)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS public_enquiries_business_date_idx ON public_enquiries (business_id, created_at)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS public_enquiries_rate_limit_idx ON public_enquiries (business_id, ip_hash, created_at)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS email_deliveries_business_date_idx ON email_deliveries (business_id, created_at)",
     ),
   ]);
 

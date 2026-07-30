@@ -42,6 +42,9 @@ type Invitation = { id: number; businessId: number; businessName: string; role: 
 type SubscriptionRecord = { id: number; plan: "Basic" | "Network"; pendingPlan?: "Basic" | "Network"; status: string; amount: number; currency: string; currentPeriodStart: string; currentPeriodEnd: string; graceUntil?: string; cancelAtPeriodEnd: boolean; provider: string; createdAt: string; updatedAt: string };
 type PaymentRecord = { id: number; provider: string; providerPaymentId?: string; reference: string; kind: string; plan: "Basic" | "Network"; amount: number; currency: string; status: string; checkoutUrl?: string; method?: string; paidAt?: string; failureReason?: string; receiptNumber?: string; createdAt: string; updatedAt: string };
 type BillingInfo = { provider: string; configured: boolean; catalog: Record<"Basic" | "Network", { amount: number; currency: string; collaboratorLimit: number | null; network: boolean }> };
+type CommunicationInfo = { provider: string; configured: boolean };
+type PublicEnquiry = { id: number; name: string; email: string; phone: string; eventDate: string; message: string; status: "New" | "Contacted" | "Closed"; createdAt: string };
+type EmailDelivery = { id: number; recipient: string; template: string; provider: string; providerMessageId?: string; status: string; error: string; createdAt: string; updatedAt: string };
 type NetworkListing = {
   id: number;
   ownerBusinessId: number;
@@ -194,6 +197,9 @@ type WorkspaceData = {
   subscription?: SubscriptionRecord | null;
   payments?: PaymentRecord[];
   billing?: BillingInfo;
+  publicEnquiries?: PublicEnquiry[];
+  emailDeliveries?: EmailDelivery[];
+  communication?: CommunicationInfo;
 };
 
 type Reservation = {
@@ -234,6 +240,11 @@ type Profile = {
   email: string;
   color: string;
   avatarUrl?: string;
+  website: string;
+  instagram: string;
+  services: string;
+  isPublic: boolean;
+  acceptsEnquiries: boolean;
 };
 
 const seedProfile: Profile = {
@@ -244,6 +255,11 @@ const seedProfile: Profile = {
   phone: "",
   email: "",
   color: "#b75d3f",
+  website: "",
+  instagram: "",
+  services: "",
+  isPublic: true,
+  acceptsEnquiries: true,
 };
 
 function formatMoney(value: number, currency = "MZN", language: Language = "pt") {
@@ -339,6 +355,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [subscription, setSubscription] = useState<SubscriptionRecord | null>(null);
   const [payments, setPayments] = useState<PaymentRecord[]>([]);
   const [billing, setBilling] = useState<BillingInfo | null>(null);
+  const [publicEnquiries, setPublicEnquiries] = useState<PublicEnquiry[]>([]);
+  const [emailDeliveries, setEmailDeliveries] = useState<EmailDelivery[]>([]);
+  const [communication, setCommunication] = useState<CommunicationInfo | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All items");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -350,6 +369,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [activityOpen, setActivityOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [operationsOpen, setOperationsOpen] = useState(false);
+  const [enquiriesOpen, setEnquiriesOpen] = useState(false);
   const [operationsStatus, setOperationsStatus] = useState<OperationsStatus | null>(null);
   const [installPrompt, setInstallPrompt] = useState<InstallPrompt | null>(null);
   const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
@@ -432,6 +452,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         if (data.subscription !== undefined) setSubscription(data.subscription || null);
         if (Array.isArray(data.payments)) setPayments(data.payments);
         if (data.billing) setBilling(data.billing);
+        if (Array.isArray(data.publicEnquiries)) setPublicEnquiries(data.publicEnquiries);
+        if (Array.isArray(data.emailDeliveries)) setEmailDeliveries(data.emailDeliveries);
+        if (data.communication) setCommunication(data.communication);
         if (data.workspace) {
           saveOfflineSnapshot({
             businessId: data.workspace.id,
@@ -651,7 +674,13 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         }
         throw new Error(message);
       }
-      return result as { ok?: boolean; inviteUrl?: string; workspaceId?: number };
+      return result as {
+        ok?: boolean;
+        inviteUrl?: string;
+        workspaceId?: number;
+        emailConfigured?: boolean;
+        emailSent?: boolean;
+      };
     } catch (error) {
       showToast(error instanceof Error ? error.message : t("Não foi possível guardar.", "Unable to save."));
       return false;
@@ -1076,11 +1105,46 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
 
   async function saveProfile() {
     setSaving(true);
-    await persist("updateProfile", profile);
+    const saved = await persist("updateProfile", profile);
     window.setTimeout(() => {
       setSaving(false);
-      showToast(t("Perfil público actualizado", "Public profile updated"));
+      if (saved) {
+        setReloadToken((value) => value + 1);
+        showToast(t("Perfil público actualizado", "Public profile updated"));
+      }
     }, 450);
+  }
+
+  async function exportWorkspaceBackup() {
+    try {
+      const response = await fetch("/api/backup", {
+        headers: activeBusinessId
+          ? { "x-trove-business-id": String(activeBusinessId) }
+          : {},
+      });
+      if (!response.ok) throw new Error();
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") || "";
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "trove-backup.json";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      showToast(t("Cópia integral exportada", "Full backup exported"));
+    } catch {
+      showToast(t("Não foi possível exportar a cópia.", "Unable to export the backup."));
+    }
+  }
+
+  async function updateEnquiryStatus(enquiry: PublicEnquiry, status: PublicEnquiry["status"]) {
+    if (await persist("updateEnquiryStatus", { id: enquiry.id, status })) {
+      setPublicEnquiries((current) =>
+        current.map((entry) => entry.id === enquiry.id ? { ...entry, status } : entry),
+      );
+      showToast(t("Estado do pedido actualizado", "Enquiry status updated"));
+    }
   }
 
   function openReserve(item: Item) {
@@ -1480,6 +1544,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
               t={t}
               items={items}
               reservations={reservations}
+              profile={profile}
+              memberCount={activeMembers.length}
+              pushState={pushState}
               userName={initialUser.fullName || initialUser.displayName.split("@")[0]}
               setView={setView}
               openAdd={() => canManageInventory ? setAddOpen(true) : showToast(t("A sua função não permite alterar o inventário.", "Your role cannot change inventory."))}
@@ -1572,16 +1639,21 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
             />
           )}
           {view === "profile" && <>
-            <ProfileEditor t={t} profile={profile} setProfile={setProfile} save={canManageProfile ? saveProfile : () => showToast(t("A sua função não permite editar o perfil.", "Your role cannot edit the profile."))} saving={saving} />
+            <ProfileEditor t={t} profile={profile} itemCount={items.reduce((sum, item) => sum + item.quantity, 0)} setProfile={setProfile} save={canManageProfile ? saveProfile : () => showToast(t("A sua função não permite editar o perfil.", "Your role cannot edit the profile."))} saving={saving} />
             <LaunchTools
               t={t}
               online={isOnline}
               pushState={pushState}
               canMonitor={canManageTeam}
+              canBackup={canManageBilling}
+              enquiryCount={publicEnquiries.filter((entry) => entry.status === "New").length}
+              emailConfigured={Boolean(communication?.configured)}
               install={installApplication}
               enablePush={enableBrowserAlerts}
               feedback={() => setFeedbackOpen(true)}
               monitoring={loadOperations}
+              enquiries={() => setEnquiriesOpen(true)}
+              backup={exportWorkspaceBackup}
             />
           </>}
           {view === "plans" && <Plans
@@ -1730,14 +1802,18 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
               const result = await persist("inviteMember", { id, email, role });
               if (!result) return "";
               setReloadToken((value) => value + 1);
-              showToast(t("Convite válido por 7 dias", "Invitation valid for 7 days"));
+              showToast(result.emailSent
+                ? t("Convite enviado por email e válido por 7 dias", "Invitation emailed and valid for 7 days")
+                : t("Convite criado; copie o link para partilhar", "Invitation created; copy the link to share"));
               return result.inviteUrl || "";
             }}
             onResend={async (member) => {
               const result = await persist("resendInvitation", { id: member.id });
               if (result) {
                 setReloadToken((value) => value + 1);
-                showToast(t("Convite renovado por 7 dias", "Invitation renewed for 7 days"));
+                showToast(result.emailSent
+                  ? t("Convite renovado e enviado por email", "Invitation renewed and emailed")
+                  : t("Convite renovado; copie o link", "Invitation renewed; copy the link"));
                 return result.inviteUrl || "";
               }
               return "";
@@ -1794,6 +1870,18 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
             <label>{t("Comentário", "Comment")}<textarea name="message" rows={6} minLength={10} maxLength={1200} placeholder={t("Descreva o fluxo, problema ou sugestão…", "Describe the workflow, issue, or suggestion…")} required /></label>
             <div className="modal-actions"><button type="button" className="button-secondary" onClick={() => setFeedbackOpen(false)}>{t("Cancelar", "Cancel")}</button><button className="button-primary">{t("Enviar feedback", "Send feedback")}</button></div>
           </form>
+        </Modal>
+      )}
+
+      {enquiriesOpen && (
+        <Modal wide title={t("Pedidos do perfil público", "Public profile enquiries")} subtitle={t("Contactos recebidos através da página da empresa.", "Contacts received through the business page.")} onClose={() => setEnquiriesOpen(false)}>
+          <EnquiryManager
+            enquiries={publicEnquiries}
+            emailDeliveries={emailDeliveries}
+            language={language}
+            t={t}
+            onStatus={updateEnquiryStatus}
+          />
         </Modal>
       )}
 
@@ -1857,7 +1945,7 @@ function PageHeading({ eyebrow, title, detail, action }: { eyebrow?: string; tit
   return <div className="page-heading"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{detail}</p></div>{action}</div>;
 }
 
-function Overview({ language, t, items, reservations, userName, setView, openAdd, openReserve }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[]; userName: string; setView: (view: View) => void; openAdd: () => void; openReserve: (item: Item) => void }) {
+function Overview({ language, t, items, reservations, profile, memberCount, pushState, userName, setView, openAdd, openReserve }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[]; profile: Profile; memberCount: number; pushState: "idle" | "active" | "unsupported" | "unconfigured"; userName: string; setView: (view: View) => void; openAdd: () => void; openReserve: (item: Item) => void }) {
   const total = items.reduce((sum, item) => sum + item.quantity, 0);
   const available = items.reduce((sum, item) => sum + item.available, 0);
   const utilization = total ? Math.round(((total - available) / total) * 100) : 0;
@@ -1865,6 +1953,16 @@ function Overview({ language, t, items, reservations, userName, setView, openAdd
   return (
     <>
       <PageHeading eyebrow={t("O SEU ESPAÇO DE TRABALHO", "YOUR WORKSPACE")} title={t(`Olá, ${userName}.`, `Hello, ${userName}.`)} detail={t("Veja a operação, as reservas e o desempenho do seu inventário.", "See your operations, reservations, and inventory performance.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
+      <OnboardingChecklist
+        t={t}
+        items={items}
+        reservations={reservations}
+        profile={profile}
+        memberCount={memberCount}
+        pushState={pushState}
+        setView={setView}
+        openAdd={openAdd}
+      />
       <section className="stat-grid">
         <article><div className="stat-icon terracotta">▦</div><div><span>{t("Total de peças", "Total pieces")}</span><strong>{total}</strong><small><b>+12</b> {t("este mês", "this month")}</small></div></article>
         <article><div className="stat-icon olive">✓</div><div><span>{t("Disponíveis agora", "Available now")}</span><strong>{available}</strong><small>{Math.round((available / Math.max(total, 1)) * 100)}% {t("da colecção", "of collection")}</small></div></article>
@@ -1901,6 +1999,32 @@ function Overview({ language, t, items, reservations, userName, setView, openAdd
       <Analytics language={language} t={t} items={items} reservations={reservations} />
     </>
   );
+}
+
+function OnboardingChecklist({ t, items, reservations, profile, memberCount, pushState, setView, openAdd }: {
+  t: Translator;
+  items: Item[];
+  reservations: Reservation[];
+  profile: Profile;
+  memberCount: number;
+  pushState: "idle" | "active" | "unsupported" | "unconfigured";
+  setView: (view: View) => void;
+  openAdd: () => void;
+}) {
+  const steps = [
+    { done: Boolean(profile.bio && profile.location && profile.email), label: t("Completar perfil público", "Complete public profile"), action: () => setView("profile") },
+    { done: items.length > 0, label: t("Adicionar primeiro artigo", "Add first item"), action: openAdd },
+    { done: reservations.length > 0, label: t("Criar primeira reserva", "Create first reservation"), action: () => setView("calendar") },
+    { done: memberCount > 1, label: t("Convidar a equipa", "Invite your team"), action: () => setView("profile") },
+    { done: pushState === "active", label: t("Activar alertas no dispositivo", "Enable device alerts"), action: () => setView("profile") },
+  ];
+  const complete = steps.filter((step) => step.done).length;
+  if (complete === steps.length) return null;
+  return <section className="onboarding-card card">
+    <header><div><span className="eyebrow">{t("PRIMEIROS PASSOS", "GETTING STARTED")}</span><h2>{t("Prepare a Trove para a sua equipa", "Prepare Trove for your team")}</h2></div><strong>{complete}/{steps.length}</strong></header>
+    <div className="onboarding-progress"><i style={{ width: `${complete / steps.length * 100}%` }} /></div>
+    <div>{steps.map((step) => <button key={step.label} className={cls(step.done && "done")} onClick={step.action}><span>{step.done ? "✓" : "○"}</span>{step.label}<i>→</i></button>)}</div>
+  </section>;
 }
 
 function Storage({ items, allItems, language, t, categories, query, setQuery, filter, setFilter, categoryFilter, setCategoryFilter, sort, setSort, openAdd, openCategories, openKits, manageItem, openReserve, removeItem, exportInventory, importInventory, bulkStatus, bulkRemove }: { items: Item[]; allItems: Item[]; language: Language; t: Translator; categories: string[]; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; categoryFilter: string; setCategoryFilter: (value: string) => void; sort: string; setSort: (value: string) => void; openAdd: () => void; openCategories: () => void; openKits: () => void; manageItem: (item: Item) => void; openReserve: (item: Item) => void; removeItem: (item: Item) => void; exportInventory: () => void; importInventory: () => void; bulkStatus: (ids: number[], status: ItemStatus) => void; bulkRemove: (ids: number[]) => void }) {
@@ -2303,30 +2427,41 @@ function NetworkRequestManager({ t, language, request, businessId, action }: {
   </div>;
 }
 
-function LaunchTools({ t, online, pushState, canMonitor, install, enablePush, feedback, monitoring }: {
+function LaunchTools({ t, online, pushState, canMonitor, canBackup, enquiryCount, emailConfigured, install, enablePush, feedback, monitoring, enquiries, backup }: {
   t: Translator;
   online: boolean;
   pushState: "idle" | "active" | "unsupported" | "unconfigured";
   canMonitor: boolean;
+  canBackup: boolean;
+  enquiryCount: number;
+  emailConfigured: boolean;
   install: () => void;
   enablePush: () => void;
   feedback: () => void;
   monitoring: () => void;
+  enquiries: () => void;
+  backup: () => void;
 }) {
   return <section className="launch-tools card">
     <header><div><span className="eyebrow">{t("MOBILE E LANÇAMENTO", "MOBILE & LAUNCH")}</span><h2>{t("Trove no seu dispositivo", "Trove on your device")}</h2><p>{t("Instale a aplicação, receba alertas em segundo plano e ajude a preparar o beta.", "Install the app, receive background alerts, and help prepare the beta.")}</p></div><span className={cls("connection-badge", online ? "online" : "offline")}>{online ? t("Ligado", "Online") : t("Só consulta", "Read only")}</span></header>
     <div>
       <article><i>▣</i><span><strong>{t("Aplicação instalável", "Installable app")}</strong><small>{t("Abra a Trove a partir do ecrã principal.", "Open Trove from your home screen.")}</small></span><button className="button-secondary" onClick={install}>{t("Instalar", "Install")}</button></article>
       <article><i>♢</i><span><strong>{t("Notificações push", "Push notifications")}</strong><small>{pushState === "active" ? t("Este dispositivo está activo.", "This device is active.") : t("Alertas de reservas e actividade, mesmo em segundo plano.", "Reservation and activity alerts, even in the background.")}</small></span><button className="button-secondary" onClick={enablePush}>{pushState === "active" ? t("Activo", "Active") : t("Activar", "Enable")}</button></article>
+      <article><i>✦</i><span><strong>{t("Pedidos do perfil", "Profile enquiries")}</strong><small>{enquiryCount ? t(`${enquiryCount} pedido(s) novo(s)`, `${enquiryCount} new enquiry/enquiries`) : t("Nenhum pedido novo.", "No new enquiries.")}</small></span><button className="button-secondary" onClick={enquiries}>{t("Abrir", "Open")}</button></article>
+      <article><i>✉</i><span><strong>{t("Email transaccional", "Transactional email")}</strong><small>{emailConfigured ? t("Resend está configurado.", "Resend is configured.") : t("Preparado; falta ligar domínio e credencial.", "Ready; domain and credential still required.")}</small></span><span className={cls("connection-badge", emailConfigured ? "online" : "offline")}>{emailConfigured ? t("Activo", "Active") : t("Pendente", "Pending")}</span></article>
       <article><i>◎</i><span><strong>{t("Programa beta", "Beta programme")}</strong><small>{t("Partilhe uma dificuldade ou sugestão com a equipa.", "Share an issue or suggestion with the team.")}</small></span><button className="button-secondary" onClick={feedback}>{t("Dar feedback", "Give feedback")}</button></article>
+      {canBackup && <article><i>↓</i><span><strong>{t("Cópia integral", "Full backup")}</strong><small>{t("Descarregue dados operacionais em JSON.", "Download operational data as JSON.")}</small></span><button className="button-secondary" onClick={backup}>{t("Exportar", "Export")}</button></article>}
       {canMonitor && <article><i>↗</i><span><strong>{t("Estado operacional", "Operational status")}</strong><small>{t("Erros recentes, dispositivos push e respostas beta.", "Recent errors, push devices, and beta responses.")}</small></span><button className="button-secondary" onClick={monitoring}>{t("Consultar", "View")}</button></article>}
     </div>
+    <footer className="launch-legal"><a href="/legal/terms">{t("Termos beta", "Beta terms")}</a><a href="/legal/privacy">{t("Privacidade", "Privacy")}</a></footer>
   </section>;
 }
 
-function ProfileEditor({ t, profile, setProfile, save, saving }: { t: Translator; profile: Profile; setProfile: (profile: Profile) => void; save: () => void; saving: boolean }) {
+function ProfileEditor({ t, profile, itemCount, setProfile, save, saving }: { t: Translator; profile: Profile; itemCount: number; setProfile: (profile: Profile) => void; save: () => void; saving: boolean }) {
   const colors = ["#b75d3f", "#78836a", "#ba914d", "#3f5f68", "#755f72", "#303634"];
-  const update = (key: keyof Profile, value: string) => setProfile({ ...profile, [key]: value });
+  function update<K extends keyof Profile>(key: K, value: Profile[K]) {
+    setProfile({ ...profile, [key]: value });
+  }
   return (
     <>
       <PageHeading eyebrow={t("O SEU NEGÓCIO", "YOUR BUSINESS")} title={t("Perfil público", "Public profile")} detail={t("Crie uma presença profissional que representa a sua marca.", "Create a polished presence that represents your brand.")} action={<button className="button-primary" onClick={save}>{saving ? t("A guardar…", "Saving…") : t("Guardar alterações", "Save changes")}</button>} />
@@ -2346,17 +2481,23 @@ function ProfileEditor({ t, profile, setProfile, save, saving }: { t: Translator
               }
             } catch { /* Preview stays usable without upload binding. */ }
           }} /></label></span></div>
-          <div className="form-grid"><label>{t("Nome do negócio", "Business name")}<input value={profile.businessName} onChange={(event) => update("businessName", event.target.value)} /></label><label>{t("Endereço do perfil", "Profile address")}<span className="input-prefix">trove.co/<input value={profile.handle} onChange={(event) => update("handle", event.target.value)} /></span></label></div>
+          <div className="form-grid"><label>{t("Nome do negócio", "Business name")}<input value={profile.businessName} onChange={(event) => update("businessName", event.target.value)} /></label><label>{t("Endereço do perfil", "Profile address")}<span className="input-prefix">/p/<input value={profile.handle} onChange={(event) => update("handle", event.target.value)} /></span></label></div>
           <label>{t("Biografia", "Bio")}<textarea rows={4} maxLength={220} value={profile.bio} onChange={(event) => update("bio", event.target.value)} /><small className="char-count">{profile.bio.length}/220</small></label>
+          <label>{t("Serviços (separados por vírgulas)", "Services (comma separated)")}<input maxLength={500} value={profile.services} onChange={(event) => update("services", event.target.value)} placeholder={t("Decoração, aluguer, montagem", "Styling, rentals, setup")} /></label>
           <div className="divider" />
           <div className="section-title"><span>02</span><div><h2>{t("Cor da marca", "Brand colour")}</h2><p>{t("Escolha uma cor inspirada em marcas de decoração.", "Choose a tone inspired by décor brands.")}</p></div></div>
           <div className="color-picker">{colors.map((color) => <button aria-label={`Choose ${color}`} key={color} style={{ background: color }} className={cls(profile.color === color && "active")} onClick={() => update("color", color)}><span>✓</span></button>)}</div>
           <div className="divider" />
           <div className="section-title"><span>03</span><div><h2>{t("Contactos", "Contact details")}</h2><p>{t("Ajude visitantes a entrar em contacto.", "Help visitors get in touch.")}</p></div></div>
           <div className="form-grid"><label>{t("Localização", "Location")}<input value={profile.location} onChange={(event) => update("location", event.target.value)} /></label><label>{t("Telefone", "Phone")}<input value={profile.phone} onChange={(event) => update("phone", event.target.value)} /></label></div>
-          <label>{t("Email", "Email address")}<input value={profile.email} onChange={(event) => update("email", event.target.value)} /></label>
+          <div className="form-grid"><label>{t("Email", "Email address")}<input type="email" value={profile.email} onChange={(event) => update("email", event.target.value)} /></label><label>Instagram<input value={profile.instagram} onChange={(event) => update("instagram", event.target.value)} placeholder="@marca" /></label></div>
+          <label>{t("Website", "Website")}<input type="url" value={profile.website} onChange={(event) => update("website", event.target.value)} placeholder="https://…" /></label>
+          <div className="profile-visibility">
+            <label><input type="checkbox" checked={profile.isPublic} onChange={(event) => update("isPublic", event.target.checked)} /><span><strong>{t("Perfil visível", "Profile visible")}</strong><small>{t("Permite abrir a página pelo endereço público.", "Allows the page to open at its public address.")}</small></span></label>
+            <label><input type="checkbox" checked={profile.acceptsEnquiries} onChange={(event) => update("acceptsEnquiries", event.target.checked)} /><span><strong>{t("Aceitar pedidos", "Accept enquiries")}</strong><small>{t("Mostra o formulário de pedido de orçamento.", "Shows the enquiry form.")}</small></span></label>
+          </div>
         </div>
-        <aside className="profile-preview-wrap"><div className="preview-label"><span className="eyebrow">{t("PRÉ-VISUALIZAÇÃO", "LIVE PREVIEW")}</span><button>↗ {t("Abrir página pública", "Open public page")}</button></div><div className="public-profile-card"><div className="profile-cover" style={{ background: profile.color }}><span /><span /></div><div className="public-content"><div className="public-avatar" style={{ background: profile.color }}>{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : profile.businessName.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><span className="verified">{t("DECORADOR VERIFICADO", "VERIFIED DECORATOR")} · <b>✓</b></span><h2>{profile.businessName}</h2><p>{profile.bio}</p><small>⌖ {profile.location}</small><div className="public-actions"><button style={{ background: profile.color }}>{t("Enviar pedido", "Send an enquiry")}</button><button>♡</button></div><div className="public-stats"><span><strong>184</strong><small>{t("peças", "pieces")}</small></span><span><strong>4.9</strong><small>{t("avaliação", "rating")}</small></span><span><strong>6 {t("anos", "yrs")}</strong><small>{t("em actividade", "in business")}</small></span></div></div></div><p className="preview-footnote">{t("As alterações aparecem aqui imediatamente.", "Changes appear here instantly.")}</p></aside>
+        <aside className="profile-preview-wrap"><div className="preview-label"><span className="eyebrow">{t("PRÉ-VISUALIZAÇÃO", "LIVE PREVIEW")}</span><a href={`/p/${encodeURIComponent(profile.handle)}`} target="_blank" rel="noreferrer">↗ {t("Abrir página pública", "Open public page")}</a></div><div className="public-profile-card"><div className="profile-cover" style={{ background: profile.color }}><span /><span /></div><div className="public-content"><div className="public-avatar" style={{ background: profile.color }}>{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : profile.businessName.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><span className="verified">{t("EMPRESA NA TROVE", "TROVE BUSINESS")} · <b>✓</b></span><h2>{profile.businessName}</h2><p>{profile.bio}</p><small>⌖ {profile.location}</small><div className="public-actions"><button style={{ background: profile.color }}>{t("Enviar pedido", "Send an enquiry")}</button></div><div className="public-stats"><span><strong>{itemCount}</strong><small>{t("peças", "pieces")}</small></span><span><strong>—</strong><small>{t("avaliação", "rating")}</small></span><span><strong>{profile.services.split(",").filter(Boolean).length}</strong><small>{t("serviços", "services")}</small></span></div></div></div><p className="preview-footnote">{t("Guarde antes de abrir a página pública.", "Save before opening the public page.")}</p></aside>
       </section>
     </>
   );
@@ -2415,6 +2556,26 @@ function Receipt({ payment, businessName, language, t }: { payment: PaymentRecor
     <p>{t("Pagamento recebido para acesso mensal à plataforma Trove.", "Payment received for monthly access to the Trove platform.")}</p>
     <button className="button-primary" onClick={() => window.print()}>{t("Imprimir recibo", "Print receipt")}</button>
   </section>;
+}
+
+function EnquiryManager({ enquiries, emailDeliveries, language, t, onStatus }: {
+  enquiries: PublicEnquiry[];
+  emailDeliveries: EmailDelivery[];
+  language: Language;
+  t: Translator;
+  onStatus: (enquiry: PublicEnquiry, status: PublicEnquiry["status"]) => void;
+}) {
+  if (!enquiries.length) {
+    return <div className="manager-empty">✦<strong>{t("Ainda não há pedidos", "No enquiries yet")}</strong><p>{t("Os pedidos enviados pelo perfil público aparecerão aqui.", "Enquiries sent through the public profile will appear here.")}</p></div>;
+  }
+  return <div className="enquiry-manager">
+    {enquiries.map((enquiry) => <article key={enquiry.id}>
+      <header><div><strong>{enquiry.name}</strong><small>{new Date(enquiry.createdAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ")}</small></div><span className={cls("enquiry-status", enquiry.status.toLowerCase())}>{enquiry.status === "New" ? t("Novo", "New") : enquiry.status === "Contacted" ? t("Contactado", "Contacted") : t("Fechado", "Closed")}</span></header>
+      <p>{enquiry.message}</p>
+      <dl><div><dt>Email</dt><dd><a href={`mailto:${enquiry.email}`}>{enquiry.email}</a></dd></div>{enquiry.phone && <div><dt>{t("Telefone", "Phone")}</dt><dd><a href={`tel:${enquiry.phone}`}>{enquiry.phone}</a></dd></div>}{enquiry.eventDate && <div><dt>{t("Evento", "Event")}</dt><dd>{new Date(`${enquiry.eventDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")}</dd></div>}</dl>
+      <footer><span>{emailDeliveries.some((delivery) => delivery.template === "public-enquiry" && delivery.status === "Sent" && delivery.createdAt >= enquiry.createdAt) ? t("Notificação por email enviada", "Email notification sent") : t("Notificação interna registada", "Internal notification recorded")}</span><div>{enquiry.status !== "Contacted" && <button className="button-secondary" onClick={() => onStatus(enquiry, "Contacted")}>{t("Marcar contactado", "Mark contacted")}</button>}{enquiry.status !== "Closed" && <button className="button-secondary" onClick={() => onStatus(enquiry, "Closed")}>{t("Fechar", "Close")}</button>}</div></footer>
+    </article>)}
+  </div>;
 }
 
 function Analytics({ language, t, items, reservations }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[] }) {

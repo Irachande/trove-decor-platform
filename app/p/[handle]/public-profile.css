@@ -1,0 +1,59 @@
+.public-profile-page { --profile-brand: #b75d3f; min-height: 100vh; background: #f7f4ee; color: #262824; font-family: Arial, Helvetica, sans-serif; }
+.public-profile-page nav { height: 72px; display: flex; align-items: center; justify-content: space-between; padding: 0 clamp(22px, 6vw, 82px); background: #fffefa; border-bottom: 1px solid #ddd8cd; }
+.public-profile-page a { color: inherit; }
+.public-profile-page nav > div { display: flex; gap: 22px; }
+.public-profile-page nav > div a { color: #77786f; font-size: 12px; text-decoration: none; }
+.public-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font: 400 24px Georgia, serif; }
+.public-brand span { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 10px; background: var(--profile-brand); color: white; font: 400 17px Georgia, serif; }
+.public-hero { position: relative; overflow: hidden; background: var(--profile-brand); color: white; min-height: 390px; padding: clamp(55px, 9vw, 110px) clamp(22px, 8vw, 120px) 55px; }
+.public-hero-pattern i { position: absolute; width: 360px; height: 360px; border: 1px solid #ffffff2a; border-radius: 57% 43% 61% 39%; right: 5vw; top: -80px; transform: rotate(32deg); }
+.public-hero-pattern i:last-child { width: 250px; height: 250px; right: 19vw; top: 150px; }
+.public-identity { position: relative; z-index: 1; max-width: 1050px; margin: auto; display: grid; grid-template-columns: 150px 1fr; align-items: center; gap: 34px; }
+.public-photo { width: 150px; height: 150px; display: grid; place-items: center; border-radius: 50%; overflow: hidden; border: 7px solid #ffffff55; background: #262824; color: white; font: 400 43px Georgia, serif; }
+.public-photo img { width: 100%; height: 100%; object-fit: cover; }
+.public-identity span, .public-kicker { font-size: 9px; letter-spacing: 2px; font-weight: 800; }
+.public-identity h1 { font: 400 clamp(42px, 7vw, 78px)/.95 Georgia, serif; letter-spacing: -3px; margin: 10px 0 16px; }
+.public-identity p { max-width: 630px; font: 400 16px/1.6 Georgia, serif; opacity: .88; margin-bottom: 14px; }
+.public-identity small { opacity: .8; }
+.public-profile-body { width: min(1140px, calc(100% - 44px)); margin: -30px auto 70px; position: relative; z-index: 2; display: grid; grid-template-columns: 1.25fr .75fr; gap: 24px; align-items: start; }
+.public-profile-main, .public-profile-body > aside { background: #fffefa; border: 1px solid #ddd8cd; border-radius: 18px; padding: clamp(25px, 4vw, 45px); box-shadow: 0 20px 60px #362d2312; }
+.public-profile-main > section { padding-bottom: 30px; margin-bottom: 30px; border-bottom: 1px solid #ebe6dd; }
+.public-kicker { color: var(--profile-brand); display: block; margin-bottom: 12px; }
+.public-profile-main h2, .public-profile-body > aside h2 { font: 400 clamp(27px, 4vw, 42px)/1.08 Georgia, serif; margin: 0 0 15px; }
+.public-profile-main p, .public-profile-body > aside > p { color: #77786f; font: 400 14px/1.7 Georgia, serif; }
+.public-services { display: flex; flex-wrap: wrap; gap: 9px; }
+.public-services span { padding: 9px 12px; background: #f1ece4; border-radius: 999px; font-size: 11px; }
+.public-contact-card > div { display: flex; flex-wrap: wrap; gap: 12px 22px; }
+.public-contact-card a { font-size: 12px; text-underline-offset: 4px; }
+.public-profile-stats { display: grid; grid-template-columns: repeat(3, 1fr); }
+.public-profile-stats span { display: flex; flex-direction: column; align-items: center; border-right: 1px solid #ebe6dd; }
+.public-profile-stats span:last-child { border: 0; }
+.public-profile-stats strong { font: 400 30px Georgia, serif; color: var(--profile-brand); }
+.public-profile-stats small { color: #77786f; font-size: 9px; margin-top: 5px; text-align: center; }
+.public-profile-body > aside { position: sticky; top: 20px; }
+.public-enquiry-form { display: flex; flex-direction: column; gap: 13px; margin-top: 25px; }
+.public-enquiry-form > div { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.public-enquiry-form label { display: flex; flex-direction: column; gap: 6px; color: #66675f; font-size: 10px; font-weight: 700; }
+.public-enquiry-form input, .public-enquiry-form textarea { width: 100%; border: 1px solid #d8d2c7; border-radius: 8px; background: #fbf9f5; padding: 11px; color: #262824; outline: 0; }
+.public-enquiry-form textarea { resize: vertical; }
+.public-enquiry-form button, .enquiry-success button { min-height: 46px; border: 0; border-radius: 8px; color: white; font-weight: 800; cursor: pointer; }
+.public-enquiry-form button:disabled { opacity: .65; }
+.public-enquiry-form small { color: #8a8a82; font-size: 9px; line-height: 1.5; }
+.public-honeypot { position: absolute !important; left: -10000px; }
+.public-form-error { color: #963d2e; background: #f8e5df; border-radius: 7px; padding: 9px; font-size: 10px; }
+.enquiry-success { text-align: center; padding: 25px 0; }
+.enquiry-success > span { width: 50px; height: 50px; display: grid; place-items: center; border-radius: 50%; background: #e3eddf; color: #4f7148; margin: auto; font-size: 22px; }
+.enquiry-success h2 { margin-top: 18px !important; }
+.enquiry-success button { background: var(--profile-brand); padding: 0 18px; }
+.public-profile-note { padding: 15px; background: #f1ece4; border-radius: 9px; color: #77786f; }
+.public-profile-page footer { min-height: 90px; border-top: 1px solid #ddd8cd; display: flex; align-items: center; justify-content: space-between; padding: 0 clamp(22px, 6vw, 82px); color: #77786f; font-size: 10px; }
+.public-profile-page footer div { display: flex; gap: 20px; }
+@media (max-width: 760px) {
+  .public-profile-page nav > div a:first-child { display: none; }
+  .public-identity { grid-template-columns: 1fr; text-align: center; }
+  .public-photo { width: 112px; height: 112px; margin: auto; }
+  .public-profile-body { grid-template-columns: 1fr; margin-top: -20px; }
+  .public-profile-body > aside { position: static; }
+  .public-enquiry-form > div { grid-template-columns: 1fr; }
+  .public-profile-page footer { flex-direction: column; justify-content: center; gap: 12px; }
+}

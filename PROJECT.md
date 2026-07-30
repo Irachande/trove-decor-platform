@@ -126,6 +126,11 @@ até serem configuradas as credenciais da conta comercial.
   dispositivo e alerta de teste.
 - Histórico cronológico das alterações importantes e respectivos autores.
 - Perfil público com fotografia, biografia, contactos, localização e cor.
+- Página própria em `/p/{handle}`, com serviços, website, Instagram, contagem
+  real de peças e avaliações verificadas da Network.
+- Pedidos de orçamento pelo perfil público, com anti-abuso, notificação da
+  equipa, acompanhamento de estado e email quando configurado.
+- Checklist de onboarding calculada a partir do estado real da empresa.
 - Persistência de perfil, inventário, reservas e categorias.
 
 ### Identidade e empresas
@@ -174,6 +179,12 @@ até serem configuradas as credenciais da conta comercial.
   dispositivos push activos e respostas beta.
 - Formulário bilingue de feedback beta com área, avaliação e comentário.
 - Página de erro recuperável que regista o incidente sem expor dados internos.
+- Exportação integral em JSON, exclusiva do proprietário, sem segredos de
+  notificações push.
+- Termos de utilização e informação de privacidade publicados como versão
+  beta, explicitamente pendentes de revisão jurídica.
+- Adaptador Resend para convites e pedidos públicos, com histórico de entregas;
+  envio real permanece desligado até existir chave e domínio verificado.
 
 ### Infraestrutura
 
@@ -188,6 +199,8 @@ até serem configuradas as credenciais da conta comercial.
 - Web Push cifrado com `aes128gcm` e autenticação VAPID P-256.
 - Código-fonte num repositório privado do GitHub.
 - Integração PaySuite para M‑Pesa, e‑Mola e cartões; credenciais reais pendentes.
+- Integração Resend para email transaccional; chave, remetente e domínio reais
+  pendentes.
 
 ## 6. Estado funcional
 
@@ -201,17 +214,19 @@ até serem configuradas as credenciais da conta comercial.
 | Calendário | Funcional | Visões mensal/semanal, detalhes e reservas canceladas excluídas |
 | Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
 | Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
-| Perfil público | Parcial | Editor existe; falta rota pública independente |
+| Perfil público | Funcional no produto / publicação externa pendente | Rota, visibilidade, contactos, serviços e pedidos funcionam; o Sites continua com acesso privado |
 | Equipa | Funcional | Convites com aceitação/expiração, funções, remoção e troca de empresa |
 | Autenticação | Funcional no Sites | Usa Sign in with ChatGPT; fornecedor público definitivo continua pendente |
 | Multiempresa | Funcional | Consultas, alterações e imagens são isoladas por `business_id` |
 | Subscrições | Parcial | Motor, limites, checkout e webhooks funcionam; falta activar credenciais PaySuite reais |
 | Rede local | Funcional (MVP) | Publicações, pesquisa, disponibilidade, negociação, aluguer, avaliações e disputas são reais; pagamento é confirmado manualmente |
 | Aplicação mobile | Funcional (PWA) | Instalável; mantém consulta da última cópia local quando a ligação falha |
-| Notificações | Funcional (push) | Centro interno e Web Push em segundo plano; email transaccional continua pendente |
+| Notificações | Funcional (push e adaptador email) | Email foi testado com simulador; envio real depende de Resend e domínio verificado |
+| Backup da empresa | Funcional (exportação) | Proprietário exporta JSON integral; exercício de restauro da plataforma continua pendente |
+| Páginas legais | Beta | Publicadas e coerentes com a implementação; revisão jurídica continua obrigatória |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
 | Monitorização | Funcional (MVP) | Saúde pública mínima, erros de interface e painel operacional por empresa |
-| Testes automatizados | Funcional (MVP) | 18 testes estruturais e integração das fases 3 a 7 |
+| Testes automatizados | Funcional (MVP) | 21 testes estruturais e integração das fases 3 a 8 |
 
 ## 7. Arquitectura actual
 
@@ -233,6 +248,9 @@ Next.js / Vinext
    ├── /api/push
    ├── /api/operations
    ├── /api/health
+   ├── /api/public-profile
+   ├── /api/public-profile-image
+   ├── /api/backup
    ├── /api/item-image
    └── /api/profile-image
           │
@@ -257,6 +275,11 @@ Next.js / Vinext
 - `app/api/operations/route.ts`: erros de interface, feedback e painel
   operacional isolado por empresa.
 - `app/api/health/route.ts`: verificação mínima e pública da aplicação e D1.
+- `app/p/[handle]`: página independente da empresa e formulário de pedido.
+- `app/api/public-profile/route.ts`: leitura pública e pedidos protegidos
+  contra abuso.
+- `app/api/backup/route.ts`: exportação integral autorizada ao proprietário.
+- `app/email.ts`: adaptador Resend e auditoria de entregas transaccionais.
 - `app/offline-cache.ts`: cópia local não autoritativa para consulta.
 - `public/sw.js` e `public/manifest.webmanifest`: instalação, modo sem ligação
   e recepção de push em segundo plano.
@@ -296,6 +319,8 @@ Next.js / Vinext
 - `operational_events`: sinais de erro da interface, isolados por empresa.
 - `beta_feedback`: avaliação e comentários enviados durante o beta.
 - `business_profile`: perfil de cada empresa.
+- `public_enquiries`: pedidos recebidos através do perfil público.
+- `email_deliveries`: estado das tentativas de envio transaccional.
 
 ## 9. Modelo de dados pretendido
 
@@ -325,6 +350,8 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `push_subscriptions` — implementado
 - `operational_events` — implementado
 - `beta_feedback` — implementado
+- `public_enquiries` — implementado
+- `email_deliveries` — implementado
 
 Todas as entidades pertencentes a uma empresa deverão possuir `business_id` e
 ser filtradas e autorizadas no servidor.
@@ -405,15 +432,16 @@ produto para a distribuição fora do ambiente Sites.
 
 ### Fase 4 — Equipa e comunicação
 
-- [ ] Convites por email.
+- [x] Convites por email através de adaptador transaccional.
 - [x] Aceitação e expiração de convites.
 - [x] Notificações internas.
 - [ ] Lembretes por email e push.
 - [x] Histórico de actividade.
 
 Nota: os links de convite podem ser copiados e partilhados. O push em segundo
-plano está concluído na Fase 7; este item combinado permanece aberto apenas
-porque o envio automático por email ainda depende da escolha de um fornecedor.
+plano está concluído na Fase 7 e os convites automáticos foram testados com um
+simulador Resend. O lembrete combinado permanece aberto porque ainda não existe
+um agendador de email; o envio real também exige activar o domínio e a chave.
 
 ### Fase 5 — Subscrições
 
@@ -460,6 +488,23 @@ ecrã principal. A infraestrutura e o formulário de feedback estão prontos, ma
 o beta só será marcado como concluído depois de empresas reais serem convidadas
 e utilizarem a plataforma.
 
+### Fase 8 — Lançamento controlado
+
+- [x] Página pública independente e personalizável por empresa.
+- [x] Pedidos públicos protegidos contra abuso e geridos no painel.
+- [x] Onboarding orientado pelo progresso real.
+- [x] Adaptador de email transaccional e auditoria de entregas.
+- [x] Exportação integral de segurança pelo proprietário.
+- [x] Páginas de termos e privacidade em versão beta.
+- [ ] Política de acesso público do alojamento aprovada e aplicada.
+- [ ] Resend com domínio/remetente verificado e credencial de produção.
+- [ ] Revisão jurídica, exercício de restauro e beta com empresas reais.
+
+Nota: a rota pública funciona na aplicação, mas o ambiente Sites permanece
+deliberadamente privado. Torná-lo acessível externamente altera a política de
+acesso do produto e só será feito após aprovação explícita. As páginas legais
+descrevem a versão actual, não substituem revisão jurídica.
+
 ## 13. Definição de concluído
 
 Uma funcionalidade está concluída quando:
@@ -503,10 +548,46 @@ pnpm run db:generate
 - Activação da conta comercial PaySuite e configuração segura das credenciais.
 - Necessidade futura de aplicações nativas depois de medir o uso da PWA.
 - Política de verificação das empresas da rede.
-- Fornecedor e remetente verificado para email transaccional.
+- Activação do Resend com chave, subdomínio e remetente verificados.
+- Política de acesso público do Sites e eventual separação entre perfil público
+  e painel autenticado.
+- Revisão jurídica dos termos e da privacidade, prazos de retenção e canal
+  formal para pedidos dos titulares.
+- Procedimento de restauro e exercício periódico a partir de cópias da
+  plataforma; a exportação pelo cliente já existe.
 - Empresas e critérios de sucesso para o primeiro grupo beta.
 
 ## 17. Histórico de iterações
+
+### 30 de Julho de 2026 — Fase 8: lançamento controlado
+
+- Criada rota própria bilingue `/p/{handle}` com identidade da empresa,
+  serviços, contactos, website, Instagram, peças em inventário e avaliações
+  verificadas.
+- O perfil pode ser publicado ou ocultado e pode aceitar ou recusar pedidos de
+  orçamento sem remover os restantes dados da empresa.
+- Implementado formulário público com campo armadilha, validação, limite de
+  cinco pedidos por origem derivada/empresa em 24 horas e sem guardar IP em
+  claro.
+- Adicionada gestão dos pedidos no painel, estados novo/contactado/fechado,
+  notificações internas, push e entrega por email quando configurada.
+- Implementado adaptador Resend para convites e pedidos públicos, com estado
+  de entrega persistente; a produção continua sem credenciais fictícias.
+- Criado checklist de onboarding com perfil, primeiro artigo, primeira
+  reserva, equipa e alertas, calculado a partir dos dados reais.
+- Adicionada exportação JSON integral exclusiva do proprietário, omitindo
+  deliberadamente os segredos das subscrições push.
+- Publicados termos e informação de privacidade como documentos beta com
+  indicação visível da revisão jurídica pendente.
+- Criadas `public_enquiries` e `email_deliveries`, ampliado
+  `business_profile` e gerada a migração `0009_cheerful_bedlam.sql`.
+- Adicionado teste integrado da Fase 8 com fornecedor de email simulado e três
+  testes estruturais; cobre perfil, pedido, convite, entrega, estado e backup.
+- Validação: `node tests/phase8-api.integration.mjs`,
+  `node --test tests/rendered-html.test.mjs` (21 testes),
+  `tsc --noEmit --incremental false`,
+  `eslint . --ignore-pattern dist --ignore-pattern .next`,
+  `vinext build` e `git diff --check`.
 
 ### 30 de Julho de 2026 — Fase 7: mobile e preparação do lançamento
 

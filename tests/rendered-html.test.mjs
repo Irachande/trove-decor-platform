@@ -349,3 +349,57 @@ test("phase 7 interface exposes installation, push, feedback, and operational st
   assert.match(styles, /\.operations-status/);
   assert.match(manifest, /"test:phase7-api"/);
 });
+
+test("phase 8 provides durable public profiles and protected enquiries", async () => {
+  const [schema, migration, workspace, publicApi, publicPage] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0009_cheerful_bedlam.sql"),
+    source("app/workspace.ts"),
+    source("app/api/public-profile/route.ts"),
+    source("app/p/[handle]/page.tsx"),
+  ]);
+
+  assert.match(schema, /export const publicEnquiries/);
+  assert.match(schema, /export const emailDeliveries/);
+  assert.match(migration, /CREATE TABLE `public_enquiries`/);
+  assert.match(migration, /CREATE TABLE `email_deliveries`/);
+  assert.match(workspace, /public_enquiries_rate_limit_idx/);
+  assert.match(publicApi, /crypto\.subtle\.digest/);
+  assert.match(publicApi, /Too many enquiries/);
+  assert.match(publicApi, /sendTransactionalEmail/);
+  assert.match(publicPage, /EnquiryForm/);
+});
+
+test("phase 8 includes transactional email, owner backup, and legal boundaries", async () => {
+  const [email, data, backup, terms, privacy] = await Promise.all([
+    source("app/email.ts"),
+    source("app/api/data/route.ts"),
+    source("app/api/backup/route.ts"),
+    source("app/legal/terms/page.tsx"),
+    source("app/legal/privacy/page.tsx"),
+  ]);
+
+  assert.match(email, /RESEND_API_KEY/);
+  assert.match(email, /email_deliveries/);
+  assert.match(data, /invitationEmail/);
+  assert.match(backup, /authorize\(request, "manageBilling"\)/);
+  assert.doesNotMatch(backup, /push_subscriptions/);
+  assert.match(terms, /Versão beta/);
+  assert.match(privacy, /não guardamos o endereço IP em claro/);
+});
+
+test("phase 8 interface exposes onboarding, enquiries, backup, and public controls", async () => {
+  const [app, styles, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("package.json"),
+  ]);
+
+  assert.match(app, /function OnboardingChecklist/);
+  assert.match(app, /function EnquiryManager/);
+  assert.match(app, /exportWorkspaceBackup/);
+  assert.match(app, /acceptsEnquiries/);
+  assert.match(styles, /\.onboarding-card/);
+  assert.match(styles, /\.enquiry-manager/);
+  assert.match(manifest, /"test:phase8-api"/);
+});
