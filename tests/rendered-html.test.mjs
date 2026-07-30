@@ -403,3 +403,21 @@ test("phase 8 interface exposes onboarding, enquiries, backup, and public contro
   assert.match(styles, /\.enquiry-manager/);
   assert.match(manifest, /"test:phase8-api"/);
 });
+
+test("phase 9 starts with a dedicated responsive events workspace", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /type View = .*"events"/);
+  assert.match(app, /function Events/);
+  assert.match(app, /PRODUÇÃO E OPERAÇÃO/);
+  assert.match(app, /Pesquisar evento, cliente ou local/);
+  assert.match(app, /eventStatusLabel/);
+  assert.match(app, /reservations\.filter\(\(reservation\) => reservation\.eventId === entry\.id\)/);
+  assert.match(styles, /\.event-stat-grid/);
+  assert.match(styles, /\.events-toolbar/);
+  assert.match(styles, /\.events-list/);
+  assert.match(styles, /repeat\(6, minmax\(52px, 1fr\)\)/);
+});

@@ -3,7 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { loadOfflineSnapshot, saveOfflineSnapshot } from "./offline-cache";
 
-type View = "home" | "storage" | "calendar" | "network" | "profile" | "plans";
+type View = "home" | "storage" | "events" | "calendar" | "network" | "profile" | "plans";
 type ItemStatus = "Available" | "Reserved" | "Rented";
 type Language = "pt" | "en";
 type Translator = (pt: string, en: string) => string;
@@ -280,6 +280,7 @@ function navItems(t: Translator): { id: View; label: string; icon: string }[] {
   return [
     { id: "home", label: t("Visão geral", "Overview"), icon: "⌂" },
     { id: "storage", label: t("Inventário", "Inventory"), icon: "▦" },
+    { id: "events", label: t("Eventos", "Events"), icon: "◫" },
     { id: "calendar", label: t("Calendário", "Calendar"), icon: "□" },
     { id: "network", label: t("Rede local", "Nearby network"), icon: "◎" },
     { id: "profile", label: t("Perfil público", "Public profile"), icon: "◇" },
@@ -309,6 +310,20 @@ function reservationStatusLabel(status: string, t: Translator) {
   return t("Confirmada", "Confirmed");
 }
 
+function eventStatusLabel(status: string, t: Translator) {
+  const labels: Record<string, [string, string]> = {
+    Lead: ["Lead", "Lead"],
+    Planned: ["Em planeamento", "Planning"],
+    Confirmed: ["Confirmado", "Confirmed"],
+    Preparing: ["Em preparação", "Preparing"],
+    InProgress: ["Em execução", "In progress"],
+    Completed: ["Concluído", "Completed"],
+    Cancelled: ["Cancelado", "Cancelled"],
+  };
+  const label = labels[status] || [status, status];
+  return t(label[0], label[1]);
+}
+
 function networkStatusLabel(status: string, t: Translator) {
   const labels: Record<string, [string, string]> = {
     Pending: ["Pendente", "Pending"],
@@ -329,7 +344,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [view, setView] = useState<View>(() => {
     if (typeof window === "undefined") return "home";
     const requested = new URLSearchParams(window.location.search).get("view");
-    return ["storage", "calendar"].includes(requested || "") ? requested as View : "home";
+    return ["storage", "events", "calendar", "network", "profile"].includes(requested || "") ? requested as View : "home";
   });
   const [language, setLanguage] = useState<Language>(() => {
     if (typeof window === "undefined") return "pt";
@@ -1584,6 +1599,18 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
               }}
             />
           )}
+          {view === "events" && <Events
+            language={language}
+            t={t}
+            events={events}
+            clients={clients}
+            reservations={reservations}
+            canManage={canManageReservations}
+            openCreate={() => canManageReservations
+              ? setDirectoryOpen(true)
+              : showToast(t("A sua função não permite criar eventos.", "Your role cannot create events."))}
+            openCalendar={() => setView("calendar")}
+          />}
           {view === "calendar" && <Calendar
             language={language}
             t={t}
@@ -1672,12 +1699,11 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       </section>
 
       <nav className="mobile-nav" aria-label={t("Navegação móvel", "Mobile navigation")}>
-        {navigation.slice(0, 4).map((item) => (
+        {navigation.map((item) => (
           <button key={item.id} className={cls(view === item.id && "active")} onClick={() => setView(item.id)}>
-            <span>{item.icon}</span><small>{item.id === "network" ? t("Rede", "Network") : item.label}</small>
+            <span>{item.icon}</span><small>{item.id === "network" ? t("Rede", "Network") : item.id === "profile" ? t("Perfil", "Profile") : item.label}</small>
           </button>
         ))}
-        <button className={cls(view === "profile" && "active")} onClick={() => setView("profile")}><span>◇</span><small>{t("Perfil", "Profile")}</small></button>
       </nav>
       <input className="visually-hidden" ref={importRef} type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importInventory} />
 
@@ -2148,6 +2174,92 @@ function RelationshipManager({ clients, events, t, onAddClient, onAddEvent }: { 
     <section><form className="operation-form" onSubmit={onAddClient}><h3>{t("Novo cliente", "New client")}</h3><label>{t("Nome", "Name")}<input name="name" required /></label><div className="form-grid"><label>Email<input name="email" type="email" /></label><label>{t("Telefone", "Phone")}<input name="phone" /></label></div><label>{t("Notas", "Notes")}<textarea name="notes" rows={2} /></label><button className="button-primary">{t("Adicionar cliente", "Add client")}</button></form><div className="directory-list"><h3>{t("Clientes", "Clients")} <span>{clients.length}</span></h3>{clients.map((client) => <article key={client.id}><i>{initials(client.name)}</i><span><strong>{client.name}</strong><small>{client.phone || client.email || t("Sem contacto", "No contact")}</small></span></article>)}</div></section>
     <section><form className="operation-form" onSubmit={onAddEvent}><h3>{t("Novo evento", "New event")}</h3><label>{t("Cliente", "Client")}<select name="clientId" required disabled={!clients.length}><option value="">{t("Seleccione…", "Select…")}</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>{t("Nome do evento", "Event name")}<input name="name" required /></label><label>{t("Local", "Venue")}<input name="venue" /></label><div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={today} required /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={today} required /></label></div><div className="form-grid"><label>{t("Montagem", "Setup")}<input name="setupTime" type="time" /></label><label>{t("Recolha", "Pickup")}<input name="pickupTime" type="time" /></label></div><label>{t("Notas", "Notes")}<textarea name="notes" rows={2} /></label><button className="button-primary" disabled={!clients.length}>{t("Adicionar evento", "Add event")}</button></form><div className="directory-list"><h3>{t("Eventos", "Events")} <span>{events.length}</span></h3>{events.map((entry) => <article key={entry.id}><i>□</i><span><strong>{entry.name}</strong><small>{entry.startDate} · {entry.venue || t("Local por definir", "Venue not set")}</small></span><em>{entry.status}</em></article>)}</div></section>
   </div>;
+}
+
+function Events({ language, t, events, clients, reservations, canManage, openCreate, openCalendar }: {
+  language: Language;
+  t: Translator;
+  events: EventRecord[];
+  clients: Client[];
+  reservations: Reservation[];
+  canManage: boolean;
+  openCreate: () => void;
+  openCalendar: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("All");
+  const [period, setPeriod] = useState<"upcoming" | "past" | "all">("upcoming");
+  const [sort, setSort] = useState<"soonest" | "newest" | "name">("soonest");
+  const today = new Date().toISOString().slice(0, 10);
+  const activeStatuses = ["Lead", "Planned", "Confirmed", "Preparing"];
+  const normalizedQuery = query.trim().toLowerCase();
+  const eventSummary = (entry: EventRecord) => {
+    const client = clients.find((candidate) => candidate.id === entry.clientId);
+    const linked = reservations.filter((reservation) => reservation.eventId === entry.id);
+    return {
+      event: entry,
+      client,
+      reservations: linked,
+      total: linked
+        .filter((reservation) => reservation.status !== "Cancelled")
+        .reduce((sum, reservation) => sum + (reservation.total || 0), 0),
+    };
+  };
+  const visible = events
+    .map(eventSummary)
+    .filter(({ event, client }) => {
+      const matchesQuery = !normalizedQuery || `${event.name} ${event.venue} ${client?.name || ""}`.toLowerCase().includes(normalizedQuery);
+      const matchesStatus = status === "All" || event.status === status;
+      const matchesPeriod = period === "all" ||
+        (period === "upcoming" ? event.endDate >= today : event.endDate < today);
+      return matchesQuery && matchesStatus && matchesPeriod;
+    })
+    .sort((a, b) => {
+      if (sort === "name") return a.event.name.localeCompare(b.event.name);
+      if (sort === "newest") return b.event.createdAt.localeCompare(a.event.createdAt);
+      return a.event.startDate.localeCompare(b.event.startDate);
+    });
+  const upcoming = events.filter((entry) => entry.endDate >= today && !["Completed", "Cancelled"].includes(entry.status)).length;
+  const preparing = events.filter((entry) => entry.endDate >= today && activeStatuses.includes(entry.status)).length;
+  const inProgress = events.filter((entry) => entry.status === "InProgress").length;
+  const completed = events.filter((entry) => entry.status === "Completed").length;
+  const availableStatuses = Array.from(new Set(events.map((entry) => entry.status)));
+
+  return <>
+    <PageHeading
+      eyebrow={t("PRODUÇÃO E OPERAÇÃO", "PRODUCTION & OPERATIONS")}
+      title={t("Eventos", "Events")}
+      detail={t("Acompanhe cada trabalho por cliente, data, local e estado operacional.", "Track every job by client, date, venue, and operational status.")}
+      action={<button className="button-primary" onClick={openCreate} disabled={!canManage}><span>＋</span>{t("Novo evento", "New event")}</button>}
+    />
+    <section className="event-stat-grid">
+      <article><i className="upcoming">◫</i><span><small>{t("Próximos", "Upcoming")}</small><strong>{upcoming}</strong></span></article>
+      <article><i className="preparing">◇</i><span><small>{t("Em preparação", "Preparing")}</small><strong>{preparing}</strong></span></article>
+      <article><i className="progress">↗</i><span><small>{t("Em execução", "In progress")}</small><strong>{inProgress}</strong></span></article>
+      <article><i className="complete">✓</i><span><small>{t("Concluídos", "Completed")}</small><strong>{completed}</strong></span></article>
+    </section>
+    <section className="events-panel card">
+      <div className="events-toolbar">
+        <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Pesquisar evento, cliente ou local…", "Search event, client, or venue…")} /></label>
+        <select className="toolbar-select" value={status} onChange={(event) => setStatus(event.target.value)} aria-label={t("Filtrar por estado", "Filter by status")}><option value="All">{t("Todos os estados", "All statuses")}</option>{availableStatuses.map((value) => <option key={value} value={value}>{eventStatusLabel(value, t)}</option>)}</select>
+        <select className="toolbar-select" value={period} onChange={(event) => setPeriod(event.target.value as "upcoming" | "past" | "all")} aria-label={t("Filtrar por período", "Filter by period")}><option value="upcoming">{t("Próximos", "Upcoming")}</option><option value="past">{t("Passados", "Past")}</option><option value="all">{t("Todas as datas", "All dates")}</option></select>
+        <select className="toolbar-select" value={sort} onChange={(event) => setSort(event.target.value as "soonest" | "newest" | "name")} aria-label={t("Ordenar eventos", "Sort events")}><option value="soonest">{t("Data mais próxima", "Soonest date")}</option><option value="newest">{t("Criados recentemente", "Recently created")}</option><option value="name">{t("Nome A–Z", "Name A–Z")}</option></select>
+      </div>
+      <header className="events-list-header"><span>{t(`${visible.length} eventos`, `${visible.length} events`)}</span><button onClick={openCalendar}>{t("Ver no calendário", "View calendar")} →</button></header>
+      {visible.length ? <div className="events-list">{visible.map(({ event, client, reservations: linked, total }) => {
+        const start = new Date(`${event.startDate}T00:00:00`);
+        const end = new Date(`${event.endDate}T00:00:00`);
+        return <article key={event.id}>
+          <time dateTime={event.startDate}><small>{start.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { month: "short" }).replace(".", "").toUpperCase()}</small><strong>{start.getDate()}</strong></time>
+          <span className="event-main"><small>{client?.name || t("Cliente por definir", "Client not set")}</small><strong>{event.name}</strong><em>⌖ {event.venue || t("Local por definir", "Venue not set")}</em></span>
+          <span className="event-dates"><small>{t("Período", "Schedule")}</small><strong>{start.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { day: "numeric", month: "short" })} — {end.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { day: "numeric", month: "short" })}</strong><em>{event.setupTime ? `${t("Montagem", "Setup")} ${event.setupTime}` : t("Horário por definir", "Time not set")}</em></span>
+          <span className="event-bookings"><small>{t("Reservas", "Bookings")}</small><strong>{linked.length}</strong><em>{linked.length ? formatMoney(total, linked[0].currency || "MZN", language) : t("Sem material associado", "No inventory linked")}</em></span>
+          <span className={cls("event-status", event.status.toLowerCase())}>{eventStatusLabel(event.status, t)}</span>
+          <button className="event-calendar-button" onClick={openCalendar} aria-label={t(`Ver ${event.name} no calendário`, `View ${event.name} in calendar`)}>›</button>
+        </article>;
+      })}</div> : <div className="events-empty"><span>◫</span><h3>{events.length ? t("Nenhum evento corresponde aos filtros", "No events match the filters") : t("Comece pelo primeiro evento", "Start with your first event")}</h3><p>{events.length ? t("Altere a pesquisa, o estado ou o período.", "Change the search, status, or period.") : t("Crie o evento e depois associe clientes, reservas e artigos.", "Create the event, then connect clients, bookings, and inventory.")}</p>{!events.length && canManage && <button className="button-primary" onClick={openCreate}>{t("Criar evento", "Create event")}</button>}</div>}
+    </section>
+  </>;
 }
 
 function Calendar({ language, t, reservations, openAdd, openDirectory, onEdit, onTransition }: { language: Language; t: Translator; reservations: Reservation[]; openAdd: () => void; openDirectory: () => void; onEdit: (reservation: Reservation) => void; onTransition: (reservation: Reservation, status: string) => void }) {

@@ -83,6 +83,8 @@ até serem configuradas as credenciais da conta comercial.
 - Interface em português e inglês.
 - Tema personalizável para o perfil da empresa.
 - Página de planos Basic e Network.
+- Aba própria de Eventos com indicadores, pesquisa, filtros por estado/período,
+  ordenação e adaptação para computador e telemóvel.
 
 ### Inventário
 
@@ -112,6 +114,16 @@ até serem configuradas as credenciais da conta comercial.
 - Calendário mensal e semanal.
 - Consulta dos detalhes da reserva.
 - Exportação de reservas.
+
+### Eventos
+
+- Área própria na navegação web e mobile.
+- Indicadores de eventos próximos, em preparação, em execução e concluídos.
+- Pesquisa por evento, cliente ou local.
+- Filtros por estado e período e ordenação por data, criação ou nome.
+- Resumo por evento com cliente, local, período, reservas associadas e valor.
+- Criação através do formulário de clientes e eventos já autorizado no
+  servidor.
 
 ### Equipa e perfil
 
@@ -212,6 +224,7 @@ até serem configuradas as credenciais da conta comercial.
 | Upload de imagens | Funcional | JPG/PNG até 5 MB, autenticado e separado por empresa |
 | Reservas | Funcional | Multiartigo, conflitos atómicos, preços e ciclo operacional |
 | Calendário | Funcional | Visões mensal/semanal, detalhes e reservas canceladas excluídas |
+| Gestão de eventos | Funcional (estrutura) | Aba, indicadores, pesquisa, filtros, ordenação e relações reais; ficha operacional completa é o próximo passo |
 | Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
 | Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
 | Perfil público | Funcional no produto / publicação externa pendente | Rota, visibilidade, contactos, serviços e pedidos funcionam; o Sites continua com acesso privado |
@@ -226,7 +239,7 @@ até serem configuradas as credenciais da conta comercial.
 | Páginas legais | Beta | Publicadas e coerentes com a implementação; revisão jurídica continua obrigatória |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
 | Monitorização | Funcional (MVP) | Saúde pública mínima, erros de interface e painel operacional por empresa |
-| Testes automatizados | Funcional (MVP) | 21 testes estruturais e integração das fases 3 a 8 |
+| Testes automatizados | Funcional (MVP) | 22 testes estruturais e integração das fases 3 a 8 |
 
 ## 7. Arquitectura actual
 
@@ -505,6 +518,22 @@ deliberadamente privado. Torná-lo acessível externamente altera a política de
 acesso do produto e só será feito após aprovação explícita. As páginas legais
 descrevem a versão actual, não substituem revisão jurídica.
 
+### Fase 9 — Gestão de eventos
+
+- [x] Aba Eventos na navegação web e mobile.
+- [x] Indicadores operacionais baseados nos eventos reais.
+- [x] Pesquisa, filtros de estado/período e ordenação.
+- [x] Resumo de cliente, local, datas, reservas e valor por evento.
+- [ ] Ficha completa, edição, duplicação e arquivo.
+- [ ] Ciclo de estados e regras agregadas entre evento e reservas.
+- [ ] Tarefas, responsáveis e checklist operacional.
+- [ ] Custos, fornecedores, documentos e rentabilidade.
+- [ ] Eventos sem reserva visíveis no calendário.
+
+Nota: o primeiro passo reutiliza a entidade `events`, os clientes e as reservas
+existentes. Não cria dados duplicados nem apresenta como concluída a futura
+ficha operacional.
+
 ## 13. Definição de concluído
 
 Uma funcionalidade está concluída quando:
@@ -558,6 +587,27 @@ pnpm run db:generate
 - Empresas e critérios de sucesso para o primeiro grupo beta.
 
 ## 17. Histórico de iterações
+
+### 30 de Julho de 2026 — Fase 9, passo 1: estrutura e navegação de eventos
+
+- Adicionada a aba Eventos à navegação principal e à barra móvel, preservando
+  acesso às seis áreas do produto em ecrãs pequenos.
+- Criada página bilingue com indicadores de próximos eventos, preparação,
+  execução e conclusão, sempre calculados a partir dos dados da empresa.
+- Implementadas pesquisa por evento, cliente ou local, filtros por estado e
+  período e ordenação por data, criação ou nome.
+- Cada linha resume cliente, local, datas, montagem, quantidade de reservas e
+  valor agregado das reservas activas.
+- A criação reutiliza o formulário existente de clientes e eventos e respeita
+  a permissão `manageReservations`.
+- Não foram alterados o esquema nem a API; edição, ficha completa, tarefas e
+  regras de ciclo ficam explicitamente para os passos seguintes.
+- Adicionado um teste estrutural da navegação, relações reais, filtros e
+  comportamento mobile.
+- Validação: `node --test tests/rendered-html.test.mjs` (22 testes),
+  `tsc --noEmit --incremental false`,
+  `eslint . --ignore-pattern dist --ignore-pattern .next`,
+  `vinext build` e `git diff --check`.
 
 ### 30 de Julho de 2026 — Fase 8: lançamento controlado
 
