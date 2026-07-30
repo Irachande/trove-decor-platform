@@ -13,6 +13,7 @@
     "test:phase3-api": "node tests/phase3-api.integration.mjs",
     "test:phase4-api": "node tests/phase4-api.integration.mjs",
     "test:phase5-api": "node tests/phase5-api.integration.mjs",
+    "test:phase6-api": "node tests/phase6-api.integration.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit --incremental false",
     "db:generate": "drizzle-kit generate"

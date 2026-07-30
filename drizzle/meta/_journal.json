@@ -50,6 +50,13 @@
       "when": 1785399798803,
       "tag": "0006_confused_snowbird",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785411184953,
+      "tag": "0007_peaceful_moon_knight",
+      "breakpoints": true
     }
   ]
 }

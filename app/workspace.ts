@@ -18,6 +18,8 @@ export type WorkspacePermission =
   | "read"
   | "manageInventory"
   | "manageReservations"
+  | "manageNetworkListings"
+  | "manageNetworkRentals"
   | "manageCategories"
   | "manageProfile"
   | "manageTeam"
@@ -49,6 +51,8 @@ const PERMISSIONS: Record<WorkspacePermission, WorkspaceRole[]> = {
   read: ["owner", "manager", "inventory", "reservations", "viewer"],
   manageInventory: ["owner", "manager", "inventory"],
   manageReservations: ["owner", "manager", "reservations"],
+  manageNetworkListings: ["owner", "manager", "inventory"],
+  manageNetworkRentals: ["owner", "manager", "reservations"],
   manageCategories: ["owner", "manager", "inventory"],
   manageProfile: ["owner", "manager"],
   manageTeam: ["owner", "manager"],
@@ -256,6 +260,18 @@ export async function ensureWorkspaceDatabase() {
       "CREATE TABLE IF NOT EXISTS payment_webhook_events (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, request_id TEXT NOT NULL UNIQUE, event_type TEXT NOT NULL, payload_hash TEXT NOT NULL, status TEXT NOT NULL, processed_at TEXT NOT NULL)",
     ),
     db.prepare(
+      "CREATE TABLE IF NOT EXISTS marketplace_listings (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, item_id INTEGER NOT NULL, daily_price INTEGER NOT NULL, deposit INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'MZN', minimum_quantity INTEGER NOT NULL DEFAULT 1, maximum_quantity INTEGER NOT NULL DEFAULT 1, location TEXT NOT NULL DEFAULT '', latitude TEXT, longitude TEXT, delivery_options TEXT NOT NULL DEFAULT 'Pickup', terms TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, created_by_user_id INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (business_id, item_id))",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS rental_requests (id INTEGER PRIMARY KEY, listing_id INTEGER NOT NULL, owner_business_id INTEGER NOT NULL, requester_business_id INTEGER NOT NULL, quantity INTEGER NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Pending', unit_price INTEGER NOT NULL, deposit INTEGER NOT NULL DEFAULT 0, total INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'MZN', requester_note TEXT NOT NULL DEFAULT '', owner_note TEXT NOT NULL DEFAULT '', delivery_method TEXT NOT NULL DEFAULT 'Pickup', proposed_by_business_id INTEGER, payment_status TEXT NOT NULL DEFAULT 'Pending', deposit_status TEXT NOT NULL DEFAULT 'Pending', checked_out_at TEXT, returned_at TEXT, cancelled_at TEXT, created_by_user_id INTEGER, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS rental_reviews (id INTEGER PRIMARY KEY, rental_request_id INTEGER NOT NULL, reviewer_business_id INTEGER NOT NULL, reviewed_business_id INTEGER NOT NULL, rating INTEGER NOT NULL, comment TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, UNIQUE (rental_request_id, reviewer_business_id))",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS rental_disputes (id INTEGER PRIMARY KEY, rental_request_id INTEGER NOT NULL UNIQUE, opened_by_business_id INTEGER NOT NULL, reason TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Open', proposed_resolution TEXT NOT NULL DEFAULT '', proposed_by_business_id INTEGER, resolved_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    ),
+    db.prepare(
       "CREATE TABLE IF NOT EXISTS inventory_items (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL DEFAULT 1, name TEXT NOT NULL, category TEXT NOT NULL, quantity INTEGER NOT NULL, available INTEGER NOT NULL, status TEXT NOT NULL, tone TEXT NOT NULL, symbol TEXT NOT NULL, price INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'MZN', photo_url TEXT, storage_location TEXT NOT NULL DEFAULT '', condition TEXT NOT NULL DEFAULT 'Bom')",
     ),
     db.prepare(
@@ -317,6 +333,24 @@ export async function ensureWorkspaceDatabase() {
     ),
     db.prepare(
       "CREATE UNIQUE INDEX IF NOT EXISTS payment_webhook_request_idx ON payment_webhook_events (request_id)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS marketplace_listings_business_item_idx ON marketplace_listings (business_id, item_id)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS marketplace_listings_active_idx ON marketplace_listings (active, business_id, item_id)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS rental_requests_owner_status_dates_idx ON rental_requests (owner_business_id, status, start_date, end_date)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS rental_requests_requester_status_idx ON rental_requests (requester_business_id, status, updated_at)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS rental_reviews_request_reviewer_idx ON rental_reviews (rental_request_id, reviewer_business_id)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS rental_disputes_request_idx ON rental_disputes (rental_request_id)",
     ),
   ]);
 
@@ -496,6 +530,70 @@ export async function ensureWorkspaceDatabase() {
             AND line.business_id = NEW.business_id
             AND stock.available < line.quantity
         ) THEN RAISE(ABORT, 'INSUFFICIENT_PHYSICAL_STOCK') END;
+      END`),
+    db.prepare("DROP TRIGGER IF EXISTS rental_requests_accept_availability"),
+    db.prepare(`CREATE TRIGGER rental_requests_accept_availability
+      BEFORE UPDATE OF status ON rental_requests
+      WHEN NEW.status = 'Accepted' AND OLD.status != 'Accepted'
+      BEGIN
+        SELECT CASE
+          WHEN NEW.quantity <= 0 THEN RAISE(ABORT, 'INVALID_NETWORK_QUANTITY')
+          WHEN NOT EXISTS (
+            SELECT 1
+            FROM marketplace_listings AS listing
+            JOIN inventory_items AS stock
+              ON stock.id = listing.item_id
+             AND stock.business_id = listing.business_id
+            WHERE listing.id = NEW.listing_id
+              AND listing.business_id = NEW.owner_business_id
+              AND listing.active = 1
+          ) THEN RAISE(ABORT, 'NETWORK_LISTING_NOT_FOUND')
+          WHEN NEW.quantity > (
+            SELECT stock.quantity
+              - COALESCE((
+                SELECT SUM(line.quantity)
+                FROM reservation_items AS line
+                JOIN reservations AS reservation
+                  ON reservation.id = line.reservation_id
+                 AND reservation.business_id = line.business_id
+                WHERE line.business_id = NEW.owner_business_id
+                  AND line.item_id = listing.item_id
+                  AND reservation.status NOT IN ('Cancelled', 'Returned')
+                  AND reservation.date <= NEW.end_date
+                  AND reservation.end_date >= NEW.start_date
+              ), 0)
+              - COALESCE((
+                SELECT SUM(other.quantity)
+                FROM rental_requests AS other
+                WHERE other.owner_business_id = NEW.owner_business_id
+                  AND other.listing_id = NEW.listing_id
+                  AND other.id != NEW.id
+                  AND other.status IN ('Accepted', 'CheckedOut', 'Disputed')
+                  AND other.start_date <= NEW.end_date
+                  AND other.end_date >= NEW.start_date
+              ), 0)
+            FROM marketplace_listings AS listing
+            JOIN inventory_items AS stock
+              ON stock.id = listing.item_id
+             AND stock.business_id = listing.business_id
+            WHERE listing.id = NEW.listing_id
+          ) THEN RAISE(ABORT, 'INSUFFICIENT_NETWORK_AVAILABILITY')
+        END;
+      END`),
+    db.prepare("DROP TRIGGER IF EXISTS rental_requests_checkout_stock"),
+    db.prepare(`CREATE TRIGGER rental_requests_checkout_stock
+      BEFORE UPDATE OF status ON rental_requests
+      WHEN NEW.status = 'CheckedOut' AND OLD.status = 'Accepted'
+      BEGIN
+        SELECT CASE WHEN NEW.quantity > (
+          SELECT stock.available
+          FROM marketplace_listings AS listing
+          JOIN inventory_items AS stock
+            ON stock.id = listing.item_id
+           AND stock.business_id = listing.business_id
+          WHERE listing.id = NEW.listing_id
+            AND listing.business_id = NEW.owner_business_id
+        ) THEN RAISE(ABORT, 'INSUFFICIENT_NETWORK_PHYSICAL_STOCK') END;
       END`),
   ]);
 

@@ -41,6 +41,95 @@ type Invitation = { id: number; businessId: number; businessName: string; role: 
 type SubscriptionRecord = { id: number; plan: "Basic" | "Network"; pendingPlan?: "Basic" | "Network"; status: string; amount: number; currency: string; currentPeriodStart: string; currentPeriodEnd: string; graceUntil?: string; cancelAtPeriodEnd: boolean; provider: string; createdAt: string; updatedAt: string };
 type PaymentRecord = { id: number; provider: string; providerPaymentId?: string; reference: string; kind: string; plan: "Basic" | "Network"; amount: number; currency: string; status: string; checkoutUrl?: string; method?: string; paidAt?: string; failureReason?: string; receiptNumber?: string; createdAt: string; updatedAt: string };
 type BillingInfo = { provider: string; configured: boolean; catalog: Record<"Basic" | "Network", { amount: number; currency: string; collaboratorLimit: number | null; network: boolean }> };
+type NetworkListing = {
+  id: number;
+  ownerBusinessId: number;
+  itemId: number;
+  name: string;
+  category: string;
+  description: string;
+  tone: string;
+  symbol: string;
+  dailyPrice: number;
+  deposit: number;
+  currency: string;
+  minimumQuantity: number;
+  maximumQuantity: number;
+  location: string;
+  latitude?: string;
+  longitude?: string;
+  deliveryOptions: string;
+  terms: string;
+  ownerName: string;
+  ownerHandle: string;
+  ownerAvatarUrl?: string;
+  hasPhoto: boolean;
+  imageUrl?: string;
+  rating: number;
+  ratingCount: number;
+  available: number;
+  distanceKm: number | null;
+};
+type OwnNetworkListing = {
+  id: number;
+  itemId: number;
+  name: string;
+  category: string;
+  quantity: number;
+  dailyPrice: number;
+  deposit: number;
+  currency: string;
+  minimumQuantity: number;
+  maximumQuantity: number;
+  location: string;
+  latitude?: string;
+  longitude?: string;
+  deliveryOptions: string;
+  terms: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+type NetworkRequest = {
+  id: number;
+  listingId: number;
+  ownerBusinessId: number;
+  requesterBusinessId: number;
+  quantity: number;
+  startDate: string;
+  endDate: string;
+  status: string;
+  unitPrice: number;
+  deposit: number;
+  total: number;
+  currency: string;
+  requesterNote: string;
+  ownerNote: string;
+  deliveryMethod: string;
+  proposedByBusinessId?: number;
+  paymentStatus: string;
+  depositStatus: string;
+  checkedOutAt?: string;
+  returnedAt?: string;
+  cancelledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  itemId: number;
+  itemName: string;
+  ownerName: string;
+  requesterName: string;
+  disputeId?: number;
+  disputeOpenedByBusinessId?: number;
+  disputeReason?: string;
+  disputeStatus?: string;
+  proposedResolution?: string;
+  resolutionProposedByBusinessId?: number;
+  reviewId?: number;
+  myRating?: number;
+  myReview?: string;
+};
+type NetworkReview = { id: number; rentalRequestId: number; reviewerBusinessId: number; reviewedBusinessId: number; reviewerName: string; rating: number; comment: string; createdAt: string };
+type NetworkData = { listings: NetworkListing[]; ownListings: OwnNetworkListing[]; requests: NetworkRequest[]; reviews: NetworkReview[] };
 
 type Item = {
   id: number;
@@ -143,19 +232,18 @@ const seedProfile: Profile = {
   color: "#b75d3f",
 };
 
-const networkItems = [
-  { name: "Cadeira Ghost transparente", owner: "Aster Events", distance: "2,4 km", available: 42, price: "450 MZN / dia", symbol: "CG", tone: "mist", rating: "4.9" },
-  { name: "Candeeiro de mesa em latão", owner: "Gather & Glow", distance: "4,8 km", available: 12, price: "1 050 MZN / dia", symbol: "CL", tone: "gold", rating: "4.8" },
-  { name: "Tenda sailcloth branca", owner: "Marée Rentals", distance: "8,1 km", available: 2, price: "15 500 MZN / dia", symbol: "TS", tone: "ivory", rating: "5.0" },
-  { name: "Conjunto lounge em cana", owner: "Olive House", distance: "11 km", available: 3, price: "5 500 MZN / dia", symbol: "LC", tone: "sage", rating: "4.7" },
-];
-
 function formatMoney(value: number, currency = "MZN", language: Language = "pt") {
   return new Intl.NumberFormat(language === "pt" ? "pt-MZ" : "en-MZ", {
     style: "currency",
     currency,
     maximumFractionDigits: 0,
   }).format(value);
+}
+
+function offsetDate(days: number) {
+  const value = new Date();
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
 }
 
 function navItems(t: Translator): { id: View; label: string; icon: string }[] {
@@ -189,6 +277,22 @@ function reservationStatusLabel(status: string, t: Translator) {
   if (status === "Returned") return t("Devolvida", "Returned");
   if (status === "Cancelled") return t("Cancelada", "Cancelled");
   return t("Confirmada", "Confirmed");
+}
+
+function networkStatusLabel(status: string, t: Translator) {
+  const labels: Record<string, [string, string]> = {
+    Pending: ["Pendente", "Pending"],
+    Countered: ["Contraproposta", "Countered"],
+    Accepted: ["Aceite", "Accepted"],
+    Rejected: ["Rejeitado", "Rejected"],
+    Cancelled: ["Cancelado", "Cancelled"],
+    CheckedOut: ["Em aluguer", "Checked out"],
+    Returned: ["Devolvido", "Returned"],
+    Completed: ["Concluído", "Completed"],
+    Disputed: ["Em disputa", "Disputed"],
+  };
+  const label = labels[status] || [status, status];
+  return t(label[0], label[1]);
 }
 
 export default function DecorApp({ initialUser }: { initialUser: SessionUser }) {
@@ -235,7 +339,22 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [kitsOpen, setKitsOpen] = useState(false);
   const [importReport, setImportReport] = useState<ImportReport | null>(null);
   const [networkQuery, setNetworkQuery] = useState("");
-  const [requested, setRequested] = useState<string[]>([]);
+  const [networkListings, setNetworkListings] = useState<NetworkListing[]>([]);
+  const [ownNetworkListings, setOwnNetworkListings] = useState<OwnNetworkListing[]>([]);
+  const [networkRequests, setNetworkRequests] = useState<NetworkRequest[]>([]);
+  const [networkReviews, setNetworkReviews] = useState<NetworkReview[]>([]);
+  const [networkTab, setNetworkTab] = useState<"explore" | "listings" | "requests">("explore");
+  const [networkStart, setNetworkStart] = useState(() => offsetDate(1));
+  const [networkEnd, setNetworkEnd] = useState(() => offsetDate(3));
+  const [networkQuantity, setNetworkQuantity] = useState(1);
+  const [networkMaxPrice, setNetworkMaxPrice] = useState(0);
+  const [networkDistance, setNetworkDistance] = useState(50);
+  const [networkCoordinates, setNetworkCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [networkLoading, setNetworkLoading] = useState(false);
+  const [networkReloadToken, setNetworkReloadToken] = useState(0);
+  const [requestedListing, setRequestedListing] = useState<NetworkListing | null>(null);
+  const [managedNetworkListing, setManagedNetworkListing] = useState<OwnNetworkListing | null | undefined>(undefined);
+  const [managedNetworkRequest, setManagedNetworkRequest] = useState<NetworkRequest | null>(null);
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
   const [plan, setPlan] = useState<"Basic" | "Network">("Basic");
@@ -295,6 +414,61 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       });
   }, [reloadToken, activeBusinessId]);
 
+  useEffect(() => {
+    if (view !== "network" || !networkEnabled) return;
+    const timeout = window.setTimeout(() => {
+      setNetworkLoading(true);
+      const params = new URLSearchParams({
+        q: networkQuery,
+        start: networkStart,
+        end: networkEnd,
+        quantity: String(networkQuantity),
+        maxPrice: String(networkMaxPrice),
+        distance: String(networkDistance),
+      });
+      if (networkCoordinates) {
+        params.set("latitude", String(networkCoordinates.latitude));
+        params.set("longitude", String(networkCoordinates.longitude));
+      }
+      fetch(`/api/network?${params}`, {
+        headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+      })
+        .then(async (response) => {
+          const result = await response.json().catch(() => ({})) as NetworkData & { error?: string };
+          if (!response.ok) throw new Error(result.error || "Unable to load Trove Network");
+          return result;
+        })
+        .then((data) => {
+          setNetworkListings(data.listings || []);
+          setOwnNetworkListings(data.ownListings || []);
+          setNetworkRequests(data.requests || []);
+          setNetworkReviews(data.reviews || []);
+        })
+        .catch((error) => setToast(
+          error instanceof Error
+            ? error.message
+            : language === "pt"
+              ? "Não foi possível carregar a rede."
+              : "Unable to load the network.",
+        ))
+        .finally(() => setNetworkLoading(false));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [
+    view,
+    networkEnabled,
+    networkQuery,
+    networkStart,
+    networkEnd,
+    networkQuantity,
+    networkMaxPrice,
+    networkDistance,
+    networkCoordinates,
+    networkReloadToken,
+    activeBusinessId,
+    language,
+  ]);
+
   function changeLanguage(next: Language) {
     setLanguage(next);
     window.localStorage.setItem("trove-language", next);
@@ -320,13 +494,6 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       return a.name.localeCompare(b.name);
     });
   }, [items, query, filter, categoryFilter, sort]);
-
-  const filteredNetwork = useMemo(() => {
-    const normalized = networkQuery.toLowerCase();
-    return networkItems.filter((item) =>
-      `${item.name} ${item.owner}`.toLowerCase().includes(normalized),
-    );
-  }, [networkQuery]);
 
   const showToast = (message: string) => setToast(message);
 
@@ -363,6 +530,113 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
     } catch (error) {
       showToast(error instanceof Error ? error.message : t("Não foi possível guardar.", "Unable to save."));
       return false;
+    }
+  }
+
+  async function networkPersist(action: string, payload: unknown) {
+    try {
+      const response = await fetch("/api/network", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({ action, payload }),
+      });
+      const result = await response.json().catch(() => ({})) as { error?: string; requestId?: number; listingId?: number };
+      if (response.status === 401) {
+        window.location.href = "/signin-with-chatgpt?return_to=%2F";
+        return false;
+      }
+      if (response.status === 402) {
+        setView("plans");
+        throw new Error(t("Renove o plano Network para continuar.", "Renew the Network plan to continue."));
+      }
+      if (response.status === 403) {
+        if (String(result.error || "").includes("Network plan")) setView("plans");
+        throw new Error(result.error || t("A sua função não permite esta acção.", "Your role does not allow this action."));
+      }
+      if (!response.ok) {
+        const message = String(result.error || "Unable to save");
+        if (message.includes("no longer available") || message.includes("not available")) {
+          throw new Error(t("O artigo deixou de estar disponível para essas datas.", "The item is no longer available for those dates."));
+        }
+        throw new Error(message);
+      }
+      setNetworkReloadToken((value) => value + 1);
+      setReloadToken((value) => value + 1);
+      return result;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("Não foi possível guardar na rede.", "Unable to save to the network."));
+      return false;
+    }
+  }
+
+  function locateForNetwork() {
+    if (!navigator.geolocation) {
+      showToast(t("Este dispositivo não fornece localização.", "This device does not provide location."));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setNetworkCoordinates({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+        showToast(t("Pesquisa por distância activada", "Distance search enabled"));
+      },
+      () => showToast(t("Não foi possível obter a localização.", "Unable to get your location.")),
+      { enableHighAccuracy: false, maximumAge: 300_000, timeout: 10_000 },
+    );
+  }
+
+  async function publishNetworkListing(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const itemId = Number(form.get("itemId"));
+    const existing = ownNetworkListings.find((entry) => entry.itemId === itemId);
+    const result = await networkPersist("publishListing", {
+      id: existing?.id || Date.now(),
+      itemId,
+      dailyPrice: Number(form.get("dailyPrice") || 0),
+      deposit: Number(form.get("deposit") || 0),
+      minimumQuantity: Number(form.get("minimumQuantity") || 1),
+      maximumQuantity: Number(form.get("maximumQuantity") || 1),
+      location: String(form.get("location") || profile.location),
+      latitude: String(form.get("latitude") || ""),
+      longitude: String(form.get("longitude") || ""),
+      deliveryOptions: String(form.get("deliveryOptions") || "Pickup"),
+      terms: String(form.get("terms") || ""),
+    });
+    if (result) {
+      setManagedNetworkListing(undefined);
+      showToast(t("Artigo publicado na Trove Network", "Item published to Trove Network"));
+    }
+  }
+
+  async function createNetworkRequest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requestedListing) return;
+    const form = new FormData(event.currentTarget);
+    const result = await networkPersist("createRentalRequest", {
+      id: Date.now(),
+      listingId: requestedListing.id,
+      quantity: Number(form.get("quantity") || 1),
+      startDate: String(form.get("startDate") || networkStart),
+      endDate: String(form.get("endDate") || networkEnd),
+      deliveryMethod: String(form.get("deliveryMethod") || "Pickup"),
+      note: String(form.get("note") || ""),
+    });
+    if (result) {
+      setRequestedListing(null);
+      setNetworkTab("requests");
+      showToast(t("Pedido enviado à empresa proprietária", "Request sent to the owner business"));
+    }
+  }
+
+  async function runNetworkAction(action: string, payload: Record<string, unknown>, messagePt: string, messageEn: string) {
+    if (await networkPersist(action, payload)) {
+      showToast(t(messagePt, messageEn));
     }
   }
 
@@ -1042,14 +1316,38 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
             <Network
               plan={networkEnabled ? "Network" : "Basic"}
               t={t}
+              language={language}
               query={networkQuery}
               setQuery={setNetworkQuery}
-              items={filteredNetwork}
-              requested={requested}
-              onRequest={(name) => {
-                setRequested((current) => [...current, name]);
-                showToast(t(`Pedido enviado para ${name}`, `Request sent for ${name}`));
-              }}
+              listings={networkListings}
+              ownListings={ownNetworkListings}
+              requests={networkRequests}
+              reviews={networkReviews}
+              businessId={workspace?.id || 0}
+              tab={networkTab}
+              setTab={setNetworkTab}
+              startDate={networkStart}
+              setStartDate={setNetworkStart}
+              endDate={networkEnd}
+              setEndDate={setNetworkEnd}
+              quantity={networkQuantity}
+              setQuantity={setNetworkQuantity}
+              distance={networkDistance}
+              setDistance={setNetworkDistance}
+              maxPrice={networkMaxPrice}
+              setMaxPrice={setNetworkMaxPrice}
+              locationEnabled={Boolean(networkCoordinates)}
+              locate={locateForNetwork}
+              loading={networkLoading}
+              onRequest={setRequestedListing}
+              onPublish={(listing) => setManagedNetworkListing(listing || null)}
+              onToggle={(listing) => runNetworkAction(
+                "setListingActive",
+                { id: listing.id, active: !listing.active },
+                listing.active ? "Publicação pausada" : "Publicação reactivada",
+                listing.active ? "Listing paused" : "Listing reactivated",
+              )}
+              onManageRequest={setManagedNetworkRequest}
               openPlans={() => setView("plans")}
             />
           )}
@@ -1078,6 +1376,60 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         <button className={cls(view === "profile" && "active")} onClick={() => setView("profile")}><span>◇</span><small>{t("Perfil", "Profile")}</small></button>
       </nav>
       <input className="visually-hidden" ref={importRef} type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importInventory} />
+
+      {managedNetworkListing !== undefined && (
+        <Modal
+          wide
+          title={managedNetworkListing ? t("Editar publicação", "Edit listing") : t("Publicar artigo", "Publish item")}
+          subtitle={t("Defina preço, caução, quantidade, entrega e localização para a rede.", "Set price, deposit, quantity, delivery, and location for the network.")}
+          onClose={() => setManagedNetworkListing(undefined)}
+        >
+          <NetworkListingForm
+            t={t}
+            items={items}
+            listing={managedNetworkListing}
+            profileLocation={profile.location}
+            coordinates={networkCoordinates}
+            submit={publishNetworkListing}
+            close={() => setManagedNetworkListing(undefined)}
+          />
+        </Modal>
+      )}
+
+      {requestedListing && (
+        <Modal
+          title={t("Pedir aluguer", "Request rental")}
+          subtitle={`${requestedListing.name} · ${requestedListing.ownerName}`}
+          onClose={() => setRequestedListing(null)}
+        >
+          <NetworkRentalForm
+            t={t}
+            listing={requestedListing}
+            startDate={networkStart}
+            endDate={networkEnd}
+            quantity={networkQuantity}
+            submit={createNetworkRequest}
+            close={() => setRequestedListing(null)}
+          />
+        </Modal>
+      )}
+
+      {managedNetworkRequest && (
+        <Modal
+          wide
+          title={`${t("Pedido", "Request")} #${managedNetworkRequest.id}`}
+          subtitle={`${managedNetworkRequest.itemName} · ${managedNetworkRequest.ownerName} ↔ ${managedNetworkRequest.requesterName}`}
+          onClose={() => setManagedNetworkRequest(null)}
+        >
+          <NetworkRequestManager
+            t={t}
+            language={language}
+            request={networkRequests.find((entry) => entry.id === managedNetworkRequest.id) || managedNetworkRequest}
+            businessId={workspace?.id || 0}
+            action={runNetworkAction}
+          />
+        </Modal>
+      )}
 
       {addOpen && (
         <Modal title={t("Adicionar ao inventário", "Add to Inventory")} subtitle={t("Crie uma ficha completa que toda a equipa consegue consultar.", "Create a complete record your whole team can see.")} onClose={() => setAddOpen(false)}>
@@ -1462,26 +1814,238 @@ function Calendar({ language, t, reservations, openAdd, openDirectory, onEdit, o
   );
 }
 
-function Network({ plan, t, query, setQuery, items, requested, onRequest, openPlans }: { plan: string; t: Translator; query: string; setQuery: (value: string) => void; items: typeof networkItems; requested: string[]; onRequest: (name: string) => void; openPlans: () => void }) {
-  if (plan !== "Network") return <section className="locked-network"><div className="network-orbit">◎</div><span className="eyebrow">TROVE NETWORK</span><h1>{t("Mais inventário, sem mais armazém.", "More inventory, without more storage.")}</h1><p>{t("Pesquise decoradores verificados, veja disponibilidade e reserve o que precisa.", "Search trusted decorators, see availability, and reserve what you need.")}</p><button className="button-primary" onClick={openPlans}>{t("Explorar plano Network", "Explore Network plan")}</button></section>;
+function Network({
+  plan,
+  t,
+  language,
+  query,
+  setQuery,
+  listings,
+  ownListings,
+  requests,
+  reviews,
+  businessId,
+  tab,
+  setTab,
+  startDate,
+  setStartDate,
+  endDate,
+  setEndDate,
+  quantity,
+  setQuantity,
+  distance,
+  setDistance,
+  maxPrice,
+  setMaxPrice,
+  locationEnabled,
+  locate,
+  loading,
+  onRequest,
+  onPublish,
+  onToggle,
+  onManageRequest,
+  openPlans,
+}: {
+  plan: string;
+  t: Translator;
+  language: Language;
+  query: string;
+  setQuery: (value: string) => void;
+  listings: NetworkListing[];
+  ownListings: OwnNetworkListing[];
+  requests: NetworkRequest[];
+  reviews: NetworkReview[];
+  businessId: number;
+  tab: "explore" | "listings" | "requests";
+  setTab: (tab: "explore" | "listings" | "requests") => void;
+  startDate: string;
+  setStartDate: (value: string) => void;
+  endDate: string;
+  setEndDate: (value: string) => void;
+  quantity: number;
+  setQuantity: (value: number) => void;
+  distance: number;
+  setDistance: (value: number) => void;
+  maxPrice: number;
+  setMaxPrice: (value: number) => void;
+  locationEnabled: boolean;
+  locate: () => void;
+  loading: boolean;
+  onRequest: (listing: NetworkListing) => void;
+  onPublish: (listing?: OwnNetworkListing) => void;
+  onToggle: (listing: OwnNetworkListing) => void;
+  onManageRequest: (request: NetworkRequest) => void;
+  openPlans: () => void;
+}) {
+  if (plan !== "Network") return <section className="locked-network"><div className="network-orbit">◎</div><span className="eyebrow">TROVE NETWORK</span><h1>{t("Mais inventário, sem mais armazém.", "More inventory, without more storage.")}</h1><p>{t("Pesquise decoradores verificados, veja disponibilidade real e reserve o que precisa.", "Search trusted decorators, see real availability, and reserve what you need.")}</p><button className="button-primary" onClick={openPlans}>{t("Explorar plano Network", "Explore Network plan")}</button></section>;
+  const incoming = requests.filter((entry) => entry.ownerBusinessId === businessId);
+  const outgoing = requests.filter((entry) => entry.requesterBusinessId === businessId);
+  const activeRequests = requests.filter((entry) => !["Rejected", "Cancelled", "Completed"].includes(entry.status)).length;
   return (
     <>
-      <PageHeading eyebrow="TROVE NETWORK" title={t("Encontre perto de si.", "Find it nearby.")} detail={t("Alugue a decoradores da região e transforme stock parado em receita.", "Borrow locally and turn idle stock into income.")} action={<button className="button-secondary">{t("Meus pedidos", "My requests")} <span>3</span></button>} />
-      <section className="network-hero">
-        <div><span className="eyebrow">{t("PESQUISE 24.000+ PEÇAS LOCAIS", "SEARCH 24,000+ LOCAL PIECES")}</span><h2>{t("O que precisa o seu próximo evento?", "What does your next event need?")}</h2><label className="network-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Ex.: cadeiras ghost ou guardanapos de linho…", "Try ghost chairs or linen napkins…")} /><button>{t("Pesquisar", "Search")}</button></label><div className="popular-searches"><small>{t("Popular:", "Popular:")}</small>{[t("Plintos", "Plinths"), t("Cadeiras", "Chairs"), t("Jarras", "Bud vases"), t("Castiçais", "Candle holders")].map((term) => <button key={term} onClick={() => setQuery(term)}>{term}</button>)}</div></div>
-        <div className="network-map"><span className="map-road one" /><span className="map-road two" /><span className="map-road three" /><i className="map-pin p1">12</i><i className="map-pin p2">8</i><i className="map-pin p3">4</i><i className="map-you">YOU</i></div>
-      </section>
-      <div className="network-heading"><div><h2>{t("Disponível perto de Maputo", "Available near Maputo")}</h2><p>{t("Negócios verificados · Próximos 30 dias", "Verified businesses · Next 30 days")}</p></div><button className="button-secondary">{t("Até 25 km", "Within 25 km")}⌄</button></div>
-      <div className="network-grid">
-        {items.map((item) => (
-          <article className="network-card" key={item.name}>
-            <div className={cls("network-visual", item.tone)}><span>{item.symbol}</span><em>{item.available} {t("disponíveis", "available")}</em></div>
-            <div className="network-info"><div className="network-owner"><i>{item.owner.split(" ").map((word) => word[0]).join("").slice(0, 2)}</i><span><strong>{item.owner} <b>✓</b></strong><small>★ {item.rating} · {item.distance}</small></span></div><h3>{item.name}</h3><div className="network-price"><strong>{item.price}</strong><button disabled={requested.includes(item.name)} onClick={() => onRequest(item.name)}>{requested.includes(item.name) ? t("Pedido enviado ✓", "Requested ✓") : t("Ver datas", "Check dates")}</button></div></div>
-          </article>
-        ))}
+      <PageHeading
+        eyebrow="TROVE NETWORK"
+        title={t("Encontre perto de si.", "Find it nearby.")}
+        detail={t("Alugue a decoradores da região e transforme stock parado em receita.", "Rent from nearby decorators and turn idle stock into income.")}
+        action={<button className="button-primary" onClick={() => onPublish()}>{t("Publicar artigo", "Publish item")}</button>}
+      />
+      <div className="network-tabs" role="tablist">
+        <button className={cls(tab === "explore" && "active")} onClick={() => setTab("explore")}>{t("Explorar", "Explore")} <span>{listings.length}</span></button>
+        <button className={cls(tab === "listings" && "active")} onClick={() => setTab("listings")}>{t("Minhas publicações", "My listings")} <span>{ownListings.length}</span></button>
+        <button className={cls(tab === "requests" && "active")} onClick={() => setTab("requests")}>{t("Pedidos", "Requests")} <span>{activeRequests}</span></button>
       </div>
+
+      {tab === "explore" && <>
+        <section className="network-hero operational-network">
+          <div>
+            <span className="eyebrow">{t("INVENTÁRIO PARTILHADO ENTRE EMPRESAS", "INVENTORY SHARED BETWEEN BUSINESSES")}</span>
+            <h2>{t("O que precisa para o próximo evento?", "What do you need for the next event?")}</h2>
+            <label className="network-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Artigo, categoria, empresa ou localidade…", "Item, category, business, or location…")} /><button>{loading ? "…" : t("Pesquisar", "Search")}</button></label>
+            <div className="network-date-search">
+              <label>{t("Início", "Start")}<input type="date" value={startDate} min={offsetDate(0)} onChange={(event) => { setStartDate(event.target.value); if (event.target.value > endDate) setEndDate(event.target.value); }} /></label>
+              <label>{t("Fim", "End")}<input type="date" value={endDate} min={startDate} onChange={(event) => setEndDate(event.target.value)} /></label>
+              <label>{t("Quantidade", "Quantity")}<input type="number" min="1" max="100000" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /></label>
+              <label>{t("Preço máximo", "Max price")}<select value={maxPrice} onChange={(event) => setMaxPrice(Number(event.target.value))}><option value="0">{t("Qualquer", "Any")}</option><option value="1000">1 000 MZN</option><option value="5000">5 000 MZN</option><option value="20000">20 000 MZN</option><option value="50000">50 000 MZN</option></select></label>
+              <label>{t("Raio", "Radius")}<select value={distance} onChange={(event) => setDistance(Number(event.target.value))}><option value="10">10 km</option><option value="25">25 km</option><option value="50">50 km</option><option value="100">100 km</option><option value="500">500 km</option></select></label>
+              <button className={cls("location-button", locationEnabled && "active")} onClick={locate}>{locationEnabled ? t("Localização activa ✓", "Location active ✓") : t("Usar minha localização", "Use my location")}</button>
+            </div>
+          </div>
+          <div className="network-map"><span className="map-road one" /><span className="map-road two" /><span className="map-road three" /><i className="map-pin p1">{listings.length}</i><i className="map-pin p2">{incoming.length}</i><i className="map-pin p3">{outgoing.length}</i><i className="map-you">{locationEnabled ? "YOU" : "⌖"}</i></div>
+        </section>
+        <div className="network-heading"><div><h2>{t("Disponível para as datas escolhidas", "Available for the selected dates")}</h2><p>{t("A quantidade já desconta reservas internas e alugueres aceites.", "Quantity already excludes internal bookings and accepted rentals.")}</p></div><small>{loading ? t("A actualizar…", "Updating…") : `${listings.length} ${t("resultado(s)", "result(s)")}`}</small></div>
+        {listings.length ? <div className="network-grid">
+          {listings.map((item) => (
+            <article className="network-card" key={item.id}>
+              <div className={cls("network-visual", item.tone)}>{item.imageUrl ? <img src={item.imageUrl} alt={item.name} /> : <span>{item.symbol}</span>}<em>{item.available} {t("disponíveis", "available")}</em></div>
+              <div className="network-info">
+                <div className="network-owner"><i>{initials(item.ownerName)}</i><span><strong>{item.ownerName}</strong><small>{item.ratingCount ? `★ ${item.rating} · ${item.ratingCount} ${t("avaliações", "reviews")}` : t("Sem avaliações", "No reviews yet")}</small></span></div>
+                <h3>{item.name}</h3>
+                <p>{item.location}{item.distanceKm !== null ? ` · ${item.distanceKm.toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ")} km` : ""}</p>
+                <div className="network-terms"><span>{t("Caução", "Deposit")}: {formatMoney(item.deposit, item.currency, language)}</span><span>{item.deliveryOptions}</span></div>
+                <div className="network-price"><strong>{formatMoney(item.dailyPrice, item.currency, language)} <small>/ {t("dia", "day")}</small></strong><button onClick={() => onRequest(item)}>{t("Pedir datas", "Request dates")}</button></div>
+              </div>
+            </article>
+          ))}
+        </div> : <div className="network-empty"><span>◎</span><h3>{t("Nenhum artigo disponível", "No items available")}</h3><p>{t("Altere as datas, quantidade ou distância, ou convide outra empresa Network a publicar artigos.", "Change the dates, quantity, or distance, or invite another Network business to publish items.")}</p></div>}
+      </>}
+
+      {tab === "listings" && <section className="network-workspace">
+        <header><div><h2>{t("Artigos publicados", "Published items")}</h2><p>{t("Apenas os artigos activos aparecem às outras empresas.", "Only active items appear to other businesses.")}</p></div><button className="button-primary" onClick={() => onPublish()}>{t("Nova publicação", "New listing")}</button></header>
+        {ownListings.length ? <div className="network-listing-table">{ownListings.map((listing) => <article key={listing.id} className={cls(!listing.active && "paused")}>
+          <div><i>{listing.name.split(/\s+/).slice(0, 2).map((word) => word[0]).join("")}</i><span><strong>{listing.name}</strong><small>{listing.category} · {listing.location}</small></span></div>
+          <span><strong>{formatMoney(listing.dailyPrice, listing.currency, language)}</strong><small>/ {t("dia", "day")}</small></span>
+          <span><strong>{listing.minimumQuantity}–{listing.maximumQuantity}</strong><small>{t("unidades", "units")}</small></span>
+          <em className={listing.active ? "active" : ""}>{listing.active ? t("Publicada", "Live") : t("Pausada", "Paused")}</em>
+          <div><button onClick={() => onPublish(listing)}>{t("Editar", "Edit")}</button><button onClick={() => onToggle(listing)}>{listing.active ? t("Pausar", "Pause") : t("Reactivar", "Reactivate")}</button></div>
+        </article>)}</div> : <div className="network-empty"><span>▦</span><h3>{t("Ainda não publicou artigos", "No published items yet")}</h3><p>{t("Escolha artigos do inventário e defina as condições de aluguer.", "Choose inventory items and set their rental terms.")}</p><button className="button-primary" onClick={() => onPublish()}>{t("Publicar primeiro artigo", "Publish first item")}</button></div>}
+      </section>}
+
+      {tab === "requests" && <section className="network-requests">
+        <div className="request-column"><header><h2>{t("Recebidos", "Incoming")}</h2><span>{incoming.length}</span></header>{incoming.length ? incoming.map((request) => <NetworkRequestCard key={request.id} request={request} t={t} language={language} counterparty={request.requesterName} onOpen={() => onManageRequest(request)} />) : <div className="network-empty compact"><span>◇</span><p>{t("Ainda sem pedidos recebidos.", "No incoming requests yet.")}</p></div>}</div>
+        <div className="request-column"><header><h2>{t("Enviados", "Outgoing")}</h2><span>{outgoing.length}</span></header>{outgoing.length ? outgoing.map((request) => <NetworkRequestCard key={request.id} request={request} t={t} language={language} counterparty={request.ownerName} onOpen={() => onManageRequest(request)} />) : <div className="network-empty compact"><span>◇</span><p>{t("Ainda não enviou pedidos.", "No outgoing requests yet.")}</p></div>}</div>
+        {reviews.length > 0 && <aside className="network-reviews"><h3>{t("Avaliações recentes", "Recent reviews")}</h3>{reviews.slice(0, 4).map((review) => <blockquote key={review.id}><span>{"★".repeat(review.rating)}</span><p>{review.comment || t("Aluguer concluído sem comentário.", "Rental completed without a comment.")}</p><cite>{review.reviewerName}</cite></blockquote>)}</aside>}
+      </section>}
     </>
   );
+}
+
+function NetworkRequestCard({ request, t, language, counterparty, onOpen }: { request: NetworkRequest; t: Translator; language: Language; counterparty: string; onOpen: () => void }) {
+  return <button className="network-request-card" onClick={onOpen}>
+    <div><span className={cls("network-status", request.status.toLowerCase())}>{networkStatusLabel(request.status, t)}</span><time>{new Date(request.updatedAt).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")}</time></div>
+    <h3>{request.itemName}</h3>
+    <p>{counterparty} · {request.quantity} {t("un.", "units")}</p>
+    <small>{request.startDate} → {request.endDate}</small>
+    <strong>{formatMoney(request.total + request.deposit, request.currency, language)}</strong>
+  </button>;
+}
+
+function NetworkListingForm({ t, items, listing, profileLocation, coordinates, submit, close }: {
+  t: Translator;
+  items: Item[];
+  listing: OwnNetworkListing | null;
+  profileLocation: string;
+  coordinates: { latitude: number; longitude: number } | null;
+  submit: (event: FormEvent<HTMLFormElement>) => void;
+  close: () => void;
+}) {
+  const selected = items.find((item) => item.id === listing?.itemId) || items[0];
+  return <form onSubmit={submit} className="modal-form network-listing-form">
+    <label>{t("Artigo do inventário", "Inventory item")}<select name="itemId" defaultValue={listing?.itemId || selected?.id} disabled={Boolean(listing)} required>{items.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.quantity} {t("un.", "units")}</option>)}</select></label>
+    <div className="form-grid"><label>{t("Preço por dia (MZN)", "Daily price (MZN)")}<input name="dailyPrice" type="number" min="1" defaultValue={listing?.dailyPrice || selected?.price || 500} required /></label><label>{t("Caução (MZN)", "Deposit (MZN)")}<input name="deposit" type="number" min="0" defaultValue={listing?.deposit || selected?.replacementValue || 0} /></label></div>
+    <div className="form-grid"><label>{t("Quantidade mínima", "Minimum quantity")}<input name="minimumQuantity" type="number" min="1" max={selected?.quantity || 1} defaultValue={listing?.minimumQuantity || 1} required /></label><label>{t("Quantidade máxima", "Maximum quantity")}<input name="maximumQuantity" type="number" min="1" max={selected?.quantity || 1} defaultValue={listing?.maximumQuantity || selected?.quantity || 1} required /></label></div>
+    <label>{t("Local de recolha", "Pickup location")}<input name="location" defaultValue={listing?.location || profileLocation} required /></label>
+    <div className="form-grid coordinate-fields"><label>{t("Latitude opcional", "Optional latitude")}<input name="latitude" inputMode="decimal" defaultValue={listing?.latitude || coordinates?.latitude || ""} /></label><label>{t("Longitude opcional", "Optional longitude")}<input name="longitude" inputMode="decimal" defaultValue={listing?.longitude || coordinates?.longitude || ""} /></label></div>
+    <label>{t("Entrega", "Delivery")}<select name="deliveryOptions" defaultValue={listing?.deliveryOptions || "Pickup"}><option value="Pickup">{t("Recolha pelo cliente", "Customer pickup")}</option><option value="Delivery available">{t("Entrega disponível", "Delivery available")}</option><option value="Pickup or delivery">{t("Recolha ou entrega", "Pickup or delivery")}</option></select></label>
+    <label>{t("Condições", "Terms")}<textarea name="terms" rows={4} defaultValue={listing?.terms || ""} placeholder={t("Prazo de cancelamento, cuidados, transporte e devolução…", "Cancellation, care, transport, and return terms…")} /></label>
+    <p className="network-form-note">{t("A localização exacta só é usada para calcular distância entre empresas Network.", "Exact coordinates are only used to calculate distance between Network businesses.")}</p>
+    <div className="modal-actions"><button type="button" className="button-secondary" onClick={close}>{t("Cancelar", "Cancel")}</button><button className="button-primary" disabled={!items.length}>{t("Publicar na rede", "Publish to network")}</button></div>
+  </form>;
+}
+
+function NetworkRentalForm({ t, listing, startDate, endDate, quantity, submit, close }: {
+  t: Translator;
+  listing: NetworkListing;
+  startDate: string;
+  endDate: string;
+  quantity: number;
+  submit: (event: FormEvent<HTMLFormElement>) => void;
+  close: () => void;
+}) {
+  return <form onSubmit={submit} className="modal-form">
+    <div className="network-request-summary"><span><strong>{listing.available}</strong><small>{t("disponíveis", "available")}</small></span><span><strong>{formatMoney(listing.dailyPrice)}</strong><small>/ {t("dia", "day")}</small></span><span><strong>{formatMoney(listing.deposit)}</strong><small>{t("caução", "deposit")}</small></span></div>
+    <div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" min={offsetDate(0)} defaultValue={startDate} required /></label><label>{t("Fim", "End")}<input name="endDate" type="date" min={startDate} defaultValue={endDate} required /></label></div>
+    <label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min={listing.minimumQuantity} max={Math.min(listing.maximumQuantity, listing.available)} defaultValue={Math.min(Math.max(quantity, listing.minimumQuantity), listing.maximumQuantity, listing.available)} required /></label>
+    <label>{t("Entrega", "Delivery")}<select name="deliveryMethod" defaultValue={listing.deliveryOptions.includes("delivery") || listing.deliveryOptions.includes("Delivery") ? "Delivery" : "Pickup"}><option value="Pickup">{t("Recolha", "Pickup")}</option>{listing.deliveryOptions !== "Pickup" && <option value="Delivery">{t("Solicitar entrega", "Request delivery")}</option>}</select></label>
+    <label>{t("Mensagem à empresa", "Message to business")}<textarea name="note" rows={4} placeholder={t("Evento, horário e qualquer cuidado especial…", "Event, schedule, and any special requirements…")} /></label>
+    <p className="network-form-note">{t("O envio cria um pedido. O valor só é considerado confirmado depois da empresa proprietária aceitar e registar o pagamento.", "Submitting creates a request. The amount is only confirmed after the owner accepts and records payment.")}</p>
+    <div className="modal-actions"><button type="button" className="button-secondary" onClick={close}>{t("Cancelar", "Cancel")}</button><button className="button-primary">{t("Enviar pedido", "Send request")}</button></div>
+  </form>;
+}
+
+function NetworkRequestManager({ t, language, request, businessId, action }: {
+  t: Translator;
+  language: Language;
+  request: NetworkRequest;
+  businessId: number;
+  action: (action: string, payload: Record<string, unknown>, messagePt: string, messageEn: string) => Promise<void>;
+}) {
+  const isOwner = request.ownerBusinessId === businessId;
+  const isRequester = request.requesterBusinessId === businessId;
+  const canAccept = request.status === "Pending" && isOwner || request.status === "Countered" && request.proposedByBusinessId !== businessId;
+  const canCancel = isRequester && ["Pending", "Countered", "Accepted"].includes(request.status);
+  return <div className="network-request-manager">
+    <section className="request-overview">
+      <div><span>{t("Estado", "Status")}</span><strong className={cls("network-status", request.status.toLowerCase())}>{networkStatusLabel(request.status, t)}</strong></div>
+      <div><span>{t("Datas", "Dates")}</span><strong>{request.startDate} → {request.endDate}</strong></div>
+      <div><span>{t("Quantidade", "Quantity")}</span><strong>{request.quantity}</strong></div>
+      <div><span>{t("Aluguer", "Rental")}</span><strong>{formatMoney(request.total, request.currency, language)}</strong></div>
+      <div><span>{t("Caução", "Deposit")}</span><strong>{formatMoney(request.deposit, request.currency, language)}</strong></div>
+      <div><span>{t("Entrega", "Delivery")}</span><strong>{request.deliveryMethod}</strong></div>
+    </section>
+    {(request.requesterNote || request.ownerNote) && <div className="request-notes">{request.requesterNote && <p><strong>{request.requesterName}</strong>{request.requesterNote}</p>}{request.ownerNote && <p><strong>{request.ownerName}</strong>{request.ownerNote}</p>}</div>}
+    <div className="request-actions-primary">
+      {canAccept && <button className="button-primary" onClick={() => action("acceptRentalRequest", { id: request.id }, "Pedido aceite", "Request accepted")}>{t("Aceitar condições", "Accept terms")}</button>}
+      {isOwner && ["Pending", "Countered"].includes(request.status) && <button className="button-secondary" onClick={() => action("rejectRentalRequest", { id: request.id }, "Pedido rejeitado", "Request rejected")}>{t("Rejeitar", "Reject")}</button>}
+      {canCancel && <button className="button-secondary" onClick={() => action("cancelRentalRequest", { id: request.id }, "Pedido cancelado", "Request cancelled")}>{t("Cancelar pedido", "Cancel request")}</button>}
+      {isOwner && request.status === "Accepted" && <button className="button-primary" onClick={() => action("transitionRentalRequest", { id: request.id, status: "CheckedOut" }, "Recolha registada", "Collection recorded")}>{t("Registar recolha", "Record collection")}</button>}
+      {isOwner && ["CheckedOut", "Disputed"].includes(request.status) && request.checkedOutAt && !request.returnedAt && <button className="button-primary" onClick={() => action("transitionRentalRequest", { id: request.id, status: "Returned" }, "Devolução registada", "Return recorded")}>{t("Registar devolução", "Record return")}</button>}
+      {isOwner && request.status === "Returned" && <button className="button-primary" onClick={() => action("transitionRentalRequest", { id: request.id, status: "Completed" }, "Aluguer concluído", "Rental completed")}>{t("Concluir aluguer", "Complete rental")}</button>}
+    </div>
+    {isOwner && ["Pending", "Countered"].includes(request.status) && <details className="request-panel"><summary>{t("Fazer contraproposta", "Make a counteroffer")}</summary><form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("counterRentalRequest", { id: request.id, quantity: Number(form.get("quantity")), startDate: String(form.get("startDate")), endDate: String(form.get("endDate")), unitPrice: Number(form.get("unitPrice")), deposit: Number(form.get("deposit")), note: String(form.get("note")) }, "Contraproposta enviada", "Counteroffer sent"); }}>
+      <div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={request.startDate} required /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={request.endDate} required /></label></div>
+      <div className="form-grid"><label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min="1" defaultValue={request.quantity} required /></label><label>{t("Preço diário", "Daily price")}<input name="unitPrice" type="number" min="1" defaultValue={request.unitPrice} required /></label></div>
+      <label>{t("Caução", "Deposit")}<input name="deposit" type="number" min="0" defaultValue={request.deposit} /></label><label>{t("Nota", "Note")}<textarea name="note" rows={3} defaultValue={request.ownerNote} /></label><button className="button-primary">{t("Enviar contraproposta", "Send counteroffer")}</button>
+    </form></details>}
+    {isOwner && ["Accepted", "CheckedOut", "Returned", "Disputed", "Completed"].includes(request.status) && <details className="request-panel" open={request.status === "Accepted"}><summary>{t("Pagamento e caução", "Payment & deposit")}</summary><form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("updateRentalFinancials", { id: request.id, paymentStatus: String(form.get("paymentStatus")), depositStatus: String(form.get("depositStatus")) }, "Estado financeiro actualizado", "Financial status updated"); }}>
+      <div className="form-grid"><label>{t("Pagamento", "Payment")}<select name="paymentStatus" defaultValue={request.paymentStatus}><option value="Pending">{t("Pendente", "Pending")}</option><option value="Confirmed">{t("Confirmado manualmente", "Manually confirmed")}</option><option value="Refunded">{t("Reembolsado", "Refunded")}</option></select></label><label>{t("Caução", "Deposit")}<select name="depositStatus" defaultValue={request.depositStatus}><option value="Pending">{t("Pendente", "Pending")}</option><option value="Held">{t("Recebida", "Held")}</option><option value="Returned">{t("Devolvida", "Returned")}</option><option value="Retained">{t("Retida por acordo", "Retained by agreement")}</option></select></label></div><button className="button-primary">{t("Guardar confirmação", "Save confirmation")}</button><p>{t("Este registo confirma um pagamento feito fora da Trove; não movimenta dinheiro.", "This records an off-platform payment; it does not move money.")}</p>
+    </form></details>}
+    {!request.disputeId && ["Accepted", "CheckedOut", "Returned"].includes(request.status) && <details className="request-panel dispute"><summary>{t("Reportar problema", "Report a problem")}</summary><form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("openRentalDispute", { id: request.id, disputeId: Date.now(), reason: String(form.get("reason")) }, "Disputa registada", "Dispute opened"); }}><label>{t("Descreva o problema", "Describe the issue")}<textarea name="reason" rows={4} required /></label><button className="button-secondary">{t("Abrir disputa", "Open dispute")}</button></form></details>}
+    {request.disputeId && <section className="dispute-box"><span className="eyebrow">{t("RESOLUÇÃO DE DISPUTA", "DISPUTE RESOLUTION")}</span><p><strong>{t("Motivo:", "Reason:")}</strong> {request.disputeReason}</p><em>{request.disputeStatus}</em>
+      {request.disputeStatus !== "Resolved" && request.disputeOpenedByBusinessId !== businessId && <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("proposeDisputeResolution", { id: request.id, resolution: String(form.get("resolution")) }, "Resolução proposta", "Resolution proposed"); }}><label>{t("Proposta de resolução", "Resolution proposal")}<textarea name="resolution" rows={3} defaultValue={request.proposedResolution || ""} required /></label><button className="button-primary">{t("Propor resolução", "Propose resolution")}</button></form>}
+      {request.disputeStatus === "Proposed" && request.disputeOpenedByBusinessId === businessId && <div className="resolution-proposal"><p><strong>{t("Proposta:", "Proposal:")}</strong> {request.proposedResolution}</p><button className="button-primary" onClick={() => action("acceptDisputeResolution", { id: request.id }, "Disputa resolvida", "Dispute resolved")}>{t("Aceitar resolução", "Accept resolution")}</button></div>}
+    </section>}
+    {["Returned", "Completed"].includes(request.status) && !request.reviewId && <details className="request-panel"><summary>{t("Avaliar a outra empresa", "Review the other business")}</summary><form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("reviewRental", { id: request.id, reviewId: Date.now(), rating: Number(form.get("rating")), comment: String(form.get("comment")) }, "Avaliação publicada", "Review published"); }}><label>{t("Avaliação", "Rating")}<select name="rating" defaultValue="5"><option value="5">★★★★★</option><option value="4">★★★★</option><option value="3">★★★</option><option value="2">★★</option><option value="1">★</option></select></label><label>{t("Comentário", "Comment")}<textarea name="comment" rows={3} /></label><button className="button-primary">{t("Publicar avaliação", "Publish review")}</button></form></details>}
+  </div>;
 }
 
 function ProfileEditor({ t, profile, setProfile, save, saving }: { t: Translator; profile: Profile; setProfile: (profile: Profile) => void; save: () => void; saving: boolean }) {

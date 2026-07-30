@@ -227,3 +227,63 @@ test("phase 5 interface exposes live status, payment history and receipts", asyn
   assert.match(styles, /\.receipt/);
   assert.match(styles, /@media print/);
 });
+
+test("phase 6 network entities are durable and indexed by business", async () => {
+  const [schema, migration, workspace] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0007_peaceful_moon_knight.sql"),
+    source("app/workspace.ts"),
+  ]);
+
+  assert.match(schema, /export const marketplaceListings/);
+  assert.match(schema, /export const rentalRequests/);
+  assert.match(schema, /export const rentalReviews/);
+  assert.match(schema, /export const rentalDisputes/);
+  assert.match(migration, /CREATE TABLE `marketplace_listings`/);
+  assert.match(migration, /CREATE TABLE `rental_requests`/);
+  assert.match(migration, /CREATE TABLE `rental_reviews`/);
+  assert.match(migration, /CREATE TABLE `rental_disputes`/);
+  assert.match(workspace, /marketplace_listings_business_item_idx/);
+  assert.match(workspace, /rental_requests_owner_status_dates_idx/);
+  assert.match(workspace, /rental_requests_accept_availability/);
+  assert.match(workspace, /INSUFFICIENT_NETWORK_AVAILABILITY/);
+});
+
+test("phase 6 API enforces Network entitlements, availability, and participant ownership", async () => {
+  const [network, image] = await Promise.all([
+    source("app/api/network/route.ts"),
+    source("app/api/network-image/route.ts"),
+  ]);
+
+  assert.match(network, /NETWORK_PLAN_REQUIRED/);
+  assert.match(network, /manageNetworkListings/);
+  assert.match(network, /manageNetworkRentals/);
+  assert.match(network, /listingAvailability/);
+  assert.match(network, /assertParticipant/);
+  assert.match(network, /createRentalRequest/);
+  assert.match(network, /counterRentalRequest/);
+  assert.match(network, /updateRentalFinancials/);
+  assert.match(network, /acceptDisputeResolution/);
+  assert.match(image, /marketplace_listings/);
+  assert.match(image, /allowedPrefix/);
+});
+
+test("phase 6 interface replaces demo listings with the operational marketplace", async () => {
+  const [app, styles, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("package.json"),
+  ]);
+
+  assert.doesNotMatch(app, /const networkItems/);
+  assert.match(app, /function NetworkListingForm/);
+  assert.match(app, /function NetworkRentalForm/);
+  assert.match(app, /function NetworkRequestManager/);
+  assert.match(app, /Usar minha localização/);
+  assert.match(app, /Confirmado manualmente/);
+  assert.match(app, /RESOLUÇÃO DE DISPUTA/);
+  assert.match(styles, /\.network-tabs/);
+  assert.match(styles, /\.network-listing-table/);
+  assert.match(styles, /\.network-request-manager/);
+  assert.match(manifest, /"test:phase6-api"/);
+});

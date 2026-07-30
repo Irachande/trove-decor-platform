@@ -146,6 +146,22 @@ até serem configuradas as credenciais da conta comercial.
 - O teste não expira nem bloqueia escrita enquanto o provedor não estiver
   configurado, evitando bloquear empresas antes de existir uma forma de pagar.
 
+### Trove Network
+
+- Publicação voluntária de artigos do inventário com preço diário, caução,
+  quantidades, condições, entrega e localização.
+- Pesquisa multiempresa por nome, categoria, empresa, localidade, datas,
+  quantidade, preço e distância quando ambas as localizações possuem
+  coordenadas.
+- Disponibilidade calculada com reservas internas e alugueres Network aceites.
+- Pedidos entre empresas, contrapropostas, aceitação, rejeição e cancelamento.
+- Confirmação manual de pagamento e caução feitos fora da Trove.
+- Registo de recolha e devolução com actualização do stock e movimentos.
+- Avaliações recíprocas depois da devolução.
+- Disputas com motivo, proposta da contraparte e aceitação por quem abriu.
+- Fotografias publicadas servidas apenas a membros autenticados do plano
+  Network, sem expor o inventário privado da empresa proprietária.
+
 ### Infraestrutura
 
 - Aplicação React/Next executada através de Vinext.
@@ -174,7 +190,7 @@ até serem configuradas as credenciais da conta comercial.
 | Autenticação | Funcional no Sites | Usa Sign in with ChatGPT; fornecedor público definitivo continua pendente |
 | Multiempresa | Funcional | Consultas, alterações e imagens são isoladas por `business_id` |
 | Subscrições | Parcial | Motor, limites, checkout e webhooks funcionam; falta activar credenciais PaySuite reais |
-| Rede local | Demonstração | Os artigos e negócios são dados estáticos |
+| Rede local | Funcional (MVP) | Publicações, pesquisa, disponibilidade, negociação, aluguer, avaliações e disputas são reais; pagamento é confirmado manualmente |
 | Aplicação mobile | Parcial | Web responsiva; ainda não é PWA ou aplicação nativa |
 | Notificações | Parcial | Centro interno, lembretes e alertas com app aberta; falta email/push em segundo plano |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
@@ -193,6 +209,8 @@ Next.js / Vinext
    ├── /api/data
    ├── /api/billing/checkout
    ├── /api/billing/webhook
+   ├── /api/network
+   ├── /api/network-image
    ├── /api/item-image
    └── /api/profile-image
           │
@@ -208,6 +226,10 @@ Next.js / Vinext
 - `app/api/profile-image/route.ts`: armazenamento da fotografia do perfil.
 - `app/chatgpt-auth.ts`: utilitários de identidade do ambiente publicado.
 - `app/billing.ts`: catálogo de planos, cliente PaySuite e segurança de webhooks.
+- `app/api/network/route.ts`: pesquisa, publicações e ciclo de aluguer entre
+  empresas.
+- `app/api/network-image/route.ts`: acesso autenticado às fotografias
+  voluntariamente publicadas.
 - `app/workspace.ts`: criação de empresas, memberships e autorização.
 - `db/schema.ts`: entidades do banco de dados.
 - `drizzle/`: migrações do banco de dados.
@@ -222,6 +244,10 @@ Next.js / Vinext
 - `subscriptions`: plano, estado, período, tolerância e cancelamento.
 - `payments`: cobranças, estado, referência, checkout e recibo.
 - `payment_webhook_events`: idempotência e rastreio dos eventos PaySuite.
+- `marketplace_listings`: artigos publicados voluntariamente na rede.
+- `rental_requests`: pedidos, negociação, valores e ciclo de entrega/devolução.
+- `rental_reviews`: avaliações recíprocas por aluguer concluído.
+- `rental_disputes`: problema, proposta de resolução e aceitação.
 - `inventory_items`: artigos e quantidades, isolados por empresa.
 - `item_photos`: galeria de fotografias associada aos artigos.
 - `inventory_movements`: histórico de alterações de stock.
@@ -256,8 +282,10 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `events` — implementado
 - `reservations`
 - `reservation_items` — implementado
-- `marketplace_listings`
-- `rental_requests`
+- `marketplace_listings` — implementado
+- `rental_requests` — implementado
+- `rental_reviews` — implementado
+- `rental_disputes` — implementado
 - `payments` — implementado
 - `notifications` — implementado
 - `audit_logs` — implementado
@@ -368,11 +396,18 @@ para não bloquear o trabalho das empresas.
 
 ### Fase 6 — Trove Network
 
-- [ ] Publicação voluntária de artigos.
-- [ ] Pesquisa por distância, preço e disponibilidade.
-- [ ] Pedidos, aprovação e contrapropostas.
-- [ ] Pagamentos, cauções e devoluções.
-- [ ] Avaliações e resolução de conflitos.
+- [x] Publicação voluntária de artigos.
+- [x] Pesquisa por distância, preço e disponibilidade.
+- [x] Pedidos, aprovação e contrapropostas.
+- [x] Confirmação manual de pagamentos, cauções e devoluções.
+- [ ] Pagamentos intermediados, divisão e reembolsos automáticos.
+- [x] Avaliações e resolução de conflitos.
+
+Nota: devoluções e estado de caução estão implementados. Nesta primeira versão,
+as empresas pagam directamente entre si e a proprietária confirma manualmente
+pagamento e caução na Trove. Pagamento intermediado, divisão automática,
+reembolsos e retenção financeira dependem de contrato comercial, regras legais
+e suporte do provedor; não são apresentados como funcionalidade concluída.
 
 ### Fase 7 — Mobile e lançamento
 
@@ -419,8 +454,9 @@ pnpm run db:generate
 ## 16. Decisões pendentes
 
 - Fornecedor definitivo de autenticação.
-- Modelo do marketplace: contacto, comissão ou pagamento intermediado.
-- Regras de caução, cancelamento, danos e reembolso.
+- Comissão e pagamento intermediado no marketplace; o MVP usa contratação
+  directa entre empresas.
+- Regras legais e financeiras para caução, cancelamento, danos e reembolso.
 - Activação da conta comercial PaySuite e configuração segura das credenciais.
 - Estratégia PWA versus aplicações nativas.
 - Política de verificação das empresas da rede.
@@ -428,6 +464,38 @@ pnpm run db:generate
 - Fornecedor de push e gestão das respectivas chaves.
 
 ## 17. Histórico de iterações
+
+### 30 de Julho de 2026 — Fase 6: Trove Network operacional
+
+- Substituídos os artigos e negócios demonstrativos por publicações reais de
+  inventário, exclusivas do plano Network e autorizadas por função.
+- Cada publicação define preço diário em MZN, caução, quantidade mínima/máxima,
+  recolha ou entrega, termos, localidade e coordenadas opcionais.
+- Criada pesquisa por texto, datas, quantidade e raio, com distância geográfica
+  quando o dispositivo e a publicação possuem coordenadas.
+- A disponibilidade desconta reservas internas e alugueres Network aceites,
+  com gatilho transaccional que volta a validar stock no momento da aceitação.
+- Implementados pedidos recebidos/enviados, contrapropostas, aceitação,
+  rejeição, cancelamento, confirmação financeira manual, recolha e devolução.
+- Recolha e devolução actualizam o stock físico e criam movimentos de
+  inventário `network_out` e `network_return`.
+- Adicionadas avaliações recíprocas e disputas com proposta da contraparte e
+  confirmação de resolução pela empresa que abriu o problema.
+- Criadas as entidades `marketplace_listings`, `rental_requests`,
+  `rental_reviews` e `rental_disputes`, com a migração
+  `0007_peaceful_moon_knight.sql`.
+- Criada rota autenticada para fotografias da rede, validando a publicação e o
+  prefixo da empresa antes de ler do R2.
+- Adicionado teste integrado com duas empresas Network, cobrindo bloqueio do
+  plano Basic, publicação, pesquisa, distância, contraproposta, disponibilidade,
+  pagamento/caução manuais, recolha, disputa, resolução, devolução e avaliação.
+- Pagamento intermediado permanece pendente; o MVP regista apenas confirmações
+  de transacções feitas directamente entre as empresas.
+- Validação: `node tests/phase6-api.integration.mjs`,
+  `node --test tests/rendered-html.test.mjs` (15 testes), `vinext build`,
+  `tsc --noEmit --incremental false`,
+  `eslint . --ignore-pattern dist --ignore-pattern .next` e
+  `git diff --check`.
 
 ### 30 de Julho de 2026 — Fase 5: subscrições e facturação
 

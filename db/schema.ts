@@ -74,6 +74,86 @@ export const paymentWebhookEvents = sqliteTable("payment_webhook_events", {
   processedAt: text("processed_at").notNull(),
 });
 
+export const marketplaceListings = sqliteTable("marketplace_listings", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  itemId: integer("item_id").notNull(),
+  dailyPrice: integer("daily_price").notNull(),
+  deposit: integer("deposit").notNull().default(0),
+  currency: text("currency").notNull().default("MZN"),
+  minimumQuantity: integer("minimum_quantity").notNull().default(1),
+  maximumQuantity: integer("maximum_quantity").notNull().default(1),
+  location: text("location").notNull().default(""),
+  latitude: text("latitude"),
+  longitude: text("longitude"),
+  deliveryOptions: text("delivery_options").notNull().default("Pickup"),
+  terms: text("terms").notNull().default(""),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("marketplace_listings_business_item_idx").on(
+    table.businessId,
+    table.itemId,
+  ),
+]);
+
+export const rentalRequests = sqliteTable("rental_requests", {
+  id: integer("id").primaryKey(),
+  listingId: integer("listing_id").notNull(),
+  ownerBusinessId: integer("owner_business_id").notNull(),
+  requesterBusinessId: integer("requester_business_id").notNull(),
+  quantity: integer("quantity").notNull(),
+  startDate: text("start_date").notNull(),
+  endDate: text("end_date").notNull(),
+  status: text("status").notNull().default("Pending"),
+  unitPrice: integer("unit_price").notNull(),
+  deposit: integer("deposit").notNull().default(0),
+  total: integer("total").notNull(),
+  currency: text("currency").notNull().default("MZN"),
+  requesterNote: text("requester_note").notNull().default(""),
+  ownerNote: text("owner_note").notNull().default(""),
+  deliveryMethod: text("delivery_method").notNull().default("Pickup"),
+  proposedByBusinessId: integer("proposed_by_business_id"),
+  paymentStatus: text("payment_status").notNull().default("Pending"),
+  depositStatus: text("deposit_status").notNull().default("Pending"),
+  checkedOutAt: text("checked_out_at"),
+  returnedAt: text("returned_at"),
+  cancelledAt: text("cancelled_at"),
+  createdByUserId: integer("created_by_user_id"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const rentalReviews = sqliteTable("rental_reviews", {
+  id: integer("id").primaryKey(),
+  rentalRequestId: integer("rental_request_id").notNull(),
+  reviewerBusinessId: integer("reviewer_business_id").notNull(),
+  reviewedBusinessId: integer("reviewed_business_id").notNull(),
+  rating: integer("rating").notNull(),
+  comment: text("comment").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("rental_reviews_request_reviewer_idx").on(
+    table.rentalRequestId,
+    table.reviewerBusinessId,
+  ),
+]);
+
+export const rentalDisputes = sqliteTable("rental_disputes", {
+  id: integer("id").primaryKey(),
+  rentalRequestId: integer("rental_request_id").notNull().unique(),
+  openedByBusinessId: integer("opened_by_business_id").notNull(),
+  reason: text("reason").notNull(),
+  status: text("status").notNull().default("Open"),
+  proposedResolution: text("proposed_resolution").notNull().default(""),
+  proposedByBusinessId: integer("proposed_by_business_id"),
+  resolvedAt: text("resolved_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
 export const inventoryItems = sqliteTable("inventory_items", {
   id: integer("id").primaryKey(),
   businessId: integer("business_id").notNull().default(1),

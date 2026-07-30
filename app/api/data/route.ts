@@ -575,10 +575,17 @@ export async function POST(request: Request) {
       ]);
     } else if (action === "removeItem") {
       const itemId = integer(payload, "id", { min: 1 });
+      const networkHistory = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM rental_requests WHERE listing_id IN (SELECT id FROM marketplace_listings WHERE business_id = ? AND item_id = ?)",
+      ).bind(context.businessId, itemId).first<{ count: number }>();
+      if (networkHistory?.count) {
+        throw new Error("Items with Trove Network rental history cannot be deleted");
+      }
       const storedPhotos = await env.DB.prepare(
         "SELECT url FROM item_photos WHERE item_id = ? AND business_id = ?",
       ).bind(itemId, context.businessId).all<{ url: string }>();
       await env.DB.batch([
+        env.DB.prepare("DELETE FROM marketplace_listings WHERE item_id = ? AND business_id = ?").bind(itemId, context.businessId),
         env.DB.prepare("DELETE FROM item_photos WHERE item_id = ? AND business_id = ?").bind(itemId, context.businessId),
         env.DB.prepare("DELETE FROM inventory_movements WHERE item_id = ? AND business_id = ?").bind(itemId, context.businessId),
         env.DB.prepare("DELETE FROM maintenance_records WHERE item_id = ? AND business_id = ?").bind(itemId, context.businessId),
@@ -595,10 +602,20 @@ export async function POST(request: Request) {
           `UPDATE inventory_items SET status = ? WHERE business_id = ? AND id IN (${placeholders})`,
         ).bind(status, context.businessId, ...ids).run();
       } else {
+        const networkHistory = await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM rental_requests WHERE listing_id IN (
+            SELECT id FROM marketplace_listings
+            WHERE business_id = ? AND item_id IN (${placeholders})
+          )`,
+        ).bind(context.businessId, ...ids).first<{ count: number }>();
+        if (networkHistory?.count) {
+          throw new Error("Items with Trove Network rental history cannot be deleted");
+        }
         const storedPhotos = await env.DB.prepare(
           `SELECT url FROM item_photos WHERE business_id = ? AND item_id IN (${placeholders})`,
         ).bind(context.businessId, ...ids).all<{ url: string }>();
         await env.DB.batch([
+          env.DB.prepare(`DELETE FROM marketplace_listings WHERE business_id = ? AND item_id IN (${placeholders})`).bind(context.businessId, ...ids),
           env.DB.prepare(`DELETE FROM item_photos WHERE business_id = ? AND item_id IN (${placeholders})`).bind(context.businessId, ...ids),
           env.DB.prepare(`DELETE FROM inventory_movements WHERE business_id = ? AND item_id IN (${placeholders})`).bind(context.businessId, ...ids),
           env.DB.prepare(`DELETE FROM maintenance_records WHERE business_id = ? AND item_id IN (${placeholders})`).bind(context.businessId, ...ids),
