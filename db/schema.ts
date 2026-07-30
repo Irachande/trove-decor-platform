@@ -351,6 +351,40 @@ export const auditLogs = sqliteTable("audit_logs", {
   createdAt: text("created_at").notNull(),
 });
 
+export const pushSubscriptions = sqliteTable("push_subscriptions", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  userId: integer("user_id").notNull(),
+  endpoint: text("endpoint").notNull().unique(),
+  p256dh: text("p256dh").notNull(),
+  auth: text("auth").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const operationalEvents = sqliteTable("operational_events", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  userId: integer("user_id").notNull(),
+  severity: text("severity").notNull().default("error"),
+  source: text("source").notNull(),
+  message: text("message").notNull(),
+  route: text("route").notNull().default(""),
+  createdAt: text("created_at").notNull(),
+});
+
+export const betaFeedback = sqliteTable("beta_feedback", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  userId: integer("user_id").notNull(),
+  category: text("category").notNull(),
+  rating: integer("rating").notNull(),
+  message: text("message").notNull(),
+  status: text("status").notNull().default("New"),
+  createdAt: text("created_at").notNull(),
+});
+
 export const businessProfile = sqliteTable("business_profile", {
   id: integer("id").primaryKey(),
   businessId: integer("business_id").notNull().default(1).unique(),

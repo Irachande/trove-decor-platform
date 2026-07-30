@@ -77,6 +77,9 @@ até serem configuradas as credenciais da conta comercial.
 
 - Dashboard com indicadores de inventário, reservas e utilização.
 - Navegação responsiva para computador, tablet e telemóvel.
+- PWA instalável em computador, Android, iPhone e iPad através do navegador.
+- Indicador de ligação e cópia local recente, apenas para consulta, quando a
+  ligação falha.
 - Interface em português e inglês.
 - Tema personalizável para o perfil da empresa.
 - Página de planos Basic e Network.
@@ -119,7 +122,8 @@ até serem configuradas as credenciais da conta comercial.
 - Alteração de funções, remoção de membros e troca entre empresas autorizadas.
 - Centro de notificações internas com leitura individual ou em massa.
 - Lembretes internos para reservas nos três dias seguintes.
-- Alertas do navegador enquanto a aplicação está aberta.
+- Notificações Web Push em segundo plano, com activação explícita por
+  dispositivo e alerta de teste.
 - Histórico cronológico das alterações importantes e respectivos autores.
 - Perfil público com fotografia, biografia, contactos, localização e cor.
 - Persistência de perfil, inventário, reservas e categorias.
@@ -162,6 +166,15 @@ até serem configuradas as credenciais da conta comercial.
 - Fotografias publicadas servidas apenas a membros autenticados do plano
   Network, sem expor o inventário privado da empresa proprietária.
 
+### Operação e beta
+
+- Endpoint público mínimo de saúde da aplicação e da base de dados.
+- Registo autenticado e isolado por empresa de erros da interface.
+- Painel para proprietários e gestores com erros das últimas 24 horas,
+  dispositivos push activos e respostas beta.
+- Formulário bilingue de feedback beta com área, avaliação e comentário.
+- Página de erro recuperável que regista o incidente sem expor dados internos.
+
 ### Infraestrutura
 
 - Aplicação React/Next executada através de Vinext.
@@ -170,6 +183,9 @@ até serem configuradas as credenciais da conta comercial.
 - Drizzle ORM para a definição do esquema.
 - `read-excel-file` para leitura de ficheiros XLSX no navegador.
 - Alojamento privado através de OpenAI Sites.
+- Service worker próprio, manifesto PWA e cache que exclui todas as APIs e
+  páginas privadas.
+- Web Push cifrado com `aes128gcm` e autenticação VAPID P-256.
 - Código-fonte num repositório privado do GitHub.
 - Integração PaySuite para M‑Pesa, e‑Mola e cartões; credenciais reais pendentes.
 
@@ -191,15 +207,18 @@ até serem configuradas as credenciais da conta comercial.
 | Multiempresa | Funcional | Consultas, alterações e imagens são isoladas por `business_id` |
 | Subscrições | Parcial | Motor, limites, checkout e webhooks funcionam; falta activar credenciais PaySuite reais |
 | Rede local | Funcional (MVP) | Publicações, pesquisa, disponibilidade, negociação, aluguer, avaliações e disputas são reais; pagamento é confirmado manualmente |
-| Aplicação mobile | Parcial | Web responsiva; ainda não é PWA ou aplicação nativa |
-| Notificações | Parcial | Centro interno, lembretes e alertas com app aberta; falta email/push em segundo plano |
+| Aplicação mobile | Funcional (PWA) | Instalável; mantém consulta da última cópia local quando a ligação falha |
+| Notificações | Funcional (push) | Centro interno e Web Push em segundo plano; email transaccional continua pendente |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
-| Testes automatizados | Parcial | Testes estruturais e integração das APIs de reservas, equipa e facturação |
+| Monitorização | Funcional (MVP) | Saúde pública mínima, erros de interface e painel operacional por empresa |
+| Testes automatizados | Funcional (MVP) | 18 testes estruturais e integração das fases 3 a 7 |
 
 ## 7. Arquitectura actual
 
 ```text
 Navegador
+   ├── Manifesto PWA e service worker
+   ├── IndexedDB — cópia local não autoritativa
    │
    ▼
 Next.js / Vinext
@@ -211,6 +230,9 @@ Next.js / Vinext
    ├── /api/billing/webhook
    ├── /api/network
    ├── /api/network-image
+   ├── /api/push
+   ├── /api/operations
+   ├── /api/health
    ├── /api/item-image
    └── /api/profile-image
           │
@@ -230,6 +252,14 @@ Next.js / Vinext
   empresas.
 - `app/api/network-image/route.ts`: acesso autenticado às fotografias
   voluntariamente publicadas.
+- `app/api/push/route.ts`: subscrição de dispositivos e alertas de teste.
+- `app/web-push.ts`: assinatura VAPID, cifragem e entrega de Web Push.
+- `app/api/operations/route.ts`: erros de interface, feedback e painel
+  operacional isolado por empresa.
+- `app/api/health/route.ts`: verificação mínima e pública da aplicação e D1.
+- `app/offline-cache.ts`: cópia local não autoritativa para consulta.
+- `public/sw.js` e `public/manifest.webmanifest`: instalação, modo sem ligação
+  e recepção de push em segundo plano.
 - `app/workspace.ts`: criação de empresas, memberships e autorização.
 - `db/schema.ts`: entidades do banco de dados.
 - `drizzle/`: migrações do banco de dados.
@@ -262,6 +292,9 @@ Next.js / Vinext
 - `collaborators`: convites, validade, aceitação e revogação.
 - `notifications`: avisos e lembretes por utilizador e empresa.
 - `audit_logs`: histórico de alterações importantes e respectivos autores.
+- `push_subscriptions`: dispositivos autorizados por utilizador e empresa.
+- `operational_events`: sinais de erro da interface, isolados por empresa.
+- `beta_feedback`: avaliação e comentários enviados durante o beta.
 - `business_profile`: perfil de cada empresa.
 
 ## 9. Modelo de dados pretendido
@@ -289,6 +322,9 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `payments` — implementado
 - `notifications` — implementado
 - `audit_logs` — implementado
+- `push_subscriptions` — implementado
+- `operational_events` — implementado
+- `beta_feedback` — implementado
 
 Todas as entidades pertencentes a uma empresa deverão possuir `business_id` e
 ser filtradas e autorizadas no servidor.
@@ -375,9 +411,9 @@ produto para a distribuição fora do ambiente Sites.
 - [ ] Lembretes por email e push.
 - [x] Histórico de actividade.
 
-Nota: os links de convite podem ser copiados e partilhados, e os alertas do
-navegador funcionam com a aplicação aberta. O envio automático de email e push
-em segundo plano depende da escolha e configuração de um fornecedor externo.
+Nota: os links de convite podem ser copiados e partilhados. O push em segundo
+plano está concluído na Fase 7; este item combinado permanece aberto apenas
+porque o envio automático por email ainda depende da escolha de um fornecedor.
 
 ### Fase 5 — Subscrições
 
@@ -411,11 +447,18 @@ e suporte do provedor; não são apresentados como funcionalidade concluída.
 
 ### Fase 7 — Mobile e lançamento
 
-- [ ] PWA instalável.
-- [ ] Notificações push.
-- [ ] Funcionamento básico com ligação instável.
-- [ ] Testes automatizados e monitorização.
+- [x] PWA instalável.
+- [x] Notificações push.
+- [x] Funcionamento básico com ligação instável.
+- [x] Testes automatizados e monitorização.
 - [ ] Beta com empresas reais.
+
+Nota: sem ligação, a Trove apresenta a última cópia local apenas para consulta;
+alterações continuam a exigir internet para proteger a consistência do D1. O
+push exige autorização do utilizador e, no iPhone/iPad, instalação prévia no
+ecrã principal. A infraestrutura e o formulário de feedback estão prontos, mas
+o beta só será marcado como concluído depois de empresas reais serem convidadas
+e utilizarem a plataforma.
 
 ## 13. Definição de concluído
 
@@ -458,12 +501,42 @@ pnpm run db:generate
   directa entre empresas.
 - Regras legais e financeiras para caução, cancelamento, danos e reembolso.
 - Activação da conta comercial PaySuite e configuração segura das credenciais.
-- Estratégia PWA versus aplicações nativas.
+- Necessidade futura de aplicações nativas depois de medir o uso da PWA.
 - Política de verificação das empresas da rede.
 - Fornecedor e remetente verificado para email transaccional.
-- Fornecedor de push e gestão das respectivas chaves.
+- Empresas e critérios de sucesso para o primeiro grupo beta.
 
 ## 17. Histórico de iterações
+
+### 30 de Julho de 2026 — Fase 7: mobile e preparação do lançamento
+
+- Transformada a Trove numa PWA instalável com manifesto, ícones, atalhos e
+  service worker.
+- O service worker não armazena APIs nem páginas privadas; quando uma navegação
+  falha, abre uma página segura de modo sem ligação.
+- Criada uma cópia IndexedDB não autoritativa com contagens e dados recentes
+  para consulta; todas as operações de escrita são bloqueadas sem internet e a
+  aplicação actualiza quando a ligação regressa.
+- Implementado Web Push cifrado com `aes128gcm`, chaves VAPID P-256,
+  subscrição por utilizador/empresa, remoção de endpoints expirados e alerta de
+  teste imediatamente depois da activação.
+- As notificações internas de reservas e actividade também são enviadas aos
+  dispositivos push activos sem permitir que uma falha do serviço interrompa a
+  operação principal.
+- Criados endpoint de saúde, registo seguro de erros do cliente, página de erro
+  recuperável e painel operacional para proprietários e gestores.
+- Adicionado formulário bilingue de feedback beta; a realização do beta com
+  empresas reais permanece correctamente pendente.
+- Criadas as entidades `push_subscriptions`, `operational_events` e
+  `beta_feedback`, com a migração `0008_lovely_fabian_cortez.sql`.
+- Adicionado teste integrado da Fase 7 para saúde, autenticação, subscrição de
+  dispositivo, monitorização, feedback e remoção da subscrição, além de três
+  testes estruturais da PWA e Web Push.
+- Validação: `node tests/phase7-api.integration.mjs`,
+  `node --test tests/rendered-html.test.mjs` (18 testes),
+  `tsc --noEmit --incremental false`,
+  `eslint . --ignore-pattern dist --ignore-pattern .next`,
+  `vinext build` e `git diff --check`.
 
 ### 30 de Julho de 2026 — Fase 6: Trove Network operacional
 

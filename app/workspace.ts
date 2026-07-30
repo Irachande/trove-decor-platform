@@ -293,6 +293,15 @@ export async function ensureWorkspaceDatabase() {
       "CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER NOT NULL, user_id INTEGER, action TEXT NOT NULL, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL DEFAULT '', summary TEXT NOT NULL, created_at TEXT NOT NULL)",
     ),
     db.prepare(
+      "CREATE TABLE IF NOT EXISTS push_subscriptions (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, user_id INTEGER NOT NULL, endpoint TEXT NOT NULL UNIQUE, p256dh TEXT NOT NULL, auth TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS operational_events (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, user_id INTEGER NOT NULL, severity TEXT NOT NULL DEFAULT 'error', source TEXT NOT NULL, message TEXT NOT NULL, route TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS beta_feedback (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, user_id INTEGER NOT NULL, category TEXT NOT NULL, rating INTEGER NOT NULL, message TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'New', created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
       "CREATE TABLE IF NOT EXISTS item_photos (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, item_id INTEGER NOT NULL, url TEXT NOT NULL, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL)",
     ),
     db.prepare(
@@ -474,6 +483,18 @@ export async function ensureWorkspaceDatabase() {
     ),
     db.prepare(
       "CREATE INDEX IF NOT EXISTS audit_logs_business_date_idx ON audit_logs (business_id, created_at)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS push_subscriptions_endpoint_idx ON push_subscriptions (endpoint)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx ON push_subscriptions (business_id, user_id, enabled)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS operational_events_business_date_idx ON operational_events (business_id, created_at)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS beta_feedback_business_date_idx ON beta_feedback (business_id, created_at)",
     ),
   ]);
 

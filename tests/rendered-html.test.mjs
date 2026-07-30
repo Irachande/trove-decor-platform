@@ -287,3 +287,65 @@ test("phase 6 interface replaces demo listings with the operational marketplace"
   assert.match(styles, /\.network-request-manager/);
   assert.match(manifest, /"test:phase6-api"/);
 });
+
+test("phase 7 provides an installable and resilient PWA shell", async () => {
+  const [layout, manifest, worker, offline, cache] = await Promise.all([
+    source("app/layout.tsx"),
+    source("public/manifest.webmanifest"),
+    source("public/sw.js"),
+    source("public/offline.html"),
+    source("app/offline-cache.ts"),
+  ]);
+
+  assert.match(layout, /manifest: "\/manifest\.webmanifest"/);
+  assert.match(manifest, /"display": "standalone"/);
+  assert.match(manifest, /icon-512\.png/);
+  assert.match(worker, /self\.addEventListener\("push"/);
+  assert.match(worker, /caches\.match\("\/offline\.html"\)/);
+  assert.doesNotMatch(worker, /pathname\.startsWith\("\/api\/"\).*cache/i);
+  assert.match(offline, /apenas para consulta/);
+  assert.match(cache, /indexedDB\.open\("trove-offline"/);
+});
+
+test("phase 7 push, monitoring, and beta feedback are durable and tenant scoped", async () => {
+  const [schema, migration, workspace, push, operations, health, webPush] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0008_lovely_fabian_cortez.sql"),
+    source("app/workspace.ts"),
+    source("app/api/push/route.ts"),
+    source("app/api/operations/route.ts"),
+    source("app/api/health/route.ts"),
+    source("app/web-push.ts"),
+  ]);
+
+  assert.match(schema, /export const pushSubscriptions/);
+  assert.match(schema, /export const operationalEvents/);
+  assert.match(schema, /export const betaFeedback/);
+  assert.match(migration, /CREATE TABLE `push_subscriptions`/);
+  assert.match(workspace, /push_subscriptions_user_idx/);
+  assert.match(push, /authorize\(request\)/);
+  assert.match(push, /sendPushToUsers/);
+  assert.match(operations, /authorize\(request, "manageTeam"\)/);
+  assert.match(operations, /INSERT INTO beta_feedback/);
+  assert.match(health, /SELECT 1 AS healthy/);
+  assert.match(webPush, /Content-Encoding: aes128gcm/);
+  assert.match(webPush, /ECDH/);
+});
+
+test("phase 7 interface exposes installation, push, feedback, and operational status", async () => {
+  const [app, styles, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("package.json"),
+  ]);
+
+  assert.match(app, /function LaunchTools/);
+  assert.match(app, /beforeinstallprompt/);
+  assert.match(app, /pushManager\.subscribe/);
+  assert.match(app, /Feedback da fase beta/);
+  assert.match(app, /Estado operacional/);
+  assert.match(styles, /\.launch-tools/);
+  assert.match(styles, /\.connection-status/);
+  assert.match(styles, /\.operations-status/);
+  assert.match(manifest, /"test:phase7-api"/);
+});

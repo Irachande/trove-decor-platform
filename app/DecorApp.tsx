@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { loadOfflineSnapshot, saveOfflineSnapshot } from "./offline-cache";
 
 type View = "home" | "storage" | "calendar" | "network" | "profile" | "plans";
 type ItemStatus = "Available" | "Reserved" | "Rented";
@@ -130,6 +131,19 @@ type NetworkRequest = {
 };
 type NetworkReview = { id: number; rentalRequestId: number; reviewerBusinessId: number; reviewedBusinessId: number; reviewerName: string; rating: number; comment: string; createdAt: string };
 type NetworkData = { listings: NetworkListing[]; ownListings: OwnNetworkListing[]; requests: NetworkRequest[]; reviews: NetworkReview[] };
+type InstallPrompt = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+type OperationsStatus = {
+  status: string;
+  clientErrors24h: number;
+  latestClientError: string | null;
+  pushDevices: number;
+  pushConfigured: boolean;
+  feedbackEntries: number;
+  checkedAt: string;
+};
 
 type Item = {
   id: number;
@@ -296,7 +310,11 @@ function networkStatusLabel(status: string, t: Translator) {
 }
 
 export default function DecorApp({ initialUser }: { initialUser: SessionUser }) {
-  const [view, setView] = useState<View>("home");
+  const [view, setView] = useState<View>(() => {
+    if (typeof window === "undefined") return "home";
+    const requested = new URLSearchParams(window.location.search).get("view");
+    return ["storage", "calendar"].includes(requested || "") ? requested as View : "home";
+  });
   const [language, setLanguage] = useState<Language>(() => {
     if (typeof window === "undefined") return "pt";
     const saved = window.localStorage.getItem("trove-language");
@@ -330,6 +348,12 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [teamOpen, setTeamOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const [operationsStatus, setOperationsStatus] = useState<OperationsStatus | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<InstallPrompt | null>(null);
+  const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
+  const [pushState, setPushState] = useState<"idle" | "active" | "unsupported" | "unconfigured">("idle");
   const [selectedReceipt, setSelectedReceipt] = useState<PaymentRecord | null>(null);
   const [reserveOpen, setReserveOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
@@ -408,11 +432,109 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         if (data.subscription !== undefined) setSubscription(data.subscription || null);
         if (Array.isArray(data.payments)) setPayments(data.payments);
         if (data.billing) setBilling(data.billing);
+        if (data.workspace) {
+          saveOfflineSnapshot({
+            businessId: data.workspace.id,
+            businessName: data.workspace.name,
+            itemCount: data.items?.length || 0,
+            upcomingReservations: (data.reservations || []).filter(
+              (reservation) => reservation.endDate >= new Date().toISOString().slice(0, 10) && reservation.status !== "Cancelled",
+            ).length,
+            data,
+          }).catch(() => undefined);
+        }
       })
-      .catch(() => {
-        setToast("Não foi possível carregar o espaço da empresa.");
+      .catch(async () => {
+        const snapshot = await loadOfflineSnapshot().catch(() => undefined);
+        const cached = snapshot?.data as WorkspaceData | undefined;
+        if (cached?.workspace) {
+          if (Array.isArray(cached.items)) setItems(cached.items);
+          if (Array.isArray(cached.reservations)) setReservations(cached.reservations);
+          if (Array.isArray(cached.categories)) setCategories(cached.categories.map((entry) => entry.name));
+          if (cached.profile) setProfile({ ...seedProfile, ...cached.profile });
+          setWorkspace(cached.workspace);
+          setToast(language === "pt"
+            ? "A mostrar a última cópia guardada. Alterações indisponíveis sem ligação."
+            : "Showing the latest saved copy. Changes are unavailable offline.");
+          return;
+        }
+        setToast(language === "pt"
+          ? "Não foi possível carregar o espaço da empresa."
+          : "Unable to load the business workspace.");
       });
-  }, [reloadToken, activeBusinessId]);
+  }, [reloadToken, activeBusinessId, language]);
+
+  useEffect(() => {
+    const online = () => {
+      setIsOnline(true);
+      setReloadToken((value) => value + 1);
+    };
+    const offline = () => setIsOnline(false);
+    const beforeInstall = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPrompt);
+    };
+    const installed = () => setInstallPrompt(null);
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offline);
+    window.addEventListener("beforeinstallprompt", beforeInstall);
+    window.addEventListener("appinstalled", installed);
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    }
+    return () => {
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offline);
+      window.removeEventListener("beforeinstallprompt", beforeInstall);
+      window.removeEventListener("appinstalled", installed);
+    };
+  }, []);
+
+  useEffect(() => {
+    const report = (source: string, message: string) => {
+      fetch("/api/operations", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({
+          action: "clientError",
+          source,
+          message,
+          route: window.location.pathname,
+        }),
+      }).catch(() => undefined);
+    };
+    const onError = (event: ErrorEvent) => report("window-error", event.message || "Unknown client error");
+    const onRejection = (event: PromiseRejectionEvent) => report(
+      "unhandled-rejection",
+      event.reason instanceof Error ? event.reason.message : String(event.reason || "Unhandled promise rejection"),
+    );
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, [activeBusinessId]);
+
+  useEffect(() => {
+    if (!activeBusinessId || !isOnline) return;
+    fetch("/api/push", {
+      headers: { "x-trove-business-id": String(activeBusinessId) },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unable to load push status");
+        return await response.json() as { configured?: boolean; subscribed?: boolean };
+      })
+      .then((status) => {
+        if (!status.configured) setPushState("unconfigured");
+        else if (status.subscribed) setPushState("active");
+        else setPushState("idle");
+      })
+      .catch(() => undefined);
+  }, [activeBusinessId, isOnline]);
 
   useEffect(() => {
     if (view !== "network" || !networkEnabled) return;
@@ -499,6 +621,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
 
   async function persist(action: string, payload: unknown) {
     try {
+      if (!navigator.onLine) {
+        throw new Error(t("Esta alteração precisa de ligação à internet.", "This change requires an internet connection."));
+      }
       const response = await fetch("/api/data", {
         method: "POST",
         headers: {
@@ -680,14 +805,107 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   }
 
   async function enableBrowserAlerts() {
-    if (!("Notification" in window)) {
-      showToast(t("Este navegador não suporta alertas.", "This browser does not support alerts."));
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      setPushState("unsupported");
+      showToast(t("Este navegador não suporta notificações push.", "This browser does not support push notifications."));
       return;
     }
     const permission = await Notification.requestPermission();
-    showToast(permission === "granted"
-      ? t("Alertas activos enquanto a Trove estiver aberta.", "Alerts are active while Trove is open.")
-      : t("Permissão de alertas não concedida.", "Alert permission was not granted."));
+    if (permission !== "granted") {
+      showToast(t("Permissão de alertas não concedida.", "Alert permission was not granted."));
+      return;
+    }
+    try {
+      const configuration = await fetch("/api/push", {
+        headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+      }).then((response) => response.json()) as { configured?: boolean; publicKey?: string };
+      if (!configuration.configured || !configuration.publicKey) {
+        setPushState("unconfigured");
+        throw new Error(t("As chaves de push ainda não estão configuradas.", "Push keys are not configured yet."));
+      }
+      const registration = await navigator.serviceWorker.ready;
+      const applicationServerKey = Uint8Array.from(
+        atob(configuration.publicKey.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(configuration.publicKey.length / 4) * 4, "=")),
+        (character) => character.charCodeAt(0),
+      );
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+      const serialized = subscription.toJSON();
+      const response = await fetch("/api/push", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({
+          action: "subscribe",
+          endpoint: serialized.endpoint,
+          keys: serialized.keys,
+        }),
+      });
+      if (!response.ok) throw new Error(t("Não foi possível guardar este dispositivo.", "Unable to save this device."));
+      const testResponse = await fetch("/api/push", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({ action: "test" }),
+      });
+      if (!testResponse.ok) {
+        throw new Error(t("O dispositivo foi guardado, mas o alerta de teste falhou.", "The device was saved, but the test notification failed."));
+      }
+      setPushState("active");
+      showToast(t("Notificações em segundo plano activadas.", "Background notifications enabled."));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("Não foi possível activar as notificações.", "Unable to enable notifications."));
+    }
+  }
+
+  async function installApplication() {
+    if (!installPrompt) {
+      showToast(t("Use a opção “Adicionar ao ecrã principal” do navegador.", "Use the browser's “Add to Home Screen” option."));
+      return;
+    }
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    if (choice.outcome === "accepted") setInstallPrompt(null);
+  }
+
+  async function loadOperations() {
+    setOperationsOpen(true);
+    setOperationsStatus(null);
+    const response = await fetch("/api/operations", {
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+    });
+    if (response.ok) setOperationsStatus(await response.json() as OperationsStatus);
+  }
+
+  async function submitFeedback(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const response = await fetch("/api/operations", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+      },
+      body: JSON.stringify({
+        action: "feedback",
+        category: form.get("category"),
+        rating: Number(form.get("rating")),
+        message: form.get("message"),
+      }),
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      showToast(result.error || t("Não foi possível enviar o feedback.", "Unable to send feedback."));
+      return;
+    }
+    setFeedbackOpen(false);
+    showToast(t("Obrigado. O feedback foi registado.", "Thank you. Your feedback was recorded."));
   }
 
   useEffect(() => {
@@ -1236,6 +1454,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         <header className="topbar">
           <button className="mobile-logo" onClick={() => setView("home")}><span className="brand-mark"><i /><i /><i /></span>Trove</button>
           <div className="topbar-actions">
+            {!isOnline && <span className="connection-status" role="status">{t("Sem ligação · consulta", "Offline · read only")}</span>}
+            {installPrompt && <button className="install-action" onClick={installApplication}>{t("Instalar", "Install")}</button>}
             {workspaces.length > 1 && <select className="mobile-workspace-picker" aria-label={t("Empresa activa", "Active business")} value={workspace?.id || ""} onChange={(event) => switchWorkspace(Number(event.target.value))}>{workspaces.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>}
             <label className="language-picker" aria-label={t("Idioma", "Language")}><span>文</span><select value={language} onChange={(event) => changeLanguage(event.target.value as Language)}><option value="pt">PT</option><option value="en">EN</option></select></label>
             <button className="icon-button" aria-label={t("Pesquisar", "Search")} onClick={() => setView("storage")}>⌕</button>
@@ -1351,7 +1571,19 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
               openPlans={() => setView("plans")}
             />
           )}
-          {view === "profile" && <ProfileEditor t={t} profile={profile} setProfile={setProfile} save={canManageProfile ? saveProfile : () => showToast(t("A sua função não permite editar o perfil.", "Your role cannot edit the profile."))} saving={saving} />}
+          {view === "profile" && <>
+            <ProfileEditor t={t} profile={profile} setProfile={setProfile} save={canManageProfile ? saveProfile : () => showToast(t("A sua função não permite editar o perfil.", "Your role cannot edit the profile."))} saving={saving} />
+            <LaunchTools
+              t={t}
+              online={isOnline}
+              pushState={pushState}
+              canMonitor={canManageTeam}
+              install={installApplication}
+              enablePush={enableBrowserAlerts}
+              feedback={() => setFeedbackOpen(true)}
+              monitoring={loadOperations}
+            />
+          </>}
           {view === "plans" && <Plans
             t={t}
             language={language}
@@ -1549,6 +1781,29 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       {activityOpen && (
         <Modal wide title={t("Histórico de actividade", "Activity history")} subtitle={t("Registo cronológico das alterações importantes da empresa.", "Chronological record of important business changes.")} onClose={() => setActivityOpen(false)}>
           <ActivityLog entries={auditLogs} language={language} t={t} />
+        </Modal>
+      )}
+
+      {feedbackOpen && (
+        <Modal title={t("Feedback da fase beta", "Beta feedback")} subtitle={t("Conte-nos o que ajuda e o que deve melhorar antes do lançamento.", "Tell us what helps and what should improve before launch.")} onClose={() => setFeedbackOpen(false)}>
+          <form className="modal-form beta-feedback-form" onSubmit={submitFeedback}>
+            <div className="form-grid">
+              <label>{t("Área", "Area")}<select name="category" defaultValue="experience"><option value="experience">{t("Experiência geral", "Overall experience")}</option><option value="inventory">{t("Inventário", "Inventory")}</option><option value="reservations">{t("Reservas", "Reservations")}</option><option value="network">Trove Network</option><option value="other">{t("Outra", "Other")}</option></select></label>
+              <label>{t("Avaliação", "Rating")}<select name="rating" defaultValue="5"><option value="5">5 · {t("Excelente", "Excellent")}</option><option value="4">4 · {t("Boa", "Good")}</option><option value="3">3 · {t("Razoável", "Fair")}</option><option value="2">2 · {t("Fraca", "Poor")}</option><option value="1">1 · {t("Muito fraca", "Very poor")}</option></select></label>
+            </div>
+            <label>{t("Comentário", "Comment")}<textarea name="message" rows={6} minLength={10} maxLength={1200} placeholder={t("Descreva o fluxo, problema ou sugestão…", "Describe the workflow, issue, or suggestion…")} required /></label>
+            <div className="modal-actions"><button type="button" className="button-secondary" onClick={() => setFeedbackOpen(false)}>{t("Cancelar", "Cancel")}</button><button className="button-primary">{t("Enviar feedback", "Send feedback")}</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {operationsOpen && (
+        <Modal title={t("Estado operacional", "Operational status")} subtitle={t("Sinais técnicos das últimas 24 horas para esta empresa.", "Technical signals from the last 24 hours for this business.")} onClose={() => setOperationsOpen(false)}>
+          {operationsStatus ? <div className="operations-status">
+            <header><i /><span><strong>{t("Serviço operacional", "Service operational")}</strong><small>{new Date(operationsStatus.checkedAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ")}</small></span></header>
+            <div><article><strong>{operationsStatus.clientErrors24h}</strong><small>{t("erros de interface / 24 h", "interface errors / 24 h")}</small></article><article><strong>{operationsStatus.pushDevices}</strong><small>{t("dispositivos com push", "push-enabled devices")}</small></article><article><strong>{operationsStatus.feedbackEntries}</strong><small>{t("respostas beta", "beta responses")}</small></article></div>
+            <p>{operationsStatus.pushConfigured ? t("O serviço de notificações está configurado.", "The notification service is configured.") : t("As chaves de notificações ainda não estão configuradas.", "Notification keys are not configured yet.")}</p>
+          </div> : <div className="manager-empty">◇<strong>{t("A verificar o serviço…", "Checking the service…")}</strong></div>}
         </Modal>
       )}
 
@@ -2048,6 +2303,27 @@ function NetworkRequestManager({ t, language, request, businessId, action }: {
   </div>;
 }
 
+function LaunchTools({ t, online, pushState, canMonitor, install, enablePush, feedback, monitoring }: {
+  t: Translator;
+  online: boolean;
+  pushState: "idle" | "active" | "unsupported" | "unconfigured";
+  canMonitor: boolean;
+  install: () => void;
+  enablePush: () => void;
+  feedback: () => void;
+  monitoring: () => void;
+}) {
+  return <section className="launch-tools card">
+    <header><div><span className="eyebrow">{t("MOBILE E LANÇAMENTO", "MOBILE & LAUNCH")}</span><h2>{t("Trove no seu dispositivo", "Trove on your device")}</h2><p>{t("Instale a aplicação, receba alertas em segundo plano e ajude a preparar o beta.", "Install the app, receive background alerts, and help prepare the beta.")}</p></div><span className={cls("connection-badge", online ? "online" : "offline")}>{online ? t("Ligado", "Online") : t("Só consulta", "Read only")}</span></header>
+    <div>
+      <article><i>▣</i><span><strong>{t("Aplicação instalável", "Installable app")}</strong><small>{t("Abra a Trove a partir do ecrã principal.", "Open Trove from your home screen.")}</small></span><button className="button-secondary" onClick={install}>{t("Instalar", "Install")}</button></article>
+      <article><i>♢</i><span><strong>{t("Notificações push", "Push notifications")}</strong><small>{pushState === "active" ? t("Este dispositivo está activo.", "This device is active.") : t("Alertas de reservas e actividade, mesmo em segundo plano.", "Reservation and activity alerts, even in the background.")}</small></span><button className="button-secondary" onClick={enablePush}>{pushState === "active" ? t("Activo", "Active") : t("Activar", "Enable")}</button></article>
+      <article><i>◎</i><span><strong>{t("Programa beta", "Beta programme")}</strong><small>{t("Partilhe uma dificuldade ou sugestão com a equipa.", "Share an issue or suggestion with the team.")}</small></span><button className="button-secondary" onClick={feedback}>{t("Dar feedback", "Give feedback")}</button></article>
+      {canMonitor && <article><i>↗</i><span><strong>{t("Estado operacional", "Operational status")}</strong><small>{t("Erros recentes, dispositivos push e respostas beta.", "Recent errors, push devices, and beta responses.")}</small></span><button className="button-secondary" onClick={monitoring}>{t("Consultar", "View")}</button></article>}
+    </div>
+  </section>;
+}
+
 function ProfileEditor({ t, profile, setProfile, save, saving }: { t: Translator; profile: Profile; setProfile: (profile: Profile) => void; save: () => void; saving: boolean }) {
   const colors = ["#b75d3f", "#78836a", "#ba914d", "#3f5f68", "#755f72", "#303634"];
   const update = (key: keyof Profile, value: string) => setProfile({ ...profile, [key]: value });
@@ -2300,7 +2576,7 @@ function NotificationCenter({ notifications, language, t, onRead, onReadAll, onE
       <i>{notification.type === "reminder" ? "□" : notification.type === "team" ? "◎" : "◇"}</i>
       <span><strong>{language === "pt" ? notification.titlePt : notification.titleEn}</strong><small>{language === "pt" ? notification.bodyPt : notification.bodyEn}</small><em>{new Date(notification.createdAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ", { dateStyle: "medium", timeStyle: "short" })}</em></span>
     </button>) : <div className="manager-empty">◇<strong>{t("Sem notificações", "No notifications")}</strong></div>}</div>
-    <p>{t("Os alertas do navegador funcionam enquanto a Trove está aberta. Email e push em segundo plano dependem do fornecedor de comunicação.", "Browser alerts work while Trove is open. Background email and push depend on the communication provider.")}</p>
+    <p>{t("Depois de activar, as reservas e actividades importantes podem chegar mesmo com a Trove em segundo plano. No iPhone ou iPad, instale primeiro a aplicação no ecrã principal.", "Once enabled, important reservations and activity can arrive while Trove is in the background. On iPhone or iPad, install the app to the home screen first.")}</p>
   </div>;
 }
 

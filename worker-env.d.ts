@@ -6,6 +6,9 @@ declare namespace Cloudflare {
     PAYSUITE_API_TOKEN?: string;
     PAYSUITE_WEBHOOK_SECRET?: string;
     PAYSUITE_API_URL?: string;
+    VAPID_PUBLIC_KEY?: string;
+    VAPID_PRIVATE_KEY?: string;
+    VAPID_SUBJECT?: string;
     IMAGES: {
       input(stream: ReadableStream): {
         transform(options: Record<string, unknown>): {

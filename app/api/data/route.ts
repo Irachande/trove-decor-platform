@@ -5,6 +5,7 @@ import {
   type WorkspacePermission,
 } from "../../workspace";
 import { paymentConfiguration, PLAN_CATALOG } from "../../billing";
+import { sendPushToUsers } from "../../web-push";
 
 type Payload = Record<string, unknown>;
 type ImportedItem = {
@@ -241,6 +242,15 @@ async function notifyBusinessMembers(
       ),
     ),
   );
+  await sendPushToUsers(
+    members.results.map((member) => member.userId),
+    {
+      title: titlePt,
+      body: bodyPt,
+      url: "/",
+      tag: sourceKey,
+    },
+  ).catch(() => undefined);
 }
 
 async function ensureReservationReminders(
