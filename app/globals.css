@@ -203,7 +203,18 @@ h1, h2, h3, p { margin-top: 0; }
 .event-status.inprogress { color: #526448; background: #e4eadf; }
 .event-status.completed { color: #5c654f; background: #e8ece4; }
 .event-status.cancelled { color: #7b6f6b; background: #ece9e7; }
+.event-status.archived { color: #6b6b68; background: #e2e1dd; }
 .event-calendar-button { border: 0; background: none; color: var(--muted); font-size: 19px; cursor: pointer; }
+.event-record-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 13px; border-left: 4px solid var(--event); border-radius: 9px; background: #f8f5ef; }
+.event-record-summary span { display: grid; gap: 4px; }
+.event-record-summary small { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .06em; }
+.event-record-summary strong { font: 400 17px Georgia, serif; }
+.event-linked-bookings { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; }
+.event-linked-bookings h3 { font: 400 15px Georgia, serif; }
+.event-linked-bookings article { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 8px; border-top: 1px solid #ebe6de; }
+.event-linked-bookings article span { display: grid; gap: 3px; }
+.event-linked-bookings article small, .event-linked-bookings article em { color: var(--muted); font-size: 8px; font-style: normal; }
+.event-manager-actions { flex-wrap: wrap; }
 .events-empty { min-height: 300px; display: grid; place-items: center; align-content: center; text-align: center; color: var(--muted); padding: 45px 20px; }
 .events-empty > span { font: 400 38px Georgia, serif; color: var(--gold); }
 .events-empty h3 { margin: 12px 0 5px; color: var(--ink); font: 400 21px Georgia, serif; }
@@ -835,6 +846,8 @@ h1, h2, h3, p { margin-top: 0; }
   .event-stat-grid { grid-template-columns: 1fr 1fr; gap: 9px; }
   .event-stat-grid article { min-height: 82px; padding: 12px; }
   .event-stat-grid i { width: 35px; height: 35px; }
+  .event-record-summary { grid-template-columns: 1fr; }
+  .event-manager-actions button { flex: 1 1 45%; }
   .storage-grid, .network-grid { grid-template-columns: 1fr; }
   .item-visual, .network-visual { height: 175px; }
   .reservation-item-picker > label { grid-template-columns: 18px 40px 1fr 55px; padding-inline: 7px; }

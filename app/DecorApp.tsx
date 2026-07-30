@@ -175,7 +175,29 @@ type KitEntry = { id: number; kitId: number; itemId: number; quantity: number };
 type Kit = { id: number; name: string; description: string; price: number; currency: string; active: boolean; createdAt: string; items: KitEntry[] };
 type ImportReport = { title: string; detail: string; errors: string[] };
 type Client = { id: number; name: string; email: string; phone: string; notes: string; createdAt: string };
-type EventRecord = { id: number; clientId: number; name: string; venue: string; startDate: string; endDate: string; setupTime: string; pickupTime: string; notes: string; status: string; createdAt: string };
+type EventRecord = {
+  id: number;
+  clientId: number;
+  ownerUserId?: number;
+  name: string;
+  eventType: string;
+  venue: string;
+  address: string;
+  startDate: string;
+  endDate: string;
+  setupTime: string;
+  pickupTime: string;
+  guestCount: number;
+  budget: number;
+  currency: string;
+  onSiteContact: string;
+  color: string;
+  notes: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+};
 type ReservationItem = { id: number; reservationId: number; itemId: number; itemName: string; quantity: number; unitPrice: number; currency: string };
 type WorkspaceData = {
   items?: Item[];
@@ -319,6 +341,7 @@ function eventStatusLabel(status: string, t: Translator) {
     InProgress: ["Em execução", "In progress"],
     Completed: ["Concluído", "Completed"],
     Cancelled: ["Cancelado", "Cancelled"],
+    Archived: ["Arquivado", "Archived"],
   };
   const label = labels[status] || [status, status];
   return t(label[0], label[1]);
@@ -393,6 +416,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [reserveOpen, setReserveOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [managedReservation, setManagedReservation] = useState<Reservation | null>(null);
+  const [managedEvent, setManagedEvent] = useState<EventRecord | null>(null);
   const [directoryOpen, setDirectoryOpen] = useState(false);
   const [managedItem, setManagedItem] = useState<Item | null>(null);
   const [kitsOpen, setKitsOpen] = useState(false);
@@ -1221,17 +1245,72 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       id: Date.now(),
       clientId: Number(form.get("clientId")),
       name: String(form.get("name") || ""),
+      eventType: String(form.get("eventType") || "Other"),
       venue: String(form.get("venue") || ""),
+      address: "",
       startDate: String(form.get("startDate") || ""),
       endDate: String(form.get("endDate") || ""),
       setupTime: String(form.get("setupTime") || ""),
       pickupTime: String(form.get("pickupTime") || ""),
+      guestCount: Number(form.get("guestCount") || 0),
+      budget: 0,
+      currency: "MZN",
+      onSiteContact: "",
+      color: "#b75d3f",
       notes: String(form.get("notes") || ""),
       status: "Planned",
     })) {
       formElement.reset();
       setReloadToken((value) => value + 1);
       showToast(t("Evento adicionado", "Event added"));
+    }
+  }
+
+  async function saveManagedEvent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!managedEvent || !canManageReservations) return;
+    const form = new FormData(event.currentTarget);
+    if (await persist("updateEvent", {
+      id: managedEvent.id,
+      clientId: Number(form.get("clientId")),
+      ownerUserId: Number(form.get("ownerUserId")) || null,
+      name: String(form.get("name") || ""),
+      eventType: String(form.get("eventType") || "Other"),
+      venue: String(form.get("venue") || ""),
+      address: String(form.get("address") || ""),
+      startDate: String(form.get("startDate") || ""),
+      endDate: String(form.get("endDate") || ""),
+      setupTime: String(form.get("setupTime") || ""),
+      pickupTime: String(form.get("pickupTime") || ""),
+      guestCount: Number(form.get("guestCount") || 0),
+      budget: Number(form.get("budget") || 0),
+      currency: String(form.get("currency") || "MZN"),
+      onSiteContact: String(form.get("onSiteContact") || ""),
+      color: String(form.get("color") || "#b75d3f"),
+      notes: String(form.get("notes") || ""),
+      status: String(form.get("status") || "Planned"),
+    })) {
+      setManagedEvent(null);
+      setReloadToken((value) => value + 1);
+      showToast(t("Ficha do evento actualizada", "Event record updated"));
+    }
+  }
+
+  async function duplicateManagedEvent() {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("duplicateEvent", { sourceId: managedEvent.id, id: Date.now() })) {
+      setManagedEvent(null);
+      setReloadToken((value) => value + 1);
+      showToast(t("Evento duplicado sem copiar reservas", "Event duplicated without copying bookings"));
+    }
+  }
+
+  async function archiveManagedEvent() {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("archiveEvent", { id: managedEvent.id })) {
+      setManagedEvent(null);
+      setReloadToken((value) => value + 1);
+      showToast(t("Evento arquivado", "Event archived"));
     }
   }
 
@@ -1610,6 +1689,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
               ? setDirectoryOpen(true)
               : showToast(t("A sua função não permite criar eventos.", "Your role cannot create events."))}
             openCalendar={() => setView("calendar")}
+            openEvent={setManagedEvent}
           />}
           {view === "calendar" && <Calendar
             language={language}
@@ -1808,6 +1888,24 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       {directoryOpen && (
         <Modal wide title={t("Clientes e eventos", "Clients & events")} subtitle={t("Mantenha os contactos e próximos trabalhos organizados.", "Keep contacts and upcoming jobs organized.")} onClose={() => setDirectoryOpen(false)}>
           <RelationshipManager clients={clients} events={events} t={t} onAddClient={saveDirectoryClient} onAddEvent={saveDirectoryEvent} />
+        </Modal>
+      )}
+
+      {managedEvent && (
+        <Modal wide title={managedEvent.name} subtitle={t("Ficha operacional completa do evento.", "Complete operational event record.")} onClose={() => setManagedEvent(null)}>
+          <EventManager
+            event={managedEvent}
+            clients={clients}
+            members={activeMembers}
+            reservations={reservations.filter((reservation) => reservation.eventId === managedEvent.id)}
+            language={language}
+            t={t}
+            canManage={canManageReservations}
+            onSubmit={saveManagedEvent}
+            onDuplicate={duplicateManagedEvent}
+            onArchive={archiveManagedEvent}
+            onCancel={() => setManagedEvent(null)}
+          />
         </Modal>
       )}
 
@@ -2172,11 +2270,48 @@ function RelationshipManager({ clients, events, t, onAddClient, onAddEvent }: { 
   const today = new Date().toISOString().slice(0, 10);
   return <div className="relationship-manager">
     <section><form className="operation-form" onSubmit={onAddClient}><h3>{t("Novo cliente", "New client")}</h3><label>{t("Nome", "Name")}<input name="name" required /></label><div className="form-grid"><label>Email<input name="email" type="email" /></label><label>{t("Telefone", "Phone")}<input name="phone" /></label></div><label>{t("Notas", "Notes")}<textarea name="notes" rows={2} /></label><button className="button-primary">{t("Adicionar cliente", "Add client")}</button></form><div className="directory-list"><h3>{t("Clientes", "Clients")} <span>{clients.length}</span></h3>{clients.map((client) => <article key={client.id}><i>{initials(client.name)}</i><span><strong>{client.name}</strong><small>{client.phone || client.email || t("Sem contacto", "No contact")}</small></span></article>)}</div></section>
-    <section><form className="operation-form" onSubmit={onAddEvent}><h3>{t("Novo evento", "New event")}</h3><label>{t("Cliente", "Client")}<select name="clientId" required disabled={!clients.length}><option value="">{t("Seleccione…", "Select…")}</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>{t("Nome do evento", "Event name")}<input name="name" required /></label><label>{t("Local", "Venue")}<input name="venue" /></label><div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={today} required /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={today} required /></label></div><div className="form-grid"><label>{t("Montagem", "Setup")}<input name="setupTime" type="time" /></label><label>{t("Recolha", "Pickup")}<input name="pickupTime" type="time" /></label></div><label>{t("Notas", "Notes")}<textarea name="notes" rows={2} /></label><button className="button-primary" disabled={!clients.length}>{t("Adicionar evento", "Add event")}</button></form><div className="directory-list"><h3>{t("Eventos", "Events")} <span>{events.length}</span></h3>{events.map((entry) => <article key={entry.id}><i>□</i><span><strong>{entry.name}</strong><small>{entry.startDate} · {entry.venue || t("Local por definir", "Venue not set")}</small></span><em>{entry.status}</em></article>)}</div></section>
+    <section><form className="operation-form" onSubmit={onAddEvent}><h3>{t("Novo evento", "New event")}</h3><label>{t("Cliente", "Client")}<select name="clientId" required disabled={!clients.length}><option value="">{t("Seleccione…", "Select…")}</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><div className="form-grid"><label>{t("Nome do evento", "Event name")}<input name="name" required /></label><label>{t("Tipo", "Type")}<select name="eventType" defaultValue="Wedding"><option value="Wedding">{t("Casamento", "Wedding")}</option><option value="Corporate">{t("Corporativo", "Corporate")}</option><option value="Birthday">{t("Aniversário", "Birthday")}</option><option value="Other">{t("Outro", "Other")}</option></select></label></div><label>{t("Local", "Venue")}<input name="venue" /></label><div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={today} required /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={today} required /></label></div><div className="form-grid"><label>{t("Montagem", "Setup")}<input name="setupTime" type="time" /></label><label>{t("Recolha", "Pickup")}<input name="pickupTime" type="time" /></label></div><label>{t("Convidados estimados", "Estimated guests")}<input name="guestCount" type="number" min="0" defaultValue="0" /></label><label>{t("Notas", "Notes")}<textarea name="notes" rows={2} /></label><button className="button-primary" disabled={!clients.length}>{t("Adicionar evento", "Add event")}</button></form><div className="directory-list"><h3>{t("Eventos", "Events")} <span>{events.length}</span></h3>{events.filter((entry) => entry.status !== "Archived").map((entry) => <article key={entry.id}><i>□</i><span><strong>{entry.name}</strong><small>{entry.startDate} · {entry.venue || t("Local por definir", "Venue not set")}</small></span><em>{eventStatusLabel(entry.status, t)}</em></article>)}</div></section>
   </div>;
 }
 
-function Events({ language, t, events, clients, reservations, canManage, openCreate, openCalendar }: {
+function EventManager({ event, clients, members, reservations, language, t, canManage, onSubmit, onDuplicate, onArchive, onCancel }: {
+  event: EventRecord;
+  clients: Client[];
+  members: Member[];
+  reservations: Reservation[];
+  language: Language;
+  t: Translator;
+  canManage: boolean;
+  onSubmit: (formEvent: FormEvent<HTMLFormElement>) => void;
+  onDuplicate: () => void;
+  onArchive: () => void;
+  onCancel: () => void;
+}) {
+  const activeReservations = reservations.filter((entry) => !["Cancelled", "Returned"].includes(entry.status));
+  const total = reservations.filter((entry) => entry.status !== "Cancelled").reduce((sum, entry) => sum + (entry.total || 0), 0);
+  const canArchive = ["Completed", "Cancelled"].includes(event.status) && !activeReservations.length;
+  const statuses = ["Lead", "Planned", "Confirmed", "Preparing", "InProgress", "Completed", "Cancelled"];
+  return <form className="modal-form event-manager" onSubmit={onSubmit}>
+    <section className="event-record-summary" style={{ "--event": event.color || "#b75d3f" } as React.CSSProperties}>
+      <span><small>{t("Reservas ligadas", "Linked bookings")}</small><strong>{reservations.length}</strong></span>
+      <span><small>{t("Reservas activas", "Active bookings")}</small><strong>{activeReservations.length}</strong></span>
+      <span><small>{t("Total reservado", "Booked total")}</small><strong>{formatMoney(total, reservations[0]?.currency || event.currency || "MZN", language)}</strong></span>
+    </section>
+    <div className="form-grid"><label>{t("Cliente", "Client")}<select name="clientId" defaultValue={event.clientId} required disabled={!canManage}>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>{t("Responsável", "Owner")}<select name="ownerUserId" defaultValue={event.ownerUserId || ""} disabled={!canManage}><option value="">{t("Por atribuir", "Unassigned")}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.displayName || member.email}</option>)}</select></label></div>
+    <div className="form-grid"><label>{t("Nome do evento", "Event name")}<input name="name" defaultValue={event.name} required disabled={!canManage} /></label><label>{t("Tipo", "Type")}<select name="eventType" defaultValue={event.eventType || "Other"} disabled={!canManage}><option value="Wedding">{t("Casamento", "Wedding")}</option><option value="Corporate">{t("Corporativo", "Corporate")}</option><option value="Birthday">{t("Aniversário", "Birthday")}</option><option value="Social">{t("Social", "Social")}</option><option value="Other">{t("Outro", "Other")}</option></select></label></div>
+    <div className="form-grid"><label>{t("Local", "Venue")}<input name="venue" defaultValue={event.venue} disabled={!canManage} /></label><label>{t("Contacto no local", "On-site contact")}<input name="onSiteContact" defaultValue={event.onSiteContact || ""} disabled={!canManage} /></label></div>
+    <label>{t("Endereço", "Address")}<input name="address" defaultValue={event.address || ""} disabled={!canManage} /></label>
+    <div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={event.startDate} required disabled={!canManage} /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={event.endDate} required disabled={!canManage} /></label></div>
+    <div className="form-grid"><label>{t("Hora de montagem", "Setup time")}<input name="setupTime" type="time" defaultValue={event.setupTime} disabled={!canManage} /></label><label>{t("Hora de recolha", "Pickup time")}<input name="pickupTime" type="time" defaultValue={event.pickupTime} disabled={!canManage} /></label></div>
+    <div className="form-grid three"><label>{t("Convidados", "Guests")}<input name="guestCount" type="number" min="0" defaultValue={event.guestCount || 0} disabled={!canManage} /></label><label>{t("Orçamento", "Budget")}<input name="budget" type="number" min="0" defaultValue={event.budget || 0} disabled={!canManage} /></label><label>{t("Moeda", "Currency")}<select name="currency" defaultValue={event.currency || "MZN"} disabled={!canManage}><option value="MZN">MZN</option><option value="ZAR">ZAR</option><option value="USD">USD</option><option value="EUR">EUR</option></select></label></div>
+    <div className="form-grid"><label>{t("Estado", "Status")}<select name="status" defaultValue={event.status} disabled={!canManage}>{statuses.map((status) => <option key={status} value={status}>{eventStatusLabel(status, t)}</option>)}</select></label><label>{t("Cor no calendário", "Calendar color")}<input name="color" type="color" defaultValue={event.color || "#b75d3f"} disabled={!canManage} /></label></div>
+    <label>{t("Notas operacionais", "Operational notes")}<textarea name="notes" rows={4} defaultValue={event.notes} disabled={!canManage} /></label>
+    {reservations.length > 0 && <section className="event-linked-bookings"><h3>{t("Reservas associadas", "Linked bookings")}</h3>{reservations.map((reservation) => <article key={reservation.id}><span><strong>{reservation.item}</strong><small>{reservation.date} — {reservation.endDate}</small></span><em>{reservationStatusLabel(reservation.status, t)}</em></article>)}</section>}
+    <div className="modal-actions event-manager-actions"><button type="button" className="button-secondary" onClick={onCancel}>{t("Fechar", "Close")}</button>{canManage && <button type="button" className="button-secondary" onClick={onDuplicate}>{t("Duplicar evento", "Duplicate event")}</button>}{canManage && <button type="button" className="button-secondary danger-outline" onClick={onArchive} disabled={!canArchive} title={!canArchive ? t("Conclua ou cancele o evento e feche as reservas activas.", "Complete or cancel the event and close active bookings.") : ""}>{t("Arquivar", "Archive")}</button>}{canManage && event.status !== "Archived" && <button className="button-primary">{t("Guardar alterações", "Save changes")}</button>}</div>
+  </form>;
+}
+
+function Events({ language, t, events, clients, reservations, canManage, openCreate, openCalendar, openEvent }: {
   language: Language;
   t: Translator;
   events: EventRecord[];
@@ -2185,6 +2320,7 @@ function Events({ language, t, events, clients, reservations, canManage, openCre
   canManage: boolean;
   openCreate: () => void;
   openCalendar: () => void;
+  openEvent: (event: EventRecord) => void;
 }) {
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("All");
@@ -2209,7 +2345,7 @@ function Events({ language, t, events, clients, reservations, canManage, openCre
     .map(eventSummary)
     .filter(({ event, client }) => {
       const matchesQuery = !normalizedQuery || `${event.name} ${event.venue} ${client?.name || ""}`.toLowerCase().includes(normalizedQuery);
-      const matchesStatus = status === "All" || event.status === status;
+      const matchesStatus = status === "All" ? event.status !== "Archived" : event.status === status;
       const matchesPeriod = period === "all" ||
         (period === "upcoming" ? event.endDate >= today : event.endDate < today);
       return matchesQuery && matchesStatus && matchesPeriod;
@@ -2219,7 +2355,7 @@ function Events({ language, t, events, clients, reservations, canManage, openCre
       if (sort === "newest") return b.event.createdAt.localeCompare(a.event.createdAt);
       return a.event.startDate.localeCompare(b.event.startDate);
     });
-  const upcoming = events.filter((entry) => entry.endDate >= today && !["Completed", "Cancelled"].includes(entry.status)).length;
+  const upcoming = events.filter((entry) => entry.endDate >= today && !["Completed", "Cancelled", "Archived"].includes(entry.status)).length;
   const preparing = events.filter((entry) => entry.endDate >= today && activeStatuses.includes(entry.status)).length;
   const inProgress = events.filter((entry) => entry.status === "InProgress").length;
   const completed = events.filter((entry) => entry.status === "Completed").length;
@@ -2255,7 +2391,7 @@ function Events({ language, t, events, clients, reservations, canManage, openCre
           <span className="event-dates"><small>{t("Período", "Schedule")}</small><strong>{start.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { day: "numeric", month: "short" })} — {end.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { day: "numeric", month: "short" })}</strong><em>{event.setupTime ? `${t("Montagem", "Setup")} ${event.setupTime}` : t("Horário por definir", "Time not set")}</em></span>
           <span className="event-bookings"><small>{t("Reservas", "Bookings")}</small><strong>{linked.length}</strong><em>{linked.length ? formatMoney(total, linked[0].currency || "MZN", language) : t("Sem material associado", "No inventory linked")}</em></span>
           <span className={cls("event-status", event.status.toLowerCase())}>{eventStatusLabel(event.status, t)}</span>
-          <button className="event-calendar-button" onClick={openCalendar} aria-label={t(`Ver ${event.name} no calendário`, `View ${event.name} in calendar`)}>›</button>
+          <button className="event-calendar-button" onClick={() => openEvent(event)} aria-label={t(`Abrir ficha de ${event.name}`, `Open ${event.name} record`)}>›</button>
         </article>;
       })}</div> : <div className="events-empty"><span>◫</span><h3>{events.length ? t("Nenhum evento corresponde aos filtros", "No events match the filters") : t("Comece pelo primeiro evento", "Start with your first event")}</h3><p>{events.length ? t("Altere a pesquisa, o estado ou o período.", "Change the search, status, or period.") : t("Crie o evento e depois associe clientes, reservas e artigos.", "Create the event, then connect clients, bookings, and inventory.")}</p>{!events.length && canManage && <button className="button-primary" onClick={openCreate}>{t("Criar evento", "Create event")}</button>}</div>}
     </section>

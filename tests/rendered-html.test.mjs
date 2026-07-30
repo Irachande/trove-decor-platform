@@ -421,3 +421,29 @@ test("phase 9 starts with a dedicated responsive events workspace", async () => 
   assert.match(styles, /\.events-list/);
   assert.match(styles, /repeat\(6, minmax\(52px, 1fr\)\)/);
 });
+
+test("phase 9 event records support editing, safe duplication, and archiving", async () => {
+  const [app, api, schema, workspace, migration, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/api/data/route.ts"),
+    source("db/schema.ts"),
+    source("app/workspace.ts"),
+    source("drizzle/0010_square_marauders.sql"),
+    source("package.json"),
+  ]);
+
+  assert.match(app, /function EventManager/);
+  assert.match(app, /saveManagedEvent/);
+  assert.match(app, /duplicateManagedEvent/);
+  assert.match(app, /archiveManagedEvent/);
+  assert.match(app, /Evento duplicado sem copiar reservas/);
+  assert.match(api, /duplicateEvent: "manageReservations"/);
+  assert.match(api, /archiveEvent: "manageReservations"/);
+  assert.match(api, /Only completed or cancelled events can be archived/);
+  assert.match(api, /status IN \('Confirmed', 'CheckedOut'\)/);
+  assert.match(schema, /ownerUserId: integer\("owner_user_id"\)/);
+  assert.match(schema, /archivedAt: text\("archived_at"\)/);
+  assert.match(workspace, /addMissingColumns\("events"/);
+  assert.match(migration, /ALTER TABLE `events` ADD `event_type`/);
+  assert.match(manifest, /"test:phase9-api"/);
+});

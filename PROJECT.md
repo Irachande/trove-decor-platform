@@ -124,6 +124,10 @@ até serem configuradas as credenciais da conta comercial.
 - Resumo por evento com cliente, local, período, reservas associadas e valor.
 - Criação através do formulário de clientes e eventos já autorizado no
   servidor.
+- Ficha operacional com tipo, endereço, responsável, contactos, convidados,
+  orçamento, moeda, cor, horários, estado e notas.
+- Edição integral, duplicação segura sem copiar reservas e arquivo apenas após
+  conclusão/cancelamento e sem reservas activas.
 
 ### Equipa e perfil
 
@@ -224,7 +228,7 @@ até serem configuradas as credenciais da conta comercial.
 | Upload de imagens | Funcional | JPG/PNG até 5 MB, autenticado e separado por empresa |
 | Reservas | Funcional | Multiartigo, conflitos atómicos, preços e ciclo operacional |
 | Calendário | Funcional | Visões mensal/semanal, detalhes e reservas canceladas excluídas |
-| Gestão de eventos | Funcional (estrutura) | Aba, indicadores, pesquisa, filtros, ordenação e relações reais; ficha operacional completa é o próximo passo |
+| Gestão de eventos | Funcional (passo 2) | Ficha completa, edição, responsável, duplicação sem reservas e arquivo protegido; tarefas e rentabilidade continuam no roadmap |
 | Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
 | Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
 | Perfil público | Funcional no produto / publicação externa pendente | Rota, visibilidade, contactos, serviços e pedidos funcionam; o Sites continua com acesso privado |
@@ -239,7 +243,7 @@ até serem configuradas as credenciais da conta comercial.
 | Páginas legais | Beta | Publicadas e coerentes com a implementação; revisão jurídica continua obrigatória |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
 | Monitorização | Funcional (MVP) | Saúde pública mínima, erros de interface e painel operacional por empresa |
-| Testes automatizados | Funcional (MVP) | 22 testes estruturais e integração das fases 3 a 8 |
+| Testes automatizados | Funcional (MVP) | 23 testes estruturais e integração das fases 3 a 9 |
 
 ## 7. Arquitectura actual
 
@@ -321,7 +325,8 @@ Next.js / Vinext
 - `kits`: conjuntos comerciais com preço próprio.
 - `kit_items`: composição e quantidade de cada artigo num kit.
 - `clients`: clientes reutilizáveis, isolados por empresa.
-- `events`: eventos associados a clientes e reservas.
+- `events`: ficha operacional, responsável, orçamento, estado, arquivo e
+  associação a clientes e reservas.
 - `reservations`: período, valores, logística e estado do ciclo de aluguer.
 - `reservation_items`: artigos, quantidades e preços de cada reserva.
 - `categories`: categorias isoladas por empresa.
@@ -524,15 +529,16 @@ descrevem a versão actual, não substituem revisão jurídica.
 - [x] Indicadores operacionais baseados nos eventos reais.
 - [x] Pesquisa, filtros de estado/período e ordenação.
 - [x] Resumo de cliente, local, datas, reservas e valor por evento.
-- [ ] Ficha completa, edição, duplicação e arquivo.
+- [x] Ficha completa, edição, duplicação e arquivo.
 - [ ] Ciclo de estados e regras agregadas entre evento e reservas.
 - [ ] Tarefas, responsáveis e checklist operacional.
 - [ ] Custos, fornecedores, documentos e rentabilidade.
 - [ ] Eventos sem reserva visíveis no calendário.
 
-Nota: o primeiro passo reutiliza a entidade `events`, os clientes e as reservas
-existentes. Não cria dados duplicados nem apresenta como concluída a futura
-ficha operacional.
+Nota: a duplicação copia apenas a configuração do evento e deixa de fora
+reservas e bloqueios de stock. O arquivo exige evento concluído ou cancelado e
+sem reservas confirmadas/em aluguer. O ciclo agregado completo, tarefas,
+documentos e rentabilidade permanecem correctamente pendentes.
 
 ## 13. Definição de concluído
 
@@ -587,6 +593,32 @@ pnpm run db:generate
 - Empresas e critérios de sucesso para o primeiro grupo beta.
 
 ## 17. Histórico de iterações
+
+### 31 de Julho de 2026 — Fase 9, passo 2: ficha operacional de eventos
+
+- Ampliada a ficha do evento com tipo, cliente, responsável da equipa, local,
+  endereço, contacto no local, datas e horários, convidados, orçamento, moeda,
+  cor, estado e notas.
+- A nova ficha pode ser consultada por toda a equipa e editada apenas por
+  funções com permissão de reservas.
+- Implementada duplicação segura: copia a configuração e regressa ao estado de
+  planeamento, mas não copia reservas nem bloqueios de inventário.
+- Implementado arquivo protegido, disponível apenas para eventos concluídos ou
+  cancelados e sem reservas confirmadas ou em aluguer.
+- Eventos arquivados deixam de aparecer na vista normal, permanecem
+  pesquisáveis pelo filtro de estado e não podem ser editados.
+- Todas as operações são isoladas por empresa e entram no histórico de
+  actividade.
+- Ampliada a entidade `events` e gerada a migração
+  `0010_square_marauders.sql`.
+- Adicionado teste integrado da Fase 9 para criação, leitura, edição, rejeição
+  de arquivo prematuro, duplicação sem reservas e arquivo final, além do teste
+  estrutural da ficha.
+- Validação: `node tests/phase9-api.integration.mjs`,
+  `node --test tests/rendered-html.test.mjs` (23 testes),
+  `tsc --noEmit --incremental false`,
+  `eslint . --ignore-pattern dist --ignore-pattern .next`,
+  `vinext build` e `git diff --check`.
 
 ### 30 de Julho de 2026 — Fase 9, passo 1: estrutura e navegação de eventos
 

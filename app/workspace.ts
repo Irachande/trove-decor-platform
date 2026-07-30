@@ -326,7 +326,7 @@ export async function ensureWorkspaceDatabase() {
       "CREATE TABLE IF NOT EXISTS clients (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, name TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)",
     ),
     db.prepare(
-      "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, client_id INTEGER NOT NULL, name TEXT NOT NULL, venue TEXT NOT NULL DEFAULT '', start_date TEXT NOT NULL, end_date TEXT NOT NULL, setup_time TEXT NOT NULL DEFAULT '', pickup_time TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'Planned', created_at TEXT NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, client_id INTEGER NOT NULL, owner_user_id INTEGER, name TEXT NOT NULL, event_type TEXT NOT NULL DEFAULT 'Other', venue TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', start_date TEXT NOT NULL, end_date TEXT NOT NULL, setup_time TEXT NOT NULL DEFAULT '', pickup_time TEXT NOT NULL DEFAULT '', guest_count INTEGER NOT NULL DEFAULT 0, budget INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'MZN', on_site_contact TEXT NOT NULL DEFAULT '', color TEXT NOT NULL DEFAULT '#b75d3f', notes TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'Planned', created_at TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT '', archived_at TEXT)",
     ),
     db.prepare(
       "CREATE TABLE IF NOT EXISTS reservation_items (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, reservation_id INTEGER NOT NULL, item_id INTEGER NOT NULL, item_name TEXT NOT NULL, quantity INTEGER NOT NULL, unit_price INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'MZN', UNIQUE (reservation_id, item_id))",
@@ -438,6 +438,18 @@ export async function ensureWorkspaceDatabase() {
   ]);
   await addMissingColumns("reservation_items", [
     { name: "currency", sql: "currency TEXT NOT NULL DEFAULT 'MZN'" },
+  ]);
+  await addMissingColumns("events", [
+    { name: "owner_user_id", sql: "owner_user_id INTEGER" },
+    { name: "event_type", sql: "event_type TEXT NOT NULL DEFAULT 'Other'" },
+    { name: "address", sql: "address TEXT NOT NULL DEFAULT ''" },
+    { name: "guest_count", sql: "guest_count INTEGER NOT NULL DEFAULT 0" },
+    { name: "budget", sql: "budget INTEGER NOT NULL DEFAULT 0" },
+    { name: "currency", sql: "currency TEXT NOT NULL DEFAULT 'MZN'" },
+    { name: "on_site_contact", sql: "on_site_contact TEXT NOT NULL DEFAULT ''" },
+    { name: "color", sql: "color TEXT NOT NULL DEFAULT '#b75d3f'" },
+    { name: "updated_at", sql: "updated_at TEXT NOT NULL DEFAULT ''" },
+    { name: "archived_at", sql: "archived_at TEXT" },
   ]);
 
   await migrateLegacyCategoriesConstraint();

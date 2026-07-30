@@ -55,6 +55,8 @@ const ACTION_PERMISSIONS: Record<string, WorkspacePermission> = {
   updateClient: "manageReservations",
   addEvent: "manageReservations",
   updateEvent: "manageReservations",
+  duplicateEvent: "manageReservations",
+  archiveEvent: "manageReservations",
   addCategory: "manageCategories",
   removeCategory: "manageCategories",
   inviteMember: "manageTeam",
@@ -118,7 +120,7 @@ function clientError(error: unknown) {
       ? "There is not enough physical stock to check out this reservation"
       : rawMessage;
   const validation =
-    /required|too long|too small|too large|must be|select between|invalid|not found|exceeds|duplicate|unavailable|not enough|transition|already|cannot|expired|allows up to/i.test(
+    /required|too long|too small|too large|must be|select between|invalid|not found|exceeds|duplicate|unavailable|not enough|transition|already|cannot|expired|allows up to|^only /i.test(
       message,
     );
   return Response.json({ error: message }, { status: validation ? 400 : 500 });
@@ -194,6 +196,8 @@ function actionSummary(action: string) {
     addMaintenance: "Intervenção registada",
     updateMaintenance: "Intervenção actualizada",
     updateEnquiryStatus: "Estado do pedido público alterado",
+    duplicateEvent: "Evento duplicado sem reservas",
+    archiveEvent: "Evento arquivado",
   };
   return summaries[action] || action.replace(/([A-Z])/g, " $1").trim();
 }
@@ -459,7 +463,7 @@ export async function GET(request: Request) {
         "SELECT id, name, email, phone, notes, created_at AS createdAt FROM clients WHERE business_id = ? ORDER BY name",
       ).bind(context.businessId).all(),
       env.DB.prepare(
-        "SELECT id, client_id AS clientId, name, venue, start_date AS startDate, end_date AS endDate, setup_time AS setupTime, pickup_time AS pickupTime, notes, status, created_at AS createdAt FROM events WHERE business_id = ? ORDER BY start_date",
+        "SELECT id, client_id AS clientId, owner_user_id AS ownerUserId, name, event_type AS eventType, venue, address, start_date AS startDate, end_date AS endDate, setup_time AS setupTime, pickup_time AS pickupTime, guest_count AS guestCount, budget, currency, on_site_contact AS onSiteContact, color, notes, status, created_at AS createdAt, updated_at AS updatedAt, archived_at AS archivedAt FROM events WHERE business_id = ? ORDER BY start_date",
       ).bind(context.businessId).all(),
       env.DB.prepare(
         "SELECT id, reservation_id AS reservationId, item_id AS itemId, item_name AS itemName, quantity, unit_price AS unitPrice, currency FROM reservation_items WHERE business_id = ? ORDER BY reservation_id, id",
@@ -833,35 +837,104 @@ export async function POST(request: Request) {
         "SELECT id FROM clients WHERE id = ? AND business_id = ?",
       ).bind(clientId, context.businessId).first();
       if (!client) throw new Error("Client not found");
+      const ownerUserId = payload.ownerUserId
+        ? integer(payload, "ownerUserId", { min: 1 })
+        : null;
+      if (ownerUserId) {
+        const owner = await env.DB.prepare(
+          "SELECT user_id AS userId FROM memberships WHERE business_id = ? AND user_id = ? AND status = 'Active'",
+        ).bind(context.businessId, ownerUserId).first();
+        if (!owner) throw new Error("Event owner not found");
+      }
       const start = date(payload, "startDate");
       const end = date(payload, "endDate");
       if (end < start) throw new Error("End date must follow start date");
       const existing = await env.DB.prepare(
-        "SELECT business_id AS businessId FROM events WHERE id = ?",
-      ).bind(id).first<{ businessId: number }>();
+        "SELECT business_id AS businessId, status FROM events WHERE id = ?",
+      ).bind(id).first<{ businessId: number; status: string }>();
       if (existing && existing.businessId !== context.businessId) {
         throw new Error("Event not found");
       }
+      if (existing?.status === "Archived") {
+        throw new Error("Archived events cannot be edited");
+      }
+      const status = text(payload, "status", { max: 30 }) || "Planned";
+      if (!["Lead", "Planned", "Confirmed", "Preparing", "InProgress", "Completed", "Cancelled"].includes(status)) {
+        throw new Error("Event status is invalid");
+      }
+      const currency = text(payload, "currency", { max: 3 }).toUpperCase() || "MZN";
+      const color = text(payload, "color", { max: 7 }) || "#b75d3f";
+      if (!/#[0-9a-f]{6}/i.test(color)) throw new Error("Event color is invalid");
       const values = [
         clientId,
+        ownerUserId,
         text(payload, "name", { required: true, max: 180 }),
+        text(payload, "eventType", { max: 60 }) || "Other",
         text(payload, "venue", { max: 240 }),
+        text(payload, "address", { max: 400 }),
         start,
         end,
         text(payload, "setupTime", { max: 5 }),
         text(payload, "pickupTime", { max: 5 }),
+        integer({ guestCount: payload.guestCount ?? 0 }, "guestCount", { min: 0, max: 100000 }),
+        integer({ budget: payload.budget ?? 0 }, "budget", { min: 0, max: 100000000 }),
+        currency,
+        text(payload, "onSiteContact", { max: 160 }),
+        color,
         text(payload, "notes", { max: 2000 }),
-        text(payload, "status", { max: 30 }) || "Planned",
+        status,
       ] as const;
       if (existing) {
         await env.DB.prepare(
-          "UPDATE events SET client_id = ?, name = ?, venue = ?, start_date = ?, end_date = ?, setup_time = ?, pickup_time = ?, notes = ?, status = ? WHERE id = ? AND business_id = ?",
-        ).bind(...values, id, context.businessId).run();
+          "UPDATE events SET client_id = ?, owner_user_id = ?, name = ?, event_type = ?, venue = ?, address = ?, start_date = ?, end_date = ?, setup_time = ?, pickup_time = ?, guest_count = ?, budget = ?, currency = ?, on_site_contact = ?, color = ?, notes = ?, status = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(...values, createdAt, id, context.businessId).run();
       } else {
         await env.DB.prepare(
-          "INSERT INTO events (id, business_id, client_id, name, venue, start_date, end_date, setup_time, pickup_time, notes, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ).bind(id, context.businessId, ...values, createdAt).run();
+          "INSERT INTO events (id, business_id, client_id, owner_user_id, name, event_type, venue, address, start_date, end_date, setup_time, pickup_time, guest_count, budget, currency, on_site_contact, color, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).bind(id, context.businessId, ...values, createdAt, createdAt).run();
       }
+      result = { ok: true, eventId: id };
+    } else if (action === "duplicateEvent") {
+      const sourceId = integer(payload, "sourceId", { min: 1 });
+      const id = integer(payload, "id", { min: 1 });
+      const source = await env.DB.prepare(
+        "SELECT client_id AS clientId, owner_user_id AS ownerUserId, name, event_type AS eventType, venue, address, start_date AS startDate, end_date AS endDate, setup_time AS setupTime, pickup_time AS pickupTime, guest_count AS guestCount, budget, currency, on_site_contact AS onSiteContact, color, notes FROM events WHERE id = ? AND business_id = ?",
+      ).bind(sourceId, context.businessId).first<{
+        clientId: number; ownerUserId: number | null; name: string; eventType: string;
+        venue: string; address: string; startDate: string; endDate: string;
+        setupTime: string; pickupTime: string; guestCount: number; budget: number;
+        currency: string; onSiteContact: string; color: string; notes: string;
+      }>();
+      if (!source) throw new Error("Event not found");
+      await env.DB.prepare(
+        "INSERT INTO events (id, business_id, client_id, owner_user_id, name, event_type, venue, address, start_date, end_date, setup_time, pickup_time, guest_count, budget, currency, on_site_contact, color, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Planned', ?, ?)",
+      ).bind(
+        id, context.businessId, source.clientId, source.ownerUserId,
+        `${source.name} · Cópia`, source.eventType, source.venue, source.address,
+        source.startDate, source.endDate, source.setupTime, source.pickupTime,
+        source.guestCount, source.budget, source.currency, source.onSiteContact,
+        source.color, source.notes, createdAt, createdAt,
+      ).run();
+      result = { ok: true, eventId: id, reservationsCopied: false };
+    } else if (action === "archiveEvent") {
+      const id = integer(payload, "id", { min: 1 });
+      const event = await env.DB.prepare(
+        "SELECT status FROM events WHERE id = ? AND business_id = ?",
+      ).bind(id, context.businessId).first<{ status: string }>();
+      if (!event) throw new Error("Event not found");
+      if (!["Completed", "Cancelled"].includes(event.status)) {
+        throw new Error("Only completed or cancelled events can be archived");
+      }
+      const activeReservations = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM reservations WHERE event_id = ? AND business_id = ? AND status IN ('Confirmed', 'CheckedOut')",
+      ).bind(id, context.businessId).first<{ count: number }>();
+      if (activeReservations?.count) {
+        throw new Error("Event has active reservations and cannot be archived");
+      }
+      await env.DB.prepare(
+        "UPDATE events SET status = 'Archived', archived_at = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+      ).bind(createdAt, createdAt, id, context.businessId).run();
+      result = { ok: true, eventId: id };
     } else if (action === "addReservation" || action === "updateReservation") {
       const reservationId = integer(payload, "id", { min: 1 });
       const clientId = integer(payload, "clientId", { min: 1 });
