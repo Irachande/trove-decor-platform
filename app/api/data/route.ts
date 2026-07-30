@@ -4,6 +4,7 @@ import {
   isAuthorizationResponse,
   type WorkspacePermission,
 } from "../../workspace";
+import { paymentConfiguration, PLAN_CATALOG } from "../../billing";
 
 type Payload = Record<string, unknown>;
 type ImportedItem = {
@@ -59,6 +60,8 @@ const ACTION_PERMISSIONS: Record<string, WorkspacePermission> = {
   declineInvitation: "read",
   markNotificationRead: "read",
   markAllNotificationsRead: "read",
+  cancelSubscription: "manageBilling",
+  resumeSubscription: "manageBilling",
   updateProfile: "manageProfile",
 };
 
@@ -108,7 +111,7 @@ function clientError(error: unknown) {
       ? "There is not enough physical stock to check out this reservation"
       : rawMessage;
   const validation =
-    /required|too long|too small|too large|must be|select between|invalid|not found|exceeds|duplicate|unavailable|not enough|transition|already|cannot|expired/i.test(
+    /required|too long|too small|too large|must be|select between|invalid|not found|exceeds|duplicate|unavailable|not enough|transition|already|cannot|expired|allows up to/i.test(
       message,
     );
   return Response.json({ error: message }, { status: validation ? 400 : 500 });
@@ -154,6 +157,7 @@ function actionEntity(action: string) {
   if (action.includes("Reservation")) return "reservation";
   if (action.includes("Invitation") || action === "inviteMember") return "invitation";
   if (action.includes("Member")) return "membership";
+  if (action.includes("Subscription")) return "subscription";
   if (action.includes("Item") || action === "adjustStock") return "inventory_item";
   if (action.includes("Maintenance")) return "maintenance";
   if (action.includes("Kit")) return "kit";
@@ -176,6 +180,8 @@ function actionSummary(action: string) {
     declineInvitation: "Convite de equipa recusado",
     updateMemberRole: "Função de membro actualizada",
     removeMember: "Membro removido da equipa",
+    cancelSubscription: "Cancelamento da subscrição agendado",
+    resumeSubscription: "Cancelamento da subscrição removido",
     adjustStock: "Stock ajustado",
     addMaintenance: "Intervenção registada",
     updateMaintenance: "Intervenção actualizada",
@@ -280,6 +286,8 @@ async function emitActionNotification(
     updateMaintenance: ["maintenance", "Intervenção concluída", "Maintenance completed", "Uma intervenção foi actualizada.", "A maintenance record was updated."],
     updateMemberRole: ["team", "Permissão actualizada", "Permission updated", "A função de um membro da equipa foi alterada.", "A team member's role was changed."],
     removeMember: ["team", "Equipa actualizada", "Team updated", "Um membro foi removido da empresa.", "A member was removed from the business."],
+    cancelSubscription: ["billing", "Cancelamento agendado", "Cancellation scheduled", "O plano continuará activo até ao fim do período actual.", "The plan will remain active until the end of the current period."],
+    resumeSubscription: ["billing", "Subscrição retomada", "Subscription resumed", "O cancelamento agendado foi removido.", "The scheduled cancellation was removed."],
   };
   const message = messages[action];
   if (!message) return;
@@ -391,6 +399,8 @@ export async function GET(request: Request) {
       auditLogs,
       invitations,
       workspaces,
+      subscription,
+      payments,
     ] = await Promise.all([
       env.DB.prepare(
         "SELECT id, name, category, quantity, available, status, tone, symbol, price, currency, photo_url AS photoUrl, storage_location AS storageLocation, condition, description, sku, replacement_value AS replacementValue, min_stock AS minStock FROM inventory_items WHERE business_id = ? ORDER BY id DESC",
@@ -446,6 +456,12 @@ export async function GET(request: Request) {
       env.DB.prepare(
         "SELECT b.id, b.name, b.handle, b.plan, m.role FROM memberships m JOIN businesses b ON b.id = m.business_id WHERE m.user_id = ? AND m.status = 'Active' ORDER BY b.name",
       ).bind(context.userId).all(),
+      env.DB.prepare(
+        "SELECT id, plan, pending_plan AS pendingPlan, status, amount, currency, current_period_start AS currentPeriodStart, current_period_end AS currentPeriodEnd, grace_until AS graceUntil, cancel_at_period_end AS cancelAtPeriodEnd, provider, created_at AS createdAt, updated_at AS updatedAt FROM subscriptions WHERE business_id = ?",
+      ).bind(context.businessId).first(),
+      env.DB.prepare(
+        "SELECT id, provider, provider_payment_id AS providerPaymentId, reference, kind, plan, amount, currency, status, checkout_url AS checkoutUrl, method, paid_at AS paidAt, failure_reason AS failureReason, receipt_number AS receiptNumber, created_at AS createdAt, updated_at AS updatedAt FROM payments WHERE business_id = ? ORDER BY created_at DESC LIMIT 100",
+      ).bind(context.businessId).all(),
     ]);
 
     return Response.json({
@@ -471,6 +487,15 @@ export async function GET(request: Request) {
       auditLogs: auditLogs.results,
       invitations: invitations.results,
       workspaces: workspaces.results,
+      subscription: subscription
+        ? { ...subscription, cancelAtPeriodEnd: Boolean((subscription as Record<string, unknown>).cancelAtPeriodEnd) }
+        : null,
+      payments: payments.results,
+      billing: {
+        provider: "PaySuite",
+        configured: Boolean(paymentConfiguration().apiToken),
+        catalog: PLAN_CATALOG,
+      },
       categories: categories.results,
       profile,
       members: [...activeMembers.results, ...pendingMembers.results],
@@ -491,6 +516,10 @@ export async function GET(request: Request) {
         handle: context.businessHandle,
         role: context.role,
         plan: context.plan,
+        subscriptionStatus: context.subscriptionStatus,
+        currentPeriodEnd: context.currentPeriodEnd,
+        graceUntil: context.graceUntil,
+        cancelAtPeriodEnd: context.cancelAtPeriodEnd,
       },
     });
   } catch (error) {
@@ -956,6 +985,14 @@ export async function POST(request: Request) {
       const email = text(payload, "email", { required: true, max: 254 }).toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Invalid email address");
       if (email === context.user.email) throw new Error("You already belong to this business");
+      if (context.plan === "Basic") {
+        const teamSize = await env.DB.prepare(
+          "SELECT (SELECT COUNT(*) FROM memberships WHERE business_id = ? AND status = 'Active' AND role != 'owner') + (SELECT COUNT(*) FROM collaborators WHERE business_id = ? AND status = 'Pending') AS count",
+        ).bind(context.businessId, context.businessId).first<{ count: number }>();
+        if ((teamSize?.count || 0) >= PLAN_CATALOG.Basic.collaboratorLimit!) {
+          throw new Error("The Basic plan allows up to 3 collaborators");
+        }
+      }
       const existingMember = await env.DB.prepare(
         "SELECT m.id FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.business_id = ? AND lower(u.email) = ? AND m.status = 'Active'",
       ).bind(context.businessId, email).first();
@@ -1060,6 +1097,18 @@ export async function POST(request: Request) {
       await env.DB.prepare(
         "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE business_id = ? AND user_id = ?",
       ).bind(createdAt, context.businessId, context.userId).run();
+    } else if (action === "cancelSubscription") {
+      const updated = await env.DB.prepare(
+        "UPDATE subscriptions SET cancel_at_period_end = 1, updated_at = ? WHERE business_id = ? AND status IN ('Trialing', 'Active', 'Grace')",
+      ).bind(createdAt, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Subscription cannot be cancelled");
+      result = { ok: true, cancelAtPeriodEnd: true };
+    } else if (action === "resumeSubscription") {
+      const updated = await env.DB.prepare(
+        "UPDATE subscriptions SET cancel_at_period_end = 0, updated_at = ? WHERE business_id = ? AND status IN ('Trialing', 'Active', 'Grace')",
+      ).bind(createdAt, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Subscription cannot be resumed");
+      result = { ok: true, cancelAtPeriodEnd: false };
     } else if (action === "updateProfile") {
       const businessName = text(payload, "businessName", { required: true, max: 120 });
       const handle = text(payload, "handle", { required: true, max: 60 }).toLowerCase().replace(/[^a-z0-9-]/g, "");

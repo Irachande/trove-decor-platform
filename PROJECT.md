@@ -16,7 +16,7 @@ Uma iteração só é considerada concluída quando, no mesmo commit:
 4. uma entrada for adicionada ao histórico de iterações;
 5. os comandos de validação executados estiverem registados.
 
-Última actualização: **29 de Julho de 2026**
+Última actualização: **30 de Julho de 2026**
 
 ## 1. Visão
 
@@ -67,7 +67,9 @@ fragmentada e compras desnecessárias de material.
 - Preços e condições definidos por cada empresa.
 - Análises de utilização e receita.
 
-Os preços são de produto e ainda não estão ligados a facturação real.
+Os preços, limites e ciclo mensal são aplicados pelo motor de subscrições. A
+integração PaySuite está pronta, mas pagamentos reais permanecem desactivados
+até serem configuradas as credenciais da conta comercial.
 
 ## 5. Funcionalidades implementadas
 
@@ -131,6 +133,19 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 - Dados, imagens e operações isolados através de `business_id`.
 - Permissões verificadas no servidor em todas as operações privadas.
 
+### Subscrições e facturação
+
+- Período experimental inicial de catorze dias por empresa.
+- Plano Basic limitado a três colaboradores; Network sem esse limite.
+- Operações de escrita bloqueadas quando a subscrição fica vencida.
+- Pagamento mensal em MZN através do adaptador PaySuite.
+- Checkout externo, webhooks HMAC, idempotência e validação do valor.
+- Renovação mensal, cancelamento no fim do período e tolerância de sete dias.
+- Histórico de tentativas, pagamentos, falhas, métodos e referências.
+- Recibos numerados, bilingues e preparados para impressão.
+- O teste não expira nem bloqueia escrita enquanto o provedor não estiver
+  configurado, evitando bloquear empresas antes de existir uma forma de pagar.
+
 ### Infraestrutura
 
 - Aplicação React/Next executada através de Vinext.
@@ -140,6 +155,7 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 - `read-excel-file` para leitura de ficheiros XLSX no navegador.
 - Alojamento privado através de OpenAI Sites.
 - Código-fonte num repositório privado do GitHub.
+- Integração PaySuite para M‑Pesa, e‑Mola e cartões; credenciais reais pendentes.
 
 ## 6. Estado funcional
 
@@ -157,12 +173,12 @@ Os preços são de produto e ainda não estão ligados a facturação real.
 | Equipa | Funcional | Convites com aceitação/expiração, funções, remoção e troca de empresa |
 | Autenticação | Funcional no Sites | Usa Sign in with ChatGPT; fornecedor público definitivo continua pendente |
 | Multiempresa | Funcional | Consultas, alterações e imagens são isoladas por `business_id` |
-| Subscrições | Demonstração | Não existe checkout, webhook ou facturação |
+| Subscrições | Parcial | Motor, limites, checkout e webhooks funcionam; falta activar credenciais PaySuite reais |
 | Rede local | Demonstração | Os artigos e negócios são dados estáticos |
 | Aplicação mobile | Parcial | Web responsiva; ainda não é PWA ou aplicação nativa |
 | Notificações | Parcial | Centro interno, lembretes e alertas com app aberta; falta email/push em segundo plano |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
-| Testes automatizados | Parcial | Testes estruturais e integração das APIs de reservas e equipa |
+| Testes automatizados | Parcial | Testes estruturais e integração das APIs de reservas, equipa e facturação |
 
 ## 7. Arquitectura actual
 
@@ -175,6 +191,8 @@ Next.js / Vinext
    ├── Identidade Sign in with ChatGPT
    ├── Contexto de empresa e permissões
    ├── /api/data
+   ├── /api/billing/checkout
+   ├── /api/billing/webhook
    ├── /api/item-image
    └── /api/profile-image
           │
@@ -189,6 +207,7 @@ Next.js / Vinext
 - `app/api/item-image/route.ts`: armazenamento das fotografias dos artigos.
 - `app/api/profile-image/route.ts`: armazenamento da fotografia do perfil.
 - `app/chatgpt-auth.ts`: utilitários de identidade do ambiente publicado.
+- `app/billing.ts`: catálogo de planos, cliente PaySuite e segurança de webhooks.
 - `app/workspace.ts`: criação de empresas, memberships e autorização.
 - `db/schema.ts`: entidades do banco de dados.
 - `drizzle/`: migrações do banco de dados.
@@ -200,6 +219,9 @@ Next.js / Vinext
 - `users`: identidades autenticadas.
 - `businesses`: empresas e plano actual.
 - `memberships`: relação entre utilizadores, empresas e funções.
+- `subscriptions`: plano, estado, período, tolerância e cancelamento.
+- `payments`: cobranças, estado, referência, checkout e recibo.
+- `payment_webhook_events`: idempotência e rastreio dos eventos PaySuite.
 - `inventory_items`: artigos e quantidades, isolados por empresa.
 - `item_photos`: galeria de fotografias associada aos artigos.
 - `inventory_movements`: histórico de alterações de stock.
@@ -223,7 +245,7 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `users`
 - `businesses`
 - `memberships`
-- `subscriptions`
+- `subscriptions` — implementado
 - `categories`
 - `inventory_items`
 - `item_photos` — implementado
@@ -236,7 +258,7 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `reservation_items` — implementado
 - `marketplace_listings`
 - `rental_requests`
-- `payments`
+- `payments` — implementado
 - `notifications` — implementado
 - `audit_logs` — implementado
 
@@ -331,10 +353,18 @@ em segundo plano depende da escolha e configuração de um fornecedor externo.
 
 ### Fase 5 — Subscrições
 
-- [ ] Permissões reais por plano.
+- [x] Permissões reais por plano.
 - [ ] Integração de pagamento em MZN.
-- [ ] Webhooks, renovação, cancelamento e tolerância.
-- [ ] Histórico de pagamentos e recibos.
+- [x] Webhooks, renovação, cancelamento e tolerância.
+- [x] Histórico de pagamentos e recibos.
+
+Nota: o adaptador PaySuite, checkout e webhook estão implementados e foram
+testados com um simulador local. O pagamento em MZN só será marcado como
+concluído depois de configurar `PAYSUITE_API_TOKEN` e
+`PAYSUITE_WEBHOOK_SECRET` de uma conta comercial activa. O fornecedor não
+disponibiliza actualmente um ambiente sandbox; uma conta activa processa
+transacções reais. Até essa activação, o período experimental permanece aberto
+para não bloquear o trabalho das empresas.
 
 ### Fase 6 — Trove Network
 
@@ -391,14 +421,42 @@ pnpm run db:generate
 - Fornecedor definitivo de autenticação.
 - Modelo do marketplace: contacto, comissão ou pagamento intermediado.
 - Regras de caução, cancelamento, danos e reembolso.
-- Integração de pagamentos e processo de facturação em Moçambique.
-- Limites exactos de cada plano.
+- Activação da conta comercial PaySuite e configuração segura das credenciais.
 - Estratégia PWA versus aplicações nativas.
 - Política de verificação das empresas da rede.
 - Fornecedor e remetente verificado para email transaccional.
 - Fornecedor de push e gestão das respectivas chaves.
 
 ## 17. Histórico de iterações
+
+### 30 de Julho de 2026 — Fase 5: subscrições e facturação
+
+- Criado catálogo vinculativo dos planos Basic (1.200 MZN) e Network
+  (3.100 MZN), com limite real de três colaboradores no Basic.
+- Todas as empresas recebem catorze dias de teste; subscrições vencidas passam
+  por sete dias de tolerância antes de bloquear operações de escrita.
+- Enquanto as credenciais comerciais não estiverem configuradas, o teste
+  permanece aberto para impedir bloqueios sem uma via real de pagamento.
+- Implementados renovação mensal, cancelamento no fim do período e retoma da
+  subscrição pelo proprietário.
+- Adicionado adaptador PaySuite para criar cobranças em MZN e encaminhar o
+  utilizador para checkout com M‑Pesa, e‑Mola ou cartão.
+- Criado webhook com assinatura HMAC SHA-256, validação do valor, idempotência,
+  tratamento de sucesso/falha e actualização atómica do plano.
+- Adicionados histórico de pagamentos, referências, métodos, falhas e recibos
+  numerados preparados para impressão.
+- Criadas as entidades `subscriptions`, `payments` e
+  `payment_webhook_events`, com a migração `0006_confused_snowbird.sql`.
+- Adicionado teste integrado com simulador local do PaySuite, incluindo
+  checkout Network, webhook falsificado, confirmação assinada, duplicação,
+  recibo, cancelamento, retoma e limites por plano.
+- A activação de cobranças reais permanece pendente porque exige uma conta
+  comercial PaySuite e credenciais secretas; o fornecedor declara que não
+  disponibiliza sandbox e que contas activadas processam transacções reais.
+- Referências: <https://paysuite.tech/docs/> e
+  <https://paysuite.co.mz/>.
+- Validação: `pnpm run test:phase5-api`, `pnpm test`, `pnpm run lint`,
+  `pnpm run typecheck`, `pnpm run build` e `git diff --check`.
 
 ### 29 de Julho de 2026 — Fase 4: equipa e comunicação
 

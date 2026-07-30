@@ -186,3 +186,44 @@ test("phase 4 interface exposes invitations, notifications, roles, and activity"
   assert.match(styles, /\.activity-log/);
   assert.match(styles, /\.phase-four-team/);
 });
+
+test("phase 5 billing entities and PaySuite boundaries are durable and verified", async () => {
+  const [schema, migration, workspace, billing, checkout, webhook] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0006_confused_snowbird.sql"),
+    source("app/workspace.ts"),
+    source("app/billing.ts"),
+    source("app/api/billing/checkout/route.ts"),
+    source("app/api/billing/webhook/route.ts"),
+  ]);
+
+  assert.match(schema, /export const subscriptions/);
+  assert.match(schema, /export const payments/);
+  assert.match(schema, /export const paymentWebhookEvents/);
+  assert.match(migration, /CREATE TABLE `subscriptions`/);
+  assert.match(migration, /CREATE TABLE `payments`/);
+  assert.match(workspace, /SUBSCRIPTION_REQUIRED/);
+  assert.match(workspace, /subscriptionAllowsWrites/);
+  assert.match(billing, /PLAN_CATALOG/);
+  assert.match(billing, /verifyPaySuiteSignature/);
+  assert.match(checkout, /createPaySuitePayment/);
+  assert.match(webhook, /x-webhook-signature/);
+  assert.match(webhook, /payment_webhook_events/);
+});
+
+test("phase 5 interface exposes live status, payment history and receipts", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /startSubscriptionCheckout/);
+  assert.match(app, /function Receipt/);
+  assert.match(app, /Pagamentos e recibos/);
+  assert.match(app, /cancelSubscription/);
+  assert.match(app, /PAYMENTS_NOT_CONFIGURED/);
+  assert.match(styles, /\.subscription-status/);
+  assert.match(styles, /\.payment-history/);
+  assert.match(styles, /\.receipt/);
+  assert.match(styles, /@media print/);
+});

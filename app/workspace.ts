@@ -1,5 +1,11 @@
 import { env } from "cloudflare:workers";
 import { getUserFromHeaders, type ChatGPTUser } from "./chatgpt-auth";
+import {
+  paymentConfiguration,
+  PLAN_CATALOG,
+  subscriptionAllowsWrites,
+  type SubscriptionStatus,
+} from "./billing";
 
 export type WorkspaceRole =
   | "owner"
@@ -14,7 +20,8 @@ export type WorkspacePermission =
   | "manageReservations"
   | "manageCategories"
   | "manageProfile"
-  | "manageTeam";
+  | "manageTeam"
+  | "manageBilling";
 
 export type WorkspaceContext = {
   user: ChatGPTUser;
@@ -23,6 +30,10 @@ export type WorkspaceContext = {
   businessName: string;
   businessHandle: string;
   plan: "Basic" | "Network";
+  subscriptionStatus: SubscriptionStatus;
+  currentPeriodEnd: string;
+  graceUntil: string | null;
+  cancelAtPeriodEnd: boolean;
   role: WorkspaceRole;
 };
 
@@ -41,10 +52,17 @@ const PERMISSIONS: Record<WorkspacePermission, WorkspaceRole[]> = {
   manageCategories: ["owner", "manager", "inventory"],
   manageProfile: ["owner", "manager"],
   manageTeam: ["owner", "manager"],
+  manageBilling: ["owner"],
 };
 
 function now() {
   return new Date().toISOString();
+}
+
+function addDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
 }
 
 function slugify(value: string) {
@@ -152,6 +170,70 @@ async function migrateLegacyReservations() {
   }
 }
 
+async function ensureBusinessSubscriptions() {
+  const timestamp = now();
+  const trialEnd = addDays(new Date(timestamp), 14).toISOString();
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO subscriptions (
+      business_id, plan, status, amount, currency, current_period_start,
+      current_period_end, cancel_at_period_end, provider, created_at, updated_at
+    )
+    SELECT id, plan, 'Trialing',
+      CASE WHEN plan = 'Network' THEN 3100 ELSE 1200 END,
+      'MZN', ?, ?, 0, 'PaySuite', ?, ?
+    FROM businesses`,
+  ).bind(timestamp, trialEnd, timestamp, timestamp).run();
+}
+
+async function refreshSubscription(businessId: number) {
+  const subscription = await env.DB.prepare(
+    "SELECT id, status, current_period_end AS currentPeriodEnd, grace_until AS graceUntil, cancel_at_period_end AS cancelAtPeriodEnd FROM subscriptions WHERE business_id = ?",
+  ).bind(businessId).first<{
+    id: number;
+    status: SubscriptionStatus;
+    currentPeriodEnd: string;
+    graceUntil: string | null;
+    cancelAtPeriodEnd: number;
+  }>();
+  if (!subscription) return;
+  const timestamp = now();
+  if (
+    subscription.cancelAtPeriodEnd &&
+    subscription.currentPeriodEnd <= timestamp &&
+    subscription.status !== "Cancelled"
+  ) {
+    await env.DB.prepare(
+      "UPDATE subscriptions SET status = 'Cancelled', updated_at = ? WHERE id = ?",
+    ).bind(timestamp, subscription.id).run();
+    return;
+  }
+  if (
+    subscription.status === "Trialing" &&
+    !paymentConfiguration().apiToken
+  ) {
+    return;
+  }
+  if (
+    ["Trialing", "Active"].includes(subscription.status) &&
+    subscription.currentPeriodEnd <= timestamp
+  ) {
+    const graceUntil = addDays(new Date(subscription.currentPeriodEnd), 7).toISOString();
+    await env.DB.prepare(
+      "UPDATE subscriptions SET status = 'Grace', grace_until = ?, updated_at = ? WHERE id = ?",
+    ).bind(graceUntil, timestamp, subscription.id).run();
+    return;
+  }
+  if (
+    subscription.status === "Grace" &&
+    subscription.graceUntil &&
+    subscription.graceUntil <= timestamp
+  ) {
+    await env.DB.prepare(
+      "UPDATE subscriptions SET status = 'PastDue', updated_at = ? WHERE id = ?",
+    ).bind(timestamp, subscription.id).run();
+  }
+}
+
 export async function ensureWorkspaceDatabase() {
   const db = env.DB;
   await db.batch([
@@ -163,6 +245,15 @@ export async function ensureWorkspaceDatabase() {
     ),
     db.prepare(
       "CREATE TABLE IF NOT EXISTS memberships (id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER NOT NULL, user_id INTEGER NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Active', created_at TEXT NOT NULL, UNIQUE (business_id, user_id))",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER NOT NULL UNIQUE, plan TEXT NOT NULL DEFAULT 'Basic', pending_plan TEXT, status TEXT NOT NULL DEFAULT 'Trialing', amount INTEGER NOT NULL DEFAULT 1200, currency TEXT NOT NULL DEFAULT 'MZN', current_period_start TEXT NOT NULL, current_period_end TEXT NOT NULL, grace_until TEXT, cancel_at_period_end INTEGER NOT NULL DEFAULT 0, provider TEXT NOT NULL DEFAULT 'PaySuite', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, business_id INTEGER NOT NULL, subscription_id INTEGER NOT NULL, provider TEXT NOT NULL DEFAULT 'PaySuite', provider_payment_id TEXT, reference TEXT NOT NULL UNIQUE, kind TEXT NOT NULL DEFAULT 'subscription', plan TEXT NOT NULL, amount INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'MZN', status TEXT NOT NULL DEFAULT 'Pending', checkout_url TEXT, method TEXT, paid_at TEXT, failure_reason TEXT, receipt_number TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS payment_webhook_events (id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, request_id TEXT NOT NULL UNIQUE, event_type TEXT NOT NULL, payload_hash TEXT NOT NULL, status TEXT NOT NULL, processed_at TEXT NOT NULL)",
     ),
     db.prepare(
       "CREATE TABLE IF NOT EXISTS inventory_items (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL DEFAULT 1, name TEXT NOT NULL, category TEXT NOT NULL, quantity INTEGER NOT NULL, available INTEGER NOT NULL, status TEXT NOT NULL, tone TEXT NOT NULL, symbol TEXT NOT NULL, price INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'MZN', photo_url TEXT, storage_location TEXT NOT NULL DEFAULT '', condition TEXT NOT NULL DEFAULT 'Bom')",
@@ -214,6 +305,18 @@ export async function ensureWorkspaceDatabase() {
     ),
     db.prepare(
       "CREATE INDEX IF NOT EXISTS memberships_user_idx ON memberships (user_id, status)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS subscriptions_business_idx ON subscriptions (business_id)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS payments_reference_idx ON payments (reference)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS payments_business_date_idx ON payments (business_id, created_at)",
+    ),
+    db.prepare(
+      "CREATE UNIQUE INDEX IF NOT EXISTS payment_webhook_request_idx ON payment_webhook_events (request_id)",
     ),
   ]);
 
@@ -424,6 +527,7 @@ export async function ensureWorkspaceDatabase() {
         .run();
     }
   }
+  await ensureBusinessSubscriptions();
 }
 
 async function uniqueHandle(base: string) {
@@ -451,11 +555,16 @@ async function createBusinessForUser(userId: number, user: ChatGPTUser) {
     .bind(businessName, handle, now())
     .first<{ id: number }>();
   if (!business) throw new Error("Unable to create business");
+  const createdAt = now();
+  const trialEnd = addDays(new Date(createdAt), 14).toISOString();
 
   await env.DB.batch([
     env.DB.prepare(
       "INSERT INTO memberships (business_id, user_id, role, status, created_at) VALUES (?, ?, 'owner', 'Active', ?)",
-    ).bind(business.id, userId, now()),
+    ).bind(business.id, userId, createdAt),
+    env.DB.prepare(
+      "INSERT INTO subscriptions (business_id, plan, status, amount, currency, current_period_start, current_period_end, cancel_at_period_end, provider, created_at, updated_at) VALUES (?, 'Basic', 'Trialing', ?, 'MZN', ?, ?, 0, 'PaySuite', ?, ?)",
+    ).bind(business.id, PLAN_CATALOG.Basic.amount, createdAt, trialEnd, createdAt, createdAt),
     env.DB.prepare(
       "INSERT INTO business_profile (id, business_id, business_name, handle, bio, location, phone, email, color) VALUES (?, ?, ?, ?, '', 'Maputo, Moçambique', '', ?, '#b75d3f')",
     ).bind(Date.now(), business.id, businessName, handle, user.email),
@@ -525,6 +634,16 @@ async function resolveWorkspace(
         entry.businessId === requestedBusinessId,
     ) || memberships.results[0];
   if (!membership) throw new Error("No active workspace");
+  await refreshSubscription(membership.businessId);
+  const subscription = await env.DB.prepare(
+    "SELECT status, current_period_end AS currentPeriodEnd, grace_until AS graceUntil, cancel_at_period_end AS cancelAtPeriodEnd FROM subscriptions WHERE business_id = ?",
+  ).bind(membership.businessId).first<{
+    status: SubscriptionStatus;
+    currentPeriodEnd: string;
+    graceUntil: string | null;
+    cancelAtPeriodEnd: number;
+  }>();
+  if (!subscription) throw new Error("Unable to resolve subscription");
 
   const profile = await env.DB.prepare(
     "SELECT id FROM business_profile WHERE business_id = ?",
@@ -566,6 +685,10 @@ async function resolveWorkspace(
     businessName: membership.name,
     businessHandle: membership.handle,
     plan: membership.plan,
+    subscriptionStatus: subscription.status,
+    currentPeriodEnd: subscription.currentPeriodEnd,
+    graceUntil: subscription.graceUntil,
+    cancelAtPeriodEnd: Boolean(subscription.cancelAtPeriodEnd),
     role: normalizeRole(membership.role),
   };
 }
@@ -604,6 +727,26 @@ export async function authorize(
     return Response.json(
       { error: "You do not have permission for this action", code: "FORBIDDEN" },
       { status: 403 },
+    );
+  }
+  if (
+    !["read", "manageBilling"].includes(permission) &&
+    !(
+      context.subscriptionStatus === "Trialing" &&
+      !paymentConfiguration().apiToken
+    ) &&
+    !subscriptionAllowsWrites(
+      context.subscriptionStatus,
+      context.currentPeriodEnd,
+      context.graceUntil,
+    )
+  ) {
+    return Response.json(
+      {
+        error: "An active subscription is required for this action",
+        code: "SUBSCRIPTION_REQUIRED",
+      },
+      { status: 402 },
     );
   }
   return context;

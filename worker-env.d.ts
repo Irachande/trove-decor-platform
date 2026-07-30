@@ -3,6 +3,9 @@ declare namespace Cloudflare {
     ASSETS: Fetcher;
     DB: D1Database;
     MEDIA: R2Bucket;
+    PAYSUITE_API_TOKEN?: string;
+    PAYSUITE_WEBHOOK_SECRET?: string;
+    PAYSUITE_API_URL?: string;
     IMAGES: {
       input(stream: ReadableStream): {
         transform(options: Record<string, unknown>): {

@@ -26,6 +26,54 @@ export const memberships = sqliteTable("memberships", {
   uniqueIndex("memberships_business_user_idx").on(table.businessId, table.userId),
 ]);
 
+export const subscriptions = sqliteTable("subscriptions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessId: integer("business_id").notNull().unique(),
+  plan: text("plan").notNull().default("Basic"),
+  pendingPlan: text("pending_plan"),
+  status: text("status").notNull().default("Trialing"),
+  amount: integer("amount").notNull().default(1200),
+  currency: text("currency").notNull().default("MZN"),
+  currentPeriodStart: text("current_period_start").notNull(),
+  currentPeriodEnd: text("current_period_end").notNull(),
+  graceUntil: text("grace_until"),
+  cancelAtPeriodEnd: integer("cancel_at_period_end", { mode: "boolean" }).notNull().default(false),
+  provider: text("provider").notNull().default("PaySuite"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const payments = sqliteTable("payments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  businessId: integer("business_id").notNull(),
+  subscriptionId: integer("subscription_id").notNull(),
+  provider: text("provider").notNull().default("PaySuite"),
+  providerPaymentId: text("provider_payment_id"),
+  reference: text("reference").notNull().unique(),
+  kind: text("kind").notNull().default("subscription"),
+  plan: text("plan").notNull(),
+  amount: integer("amount").notNull(),
+  currency: text("currency").notNull().default("MZN"),
+  status: text("status").notNull().default("Pending"),
+  checkoutUrl: text("checkout_url"),
+  method: text("method"),
+  paidAt: text("paid_at"),
+  failureReason: text("failure_reason"),
+  receiptNumber: text("receipt_number"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const paymentWebhookEvents = sqliteTable("payment_webhook_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  provider: text("provider").notNull(),
+  requestId: text("request_id").notNull().unique(),
+  eventType: text("event_type").notNull(),
+  payloadHash: text("payload_hash").notNull(),
+  status: text("status").notNull(),
+  processedAt: text("processed_at").notNull(),
+});
+
 export const inventoryItems = sqliteTable("inventory_items", {
   id: integer("id").primaryKey(),
   businessId: integer("business_id").notNull().default(1),

@@ -20,6 +20,10 @@ type Workspace = {
   handle: string;
   role: WorkspaceRole;
   plan: "Basic" | "Network";
+  subscriptionStatus?: string;
+  currentPeriodEnd?: string;
+  graceUntil?: string | null;
+  cancelAtPeriodEnd?: boolean;
 };
 
 type Member = {
@@ -34,6 +38,9 @@ type Member = {
 type NotificationRecord = { id: number; type: string; titlePt: string; titleEn: string; bodyPt: string; bodyEn: string; link: string; readAt?: string; createdAt: string };
 type AuditEntry = { id: number; action: string; entityType: string; entityId: string; summary: string; createdAt: string; actorName?: string; actorEmail?: string };
 type Invitation = { id: number; businessId: number; businessName: string; role: string; createdAt: string; expiresAt: string };
+type SubscriptionRecord = { id: number; plan: "Basic" | "Network"; pendingPlan?: "Basic" | "Network"; status: string; amount: number; currency: string; currentPeriodStart: string; currentPeriodEnd: string; graceUntil?: string; cancelAtPeriodEnd: boolean; provider: string; createdAt: string; updatedAt: string };
+type PaymentRecord = { id: number; provider: string; providerPaymentId?: string; reference: string; kind: string; plan: "Basic" | "Network"; amount: number; currency: string; status: string; checkoutUrl?: string; method?: string; paidAt?: string; failureReason?: string; receiptNumber?: string; createdAt: string; updatedAt: string };
+type BillingInfo = { provider: string; configured: boolean; catalog: Record<"Basic" | "Network", { amount: number; currency: string; collaboratorLimit: number | null; network: boolean }> };
 
 type Item = {
   id: number;
@@ -81,6 +88,9 @@ type WorkspaceData = {
   auditLogs?: AuditEntry[];
   invitations?: Invitation[];
   workspaces?: Workspace[];
+  subscription?: SubscriptionRecord | null;
+  payments?: PaymentRecord[];
+  billing?: BillingInfo;
 };
 
 type Reservation = {
@@ -204,6 +214,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [subscription, setSubscription] = useState<SubscriptionRecord | null>(null);
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [billing, setBilling] = useState<BillingInfo | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All items");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -213,6 +226,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [teamOpen, setTeamOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [selectedReceipt, setSelectedReceipt] = useState<PaymentRecord | null>(null);
   const [reserveOpen, setReserveOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [managedReservation, setManagedReservation] = useState<Reservation | null>(null);
@@ -239,6 +253,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const canManageReservations = ["owner", "manager", "reservations"].includes(role);
   const canManageTeam = ["owner", "manager"].includes(role);
   const canManageProfile = ["owner", "manager"].includes(role);
+  const canManageBilling = role === "owner";
+  const networkEnabled = plan === "Network" && !["PastDue", "Cancelled"].includes(subscription?.status || "");
   const activeMembers = members.filter((member) => member.status === "Active");
   const unreadCount = notifications.filter((entry) => !entry.readAt).length;
 
@@ -270,6 +286,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
         if (Array.isArray(data.invitations)) setInvitations(data.invitations);
         if (Array.isArray(data.workspaces)) setWorkspaces(data.workspaces);
+        if (data.subscription !== undefined) setSubscription(data.subscription || null);
+        if (Array.isArray(data.payments)) setPayments(data.payments);
+        if (data.billing) setBilling(data.billing);
       })
       .catch(() => {
         setToast("Não foi possível carregar o espaço da empresa.");
@@ -325,6 +344,10 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       if (response.status === 401) {
         window.location.href = "/signin-with-chatgpt?return_to=%2F";
         return false;
+      }
+      if (response.status === 402) {
+        setView("plans");
+        throw new Error(t("A subscrição precisa de ser renovada para continuar a editar.", "The subscription must be renewed to continue editing."));
       }
       if (!response.ok) {
         const message = String(result.error || "Unable to save");
@@ -404,6 +427,51 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
     });
     window.localStorage.setItem(key, "1");
   }, [notifications, language]);
+
+  async function startSubscriptionCheckout(nextPlan: "Basic" | "Network") {
+    try {
+      const response = await fetch("/api/billing/checkout", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({ plan: nextPlan }),
+      });
+      const result = await response.json().catch(() => ({})) as {
+        error?: string;
+        code?: string;
+        checkoutUrl?: string;
+      };
+      if (response.status === 401) {
+        window.location.href = "/signin-with-chatgpt?return_to=%2F";
+        return;
+      }
+      if (!response.ok) {
+        if (result.code === "PAYMENTS_NOT_CONFIGURED") {
+          throw new Error(t(
+            "A integração PaySuite está pronta, mas ainda precisa das credenciais da conta comercial.",
+            "The PaySuite integration is ready but still needs the merchant account credentials.",
+          ));
+        }
+        throw new Error(result.error || t("Não foi possível iniciar o pagamento.", "Unable to start payment."));
+      }
+      if (!result.checkoutUrl) throw new Error(t("Link de pagamento em falta.", "Missing payment link."));
+      window.location.href = result.checkoutUrl;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("Não foi possível iniciar o pagamento.", "Unable to start payment."));
+    }
+  }
+
+  async function changeCancellation(cancel: boolean) {
+    const action = cancel ? "cancelSubscription" : "resumeSubscription";
+    if (await persist(action, {})) {
+      setReloadToken((value) => value + 1);
+      showToast(cancel
+        ? t("Cancelamento agendado para o fim do período", "Cancellation scheduled for the period end")
+        : t("Subscrição retomada", "Subscription resumed"));
+    }
+  }
 
   async function uploadItemPhotos(files: File[]) {
     const urls: string[] = [];
@@ -972,7 +1040,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
           />}
           {view === "network" && (
             <Network
-              plan={plan}
+              plan={networkEnabled ? "Network" : "Basic"}
               t={t}
               query={networkQuery}
               setQuery={setNetworkQuery}
@@ -986,7 +1054,18 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
             />
           )}
           {view === "profile" && <ProfileEditor t={t} profile={profile} setProfile={setProfile} save={canManageProfile ? saveProfile : () => showToast(t("A sua função não permite editar o perfil.", "Your role cannot edit the profile."))} saving={saving} />}
-          {view === "plans" && <Plans t={t} plan={plan} choose={(next) => { setPlan(next); showToast(t(`Plano ${next} seleccionado`, `${next} plan selected`)); }} />}
+          {view === "plans" && <Plans
+            t={t}
+            language={language}
+            plan={plan}
+            subscription={subscription}
+            payments={payments}
+            billing={billing}
+            canManageBilling={canManageBilling}
+            choose={startSubscriptionCheckout}
+            changeCancellation={changeCancellation}
+            openReceipt={setSelectedReceipt}
+          />}
         </div>
       </section>
 
@@ -1118,6 +1197,12 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       {activityOpen && (
         <Modal wide title={t("Histórico de actividade", "Activity history")} subtitle={t("Registo cronológico das alterações importantes da empresa.", "Chronological record of important business changes.")} onClose={() => setActivityOpen(false)}>
           <ActivityLog entries={auditLogs} language={language} t={t} />
+        </Modal>
+      )}
+
+      {selectedReceipt && (
+        <Modal title={t("Recibo de pagamento", "Payment receipt")} subtitle={selectedReceipt.receiptNumber || selectedReceipt.reference} onClose={() => setSelectedReceipt(null)}>
+          <Receipt payment={selectedReceipt} businessName={workspace?.name || profile.businessName} language={language} t={t} />
         </Modal>
       )}
 
@@ -1437,18 +1522,59 @@ function ProfileEditor({ t, profile, setProfile, save, saving }: { t: Translator
   );
 }
 
-function Plans({ t, plan, choose }: { t: Translator; plan: "Basic" | "Network"; choose: (plan: "Basic" | "Network") => void }) {
+function Plans({ t, language, plan, subscription, payments, billing, canManageBilling, choose, changeCancellation, openReceipt }: {
+  t: Translator;
+  language: Language;
+  plan: "Basic" | "Network";
+  subscription: SubscriptionRecord | null;
+  payments: PaymentRecord[];
+  billing: BillingInfo | null;
+  canManageBilling: boolean;
+  choose: (plan: "Basic" | "Network") => void;
+  changeCancellation: (cancel: boolean) => void;
+  openReceipt: (payment: PaymentRecord) => void;
+}) {
+  const activeUntil = subscription?.currentPeriodEnd
+    ? new Date(subscription.currentPeriodEnd).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")
+    : "—";
+  const statusLabels: Record<string, string> = {
+    Trialing: t("Período experimental", "Trial"),
+    Active: t("Activa", "Active"),
+    Grace: t("Período de tolerância", "Grace period"),
+    PastDue: t("Pagamento em atraso", "Past due"),
+    Cancelled: t("Cancelada", "Cancelled"),
+  };
   return (
     <>
       <PageHeading eyebrow={t("SUBSCRIÇÃO", "SUBSCRIPTION")} title={t("Um plano que cresce consigo.", "A plan that grows with you.")} detail={t("Comece pelo inventário e desbloqueie a rede local quando precisar.", "Start with inventory and unlock the local network when you need it.")} />
-      <section className="billing-toggle"><button className="active">{t("Mensal", "Monthly")}</button><button>{t("Anual", "Yearly")} <span>{t("Poupe 20%", "Save 20%")}</span></button></section>
+      {subscription && <section className={cls("subscription-status", `status-${subscription.status.toLowerCase()}`)}>
+        <div><span className="eyebrow">{t("SUBSCRIÇÃO ACTUAL", "CURRENT SUBSCRIPTION")}</span><strong>{plan} · {statusLabels[subscription.status] || subscription.status}</strong><small>{t(`Acesso actual até ${activeUntil}`, `Current access until ${activeUntil}`)}{subscription.graceUntil ? t(` · tolerância até ${new Date(subscription.graceUntil).toLocaleDateString("pt-MZ")}`, ` · grace until ${new Date(subscription.graceUntil).toLocaleDateString("en-MZ")}`) : ""}</small></div>
+        {canManageBilling && (subscription.cancelAtPeriodEnd
+          ? <button className="button-primary" onClick={() => changeCancellation(false)}>{t("Manter subscrição", "Keep subscription")}</button>
+          : <button className="button-secondary danger-outline" onClick={() => changeCancellation(true)}>{t("Cancelar no fim do período", "Cancel at period end")}</button>)}
+      </section>}
+      {!billing?.configured && <section className="billing-configuration-note"><span>!</span><div><strong>{t("Activação comercial pendente", "Merchant activation pending")}</strong><small>{t("O fluxo PaySuite está implementado. Para aceitar pagamentos reais é necessário configurar o token da conta e o segredo do webhook.", "The PaySuite flow is implemented. A merchant token and webhook secret are required before accepting real payments.")}</small></div></section>}
+      <section className="billing-toggle"><button className="active">{t("Mensal", "Monthly")}</button><span>{t("Pagamentos em MZN via PaySuite", "MZN payments via PaySuite")}</span></section>
       <section className="plans-grid">
-        <article className={cls("pricing-card", plan === "Basic" && "current")}><span className="plan-label">STORAGE</span><h2>Basic</h2><p>{t("Tudo para uma pequena equipa se manter organizada.", "Everything a small team needs to stay organised.")}</p><div className="price"><strong>1 200</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button className="button-secondary" onClick={() => choose("Basic")}>{plan === "Basic" ? t("Plano actual", "Current plan") : t("Escolher Basic", "Choose Basic")}</button><ul><li>✓ {t("Inventário ilimitado", "Unlimited inventory")}</li><li>✓ {t("Calendário partilhado", "Shared calendar")}</li><li>✓ {t("Até 3 colaboradores", "Up to 3 team members")}</li><li>✓ {t("Perfil público", "Public profile")}</li><li>✓ {t("Exportação CSV", "CSV exports")}</li></ul></article>
-        <article className={cls("pricing-card featured", plan === "Network" && "current")}><span className="recommended">{t("MAIS POPULAR", "MOST POPULAR")}</span><span className="plan-label">STORAGE + NETWORK</span><h2>Network</h2><p>{t("Gira a colecção e expanda-a através de parceiros locais.", "Manage and expand through local partners.")}</p><div className="price"><strong>3 100</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button className="button-primary" onClick={() => choose("Network")}>{plan === "Network" ? t("Plano actual", "Current plan") : t("Mudar para Network", "Upgrade to Network")}</button><ul><li>✓ {t("Tudo no Basic", "Everything in Basic")}</li><li>✓ {t("Pesquisar stock local", "Search local stock")}</li><li>✓ {t("Pedir e aceitar alugueres", "Request and accept rentals")}</li><li>✓ {t("Preços e condições próprias", "Own pricing and terms")}</li><li>✓ {t("Colaboradores ilimitados", "Unlimited team members")}</li><li>✓ {t("Análise de receita", "Revenue analytics")}</li></ul></article>
+        <article className={cls("pricing-card", plan === "Basic" && "current")}><span className="plan-label">STORAGE</span><h2>Basic</h2><p>{t("Tudo para uma pequena equipa se manter organizada.", "Everything a small team needs to stay organised.")}</p><div className="price"><strong>1 200</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button disabled={!canManageBilling} className="button-secondary" onClick={() => choose("Basic")}>{canManageBilling ? (plan === "Basic" ? t("Pagar ou renovar Basic", "Pay or renew Basic") : t("Mudar para Basic", "Switch to Basic")) : t("Apenas o proprietário pode alterar", "Owner only")}</button><ul><li>✓ {t("Inventário ilimitado", "Unlimited inventory")}</li><li>✓ {t("Calendário partilhado", "Shared calendar")}</li><li>✓ {t("Até 3 colaboradores", "Up to 3 team members")}</li><li>✓ {t("Perfil público", "Public profile")}</li><li>✓ {t("Exportação CSV", "CSV exports")}</li></ul></article>
+        <article className={cls("pricing-card featured", plan === "Network" && "current")}><span className="recommended">{t("MAIS POPULAR", "MOST POPULAR")}</span><span className="plan-label">STORAGE + NETWORK</span><h2>Network</h2><p>{t("Gira a colecção e expanda-a através de parceiros locais.", "Manage and expand through local partners.")}</p><div className="price"><strong>3 100</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button disabled={!canManageBilling} className="button-primary" onClick={() => choose("Network")}>{canManageBilling ? (plan === "Network" ? t("Pagar ou renovar Network", "Pay or renew Network") : t("Mudar para Network", "Upgrade to Network")) : t("Apenas o proprietário pode alterar", "Owner only")}</button><ul><li>✓ {t("Tudo no Basic", "Everything in Basic")}</li><li>✓ {t("Pesquisar stock local", "Search local stock")}</li><li>✓ {t("Pedir e aceitar alugueres", "Request and accept rentals")}</li><li>✓ {t("Preços e condições próprias", "Own pricing and terms")}</li><li>✓ {t("Colaboradores ilimitados", "Unlimited team members")}</li><li>✓ {t("Análise de receita", "Revenue analytics")}</li></ul></article>
+      </section>
+      <section className="payment-history card"><header><div><span className="eyebrow">{t("FACTURAÇÃO", "BILLING")}</span><h2>{t("Pagamentos e recibos", "Payments & receipts")}</h2></div><small>{payments.length} {t("registos", "records")}</small></header>
+        <div>{payments.length ? payments.map((payment) => <article key={payment.id}><span className={cls("payment-status", `payment-${payment.status.toLowerCase()}`)}>{payment.status}</span><div><strong>{payment.plan} · {formatMoney(payment.amount, payment.currency, language)}</strong><small>{payment.reference} · {new Date(payment.createdAt).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")}</small>{payment.failureReason && <em>{payment.failureReason}</em>}</div>{payment.status === "Paid" && payment.receiptNumber ? <button onClick={() => openReceipt(payment)}>{t("Ver recibo", "View receipt")}</button> : payment.status === "Pending" && payment.checkoutUrl ? <a href={payment.checkoutUrl}>{t("Continuar pagamento", "Continue payment")}</a> : <span />}</article>) : <div className="manager-empty">◇<strong>{t("Ainda sem pagamentos", "No payments yet")}</strong></div>}</div>
       </section>
       <section className="plan-note"><span>♡</span><div><strong>{t("Pensado para a realidade dos decoradores.", "Built for how decorators actually work.")}</strong><p>{t("Sem contratos. Mude ou cancele quando quiser.", "No contracts. Switch or cancel anytime.")}</p></div><button>{t("Perguntas frequentes", "Common questions")} →</button></section>
     </>
   );
+}
+
+function Receipt({ payment, businessName, language, t }: { payment: PaymentRecord; businessName: string; language: Language; t: Translator }) {
+  return <section className="receipt">
+    <header><div><span className="brand-mark"><i /><i /><i /></span><strong>Trove</strong></div><span>{t("RECIBO", "RECEIPT")}</span></header>
+    <h3>{payment.receiptNumber}</h3>
+    <dl><div><dt>{t("Empresa", "Business")}</dt><dd>{businessName}</dd></div><div><dt>{t("Plano", "Plan")}</dt><dd>{payment.plan}</dd></div><div><dt>{t("Valor", "Amount")}</dt><dd>{formatMoney(payment.amount, payment.currency, language)}</dd></div><div><dt>{t("Método", "Method")}</dt><dd>{payment.method || "PaySuite"}</dd></div><div><dt>{t("Referência", "Reference")}</dt><dd>{payment.reference}</dd></div><div><dt>{t("Pago em", "Paid on")}</dt><dd>{payment.paidAt ? new Date(payment.paidAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ") : "—"}</dd></div></dl>
+    <p>{t("Pagamento recebido para acesso mensal à plataforma Trove.", "Payment received for monthly access to the Trove platform.")}</p>
+    <button className="button-primary" onClick={() => window.print()}>{t("Imprimir recibo", "Print receipt")}</button>
+  </section>;
 }
 
 function Analytics({ language, t, items, reservations }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[] }) {
