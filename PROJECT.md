@@ -16,7 +16,7 @@ Uma iteração só é considerada concluída quando, no mesmo commit:
 4. uma entrada for adicionada ao histórico de iterações;
 5. os comandos de validação executados estiverem registados.
 
-Última actualização: **30 de Julho de 2026**
+Última actualização: **31 de Julho de 2026**
 
 ## 1. Visão
 
@@ -128,6 +128,10 @@ até serem configuradas as credenciais da conta comercial.
   orçamento, moeda, cor, horários, estado e notas.
 - Edição integral, duplicação segura sem copiar reservas e arquivo apenas após
   conclusão/cancelamento e sem reservas activas.
+- Checklist operacional por evento com tarefas, categorias, prioridades,
+  responsáveis activos, prazos, progresso e registo de conclusão.
+- Reatribuição de tarefas pendentes, conclusão/reabertura e remoção controlada,
+  com notificações e histórico de actividade.
 
 ### Equipa e perfil
 
@@ -228,7 +232,7 @@ até serem configuradas as credenciais da conta comercial.
 | Upload de imagens | Funcional | JPG/PNG até 5 MB, autenticado e separado por empresa |
 | Reservas | Funcional | Multiartigo, conflitos atómicos, preços e ciclo operacional |
 | Calendário | Funcional | Visões mensal/semanal, detalhes e reservas canceladas excluídas |
-| Gestão de eventos | Funcional (passo 2) | Ficha completa, edição, responsável, duplicação sem reservas e arquivo protegido; tarefas e rentabilidade continuam no roadmap |
+| Gestão de eventos | Funcional (passo 3) | Ficha completa, checklist, tarefas, responsáveis, prazos, progresso e arquivo protegido; custos e rentabilidade continuam no roadmap |
 | Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
 | Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
 | Perfil público | Funcional no produto / publicação externa pendente | Rota, visibilidade, contactos, serviços e pedidos funcionam; o Sites continua com acesso privado |
@@ -243,7 +247,7 @@ até serem configuradas as credenciais da conta comercial.
 | Páginas legais | Beta | Publicadas e coerentes com a implementação; revisão jurídica continua obrigatória |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
 | Monitorização | Funcional (MVP) | Saúde pública mínima, erros de interface e painel operacional por empresa |
-| Testes automatizados | Funcional (MVP) | 23 testes estruturais e integração das fases 3 a 9 |
+| Testes automatizados | Funcional (MVP) | 24 testes estruturais e integração das fases 3 a 9 |
 
 ## 7. Arquitectura actual
 
@@ -327,6 +331,8 @@ Next.js / Vinext
 - `clients`: clientes reutilizáveis, isolados por empresa.
 - `events`: ficha operacional, responsável, orçamento, estado, arquivo e
   associação a clientes e reservas.
+- `event_tasks`: checklist, atribuição, prioridade, prazo e conclusão das
+  tarefas operacionais de cada evento.
 - `reservations`: período, valores, logística e estado do ciclo de aluguer.
 - `reservation_items`: artigos, quantidades e preços de cada reserva.
 - `categories`: categorias isoladas por empresa.
@@ -356,6 +362,7 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `kits` e `kit_items` — implementado
 - `clients` — implementado
 - `events` — implementado
+- `event_tasks` — implementado
 - `reservations`
 - `reservation_items` — implementado
 - `marketplace_listings` — implementado
@@ -531,14 +538,15 @@ descrevem a versão actual, não substituem revisão jurídica.
 - [x] Resumo de cliente, local, datas, reservas e valor por evento.
 - [x] Ficha completa, edição, duplicação e arquivo.
 - [ ] Ciclo de estados e regras agregadas entre evento e reservas.
-- [ ] Tarefas, responsáveis e checklist operacional.
+- [x] Tarefas, responsáveis e checklist operacional.
 - [ ] Custos, fornecedores, documentos e rentabilidade.
 - [ ] Eventos sem reserva visíveis no calendário.
 
 Nota: a duplicação copia apenas a configuração do evento e deixa de fora
-reservas e bloqueios de stock. O arquivo exige evento concluído ou cancelado e
-sem reservas confirmadas/em aluguer. O ciclo agregado completo, tarefas,
-documentos e rentabilidade permanecem correctamente pendentes.
+reservas, tarefas e bloqueios de stock. O arquivo exige evento concluído ou
+cancelado, sem reservas confirmadas/em aluguer e com todas as tarefas
+concluídas. O ciclo agregado completo, documentos e rentabilidade permanecem
+correctamente pendentes.
 
 ## 13. Definição de concluído
 
@@ -593,6 +601,33 @@ pnpm run db:generate
 - Empresas e critérios de sucesso para o primeiro grupo beta.
 
 ## 17. Histórico de iterações
+
+### 31 de Julho de 2026 — Fase 9, passo 3: tarefas e checklist operacional
+
+- Adicionada uma checklist persistente a cada evento, visível por toda a equipa
+  e editável apenas por funções com permissão de reservas.
+- Cada tarefa possui título, instruções, categoria operacional, prioridade,
+  responsável activo, data, hora, ordem e estado.
+- Implementadas criação, reatribuição, conclusão, reabertura e remoção
+  controlada de tarefas pendentes.
+- A ficha mostra progresso percentual, tarefas concluídas e avisos visuais para
+  prioridades elevadas e prazos vencidos; a lista de eventos resume também o
+  progresso da checklist.
+- A conclusão regista autor e data, e as alterações geram histórico de
+  actividade e notificações para a equipa.
+- O arquivo passa a exigir todas as tarefas concluídas; a duplicação não copia
+  tarefas, reservas ou bloqueios de inventário.
+- Criada a entidade `event_tasks`, isolada por empresa e indexada por evento,
+  estado, responsável e prazo; incluída também na exportação integral.
+- Gerada e inspeccionada a migração `0011_long_pandemic.sql`.
+- Ampliado o teste integrado da Fase 9 com criação, edição, atribuição,
+  conclusão, reabertura, bloqueio de arquivo e duplicação sem tarefas, além de
+  um novo teste estrutural.
+- Validação: `node tests/phase9-api.integration.mjs`,
+  `node --test tests/rendered-html.test.mjs` (24 testes),
+  `tsc --noEmit --incremental false`,
+  `eslint . --ignore-pattern dist --ignore-pattern .next`,
+  `vinext build` e `git diff --check`.
 
 ### 31 de Julho de 2026 — Fase 9, passo 2: ficha operacional de eventos
 

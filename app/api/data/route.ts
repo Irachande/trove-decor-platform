@@ -57,6 +57,10 @@ const ACTION_PERMISSIONS: Record<string, WorkspacePermission> = {
   updateEvent: "manageReservations",
   duplicateEvent: "manageReservations",
   archiveEvent: "manageReservations",
+  addEventTask: "manageReservations",
+  updateEventTask: "manageReservations",
+  transitionEventTask: "manageReservations",
+  deleteEventTask: "manageReservations",
   addCategory: "manageCategories",
   removeCategory: "manageCategories",
   inviteMember: "manageTeam",
@@ -171,6 +175,7 @@ function actionEntity(action: string) {
   if (action.includes("Maintenance")) return "maintenance";
   if (action.includes("Kit")) return "kit";
   if (action.includes("Client")) return "client";
+  if (action.includes("EventTask")) return "event_task";
   if (action.includes("Event")) return "event";
   if (action.includes("Category")) return "category";
   if (action.includes("Profile")) return "business_profile";
@@ -198,6 +203,10 @@ function actionSummary(action: string) {
     updateEnquiryStatus: "Estado do pedido público alterado",
     duplicateEvent: "Evento duplicado sem reservas",
     archiveEvent: "Evento arquivado",
+    addEventTask: "Tarefa de evento criada",
+    updateEventTask: "Tarefa de evento actualizada",
+    transitionEventTask: "Estado da tarefa de evento alterado",
+    deleteEventTask: "Tarefa de evento removida",
   };
   return summaries[action] || action.replace(/([A-Z])/g, " $1").trim();
 }
@@ -306,6 +315,8 @@ async function emitActionNotification(
     adjustStock: ["inventory", "Stock actualizado", "Stock updated", "A quantidade disponível de um artigo foi alterada.", "An item's available quantity was changed."],
     addMaintenance: ["maintenance", "Intervenção registada", "Maintenance recorded", "Foi adicionada uma intervenção ao inventário.", "An inventory maintenance record was added."],
     updateMaintenance: ["maintenance", "Intervenção concluída", "Maintenance completed", "Uma intervenção foi actualizada.", "A maintenance record was updated."],
+    addEventTask: ["event", "Nova tarefa de evento", "New event task", "Foi adicionada uma tarefa à checklist de um evento.", "A task was added to an event checklist."],
+    transitionEventTask: ["event", "Checklist actualizada", "Checklist updated", `Novo estado da tarefa: ${String(payload.status || "")}.`, `New task status: ${String(payload.status || "")}.`],
     updateMemberRole: ["team", "Permissão actualizada", "Permission updated", "A função de um membro da equipa foi alterada.", "A team member's role was changed."],
     removeMember: ["team", "Equipa actualizada", "Team updated", "Um membro foi removido da empresa.", "A member was removed from the business."],
     cancelSubscription: ["billing", "Cancelamento agendado", "Cancellation scheduled", "O plano continuará activo até ao fim do período actual.", "The plan will remain active until the end of the current period."],
@@ -416,6 +427,7 @@ export async function GET(request: Request) {
       kitItems,
       clients,
       events,
+      eventTasks,
       bookedItems,
       notifications,
       auditLogs,
@@ -466,6 +478,9 @@ export async function GET(request: Request) {
         "SELECT id, client_id AS clientId, owner_user_id AS ownerUserId, name, event_type AS eventType, venue, address, start_date AS startDate, end_date AS endDate, setup_time AS setupTime, pickup_time AS pickupTime, guest_count AS guestCount, budget, currency, on_site_contact AS onSiteContact, color, notes, status, created_at AS createdAt, updated_at AS updatedAt, archived_at AS archivedAt FROM events WHERE business_id = ? ORDER BY start_date",
       ).bind(context.businessId).all(),
       env.DB.prepare(
+        "SELECT id, event_id AS eventId, assignee_user_id AS assigneeUserId, title, description, category, priority, status, due_date AS dueDate, due_time AS dueTime, sort_order AS sortOrder, completed_at AS completedAt, completed_by_user_id AS completedByUserId, created_by_user_id AS createdByUserId, created_at AS createdAt, updated_at AS updatedAt FROM event_tasks WHERE business_id = ? ORDER BY event_id, status = 'Completed', sort_order, due_date, id",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
         "SELECT id, reservation_id AS reservationId, item_id AS itemId, item_name AS itemName, quantity, unit_price AS unitPrice, currency FROM reservation_items WHERE business_id = ? ORDER BY reservation_id, id",
       ).bind(context.businessId).all(),
       env.DB.prepare(
@@ -513,6 +528,7 @@ export async function GET(request: Request) {
       }),
       clients: clients.results,
       events: events.results,
+      eventTasks: eventTasks.results,
       notifications: notifications.results,
       auditLogs: auditLogs.results,
       invitations: invitations.results,
@@ -915,7 +931,7 @@ export async function POST(request: Request) {
         source.guestCount, source.budget, source.currency, source.onSiteContact,
         source.color, source.notes, createdAt, createdAt,
       ).run();
-      result = { ok: true, eventId: id, reservationsCopied: false };
+      result = { ok: true, eventId: id, reservationsCopied: false, tasksCopied: false };
     } else if (action === "archiveEvent") {
       const id = integer(payload, "id", { min: 1 });
       const event = await env.DB.prepare(
@@ -931,10 +947,114 @@ export async function POST(request: Request) {
       if (activeReservations?.count) {
         throw new Error("Event has active reservations and cannot be archived");
       }
+      const pendingTasks = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM event_tasks WHERE event_id = ? AND business_id = ? AND status != 'Completed'",
+      ).bind(id, context.businessId).first<{ count: number }>();
+      if (pendingTasks?.count) {
+        throw new Error("Event has pending tasks and cannot be archived");
+      }
       await env.DB.prepare(
         "UPDATE events SET status = 'Archived', archived_at = ?, updated_at = ? WHERE id = ? AND business_id = ?",
       ).bind(createdAt, createdAt, id, context.businessId).run();
       result = { ok: true, eventId: id };
+    } else if (action === "addEventTask" || action === "updateEventTask") {
+      const id = integer(payload, "id", { min: 1 });
+      const eventId = integer(payload, "eventId", { min: 1 });
+      const event = await env.DB.prepare(
+        "SELECT status FROM events WHERE id = ? AND business_id = ?",
+      ).bind(eventId, context.businessId).first<{ status: string }>();
+      if (!event) throw new Error("Event not found");
+      if (event.status === "Archived") throw new Error("Archived events cannot be changed");
+      const assigneeUserId = payload.assigneeUserId
+        ? integer(payload, "assigneeUserId", { min: 1 })
+        : null;
+      if (assigneeUserId) {
+        const assignee = await env.DB.prepare(
+          "SELECT user_id AS userId FROM memberships WHERE business_id = ? AND user_id = ? AND status = 'Active'",
+        ).bind(context.businessId, assigneeUserId).first();
+        if (!assignee) throw new Error("Task assignee not found");
+      }
+      const category = text(payload, "category", { max: 30 }) || "General";
+      if (!["Planning", "Logistics", "Setup", "Styling", "Pickup", "General"].includes(category)) {
+        throw new Error("Task category is invalid");
+      }
+      const priority = text(payload, "priority", { max: 20 }) || "Normal";
+      if (!["Low", "Normal", "High", "Urgent"].includes(priority)) {
+        throw new Error("Task priority is invalid");
+      }
+      const dueDate = text(payload, "dueDate", { max: 10 });
+      if (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`)))) {
+        throw new Error("Task due date is invalid");
+      }
+      const dueTime = text(payload, "dueTime", { max: 5 });
+      if (dueTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(dueTime)) {
+        throw new Error("Task due time is invalid");
+      }
+      const existing = await env.DB.prepare(
+        "SELECT business_id AS businessId, status FROM event_tasks WHERE id = ?",
+      ).bind(id).first<{ businessId: number; status: string }>();
+      if (existing && existing.businessId !== context.businessId) {
+        throw new Error("Event task not found");
+      }
+      if (action === "updateEventTask" && !existing) {
+        throw new Error("Event task not found");
+      }
+      if (existing?.status === "Completed") {
+        throw new Error("Completed tasks must be reopened before editing");
+      }
+      const values = [
+        eventId,
+        assigneeUserId,
+        text(payload, "title", { required: true, max: 180 }),
+        text(payload, "description", { max: 1000 }),
+        category,
+        priority,
+        dueDate,
+        dueTime,
+        integer({ sortOrder: payload.sortOrder ?? 0 }, "sortOrder", { min: 0, max: 100000 }),
+      ] as const;
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE event_tasks SET event_id = ?, assignee_user_id = ?, title = ?, description = ?, category = ?, priority = ?, due_date = ?, due_time = ?, sort_order = ?, updated_at = ? WHERE id = ? AND business_id = ? AND status = 'Pending'",
+        ).bind(...values, createdAt, id, context.businessId).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO event_tasks (id, business_id, event_id, assignee_user_id, title, description, category, priority, status, due_date, due_time, sort_order, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?, ?, ?)",
+        ).bind(id, context.businessId, ...values, context.userId, createdAt, createdAt).run();
+      }
+      result = { ok: true, taskId: id };
+    } else if (action === "transitionEventTask") {
+      const id = integer(payload, "id", { min: 1 });
+      const status = text(payload, "status", { required: true, max: 20 });
+      if (!["Pending", "Completed"].includes(status)) {
+        throw new Error("Task status is invalid");
+      }
+      const task = await env.DB.prepare(
+        "SELECT t.status, e.status AS eventStatus FROM event_tasks t JOIN events e ON e.id = t.event_id AND e.business_id = t.business_id WHERE t.id = ? AND t.business_id = ?",
+      ).bind(id, context.businessId).first<{ status: string; eventStatus: string }>();
+      if (!task) throw new Error("Event task not found");
+      if (task.eventStatus === "Archived") throw new Error("Archived events cannot be changed");
+      if (task.status === status) throw new Error("Task status is already set");
+      await env.DB.prepare(
+        "UPDATE event_tasks SET status = ?, completed_at = ?, completed_by_user_id = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+      ).bind(
+        status,
+        status === "Completed" ? createdAt : null,
+        status === "Completed" ? context.userId : null,
+        createdAt,
+        id,
+        context.businessId,
+      ).run();
+      result = { ok: true, taskId: id, status };
+    } else if (action === "deleteEventTask") {
+      const id = integer(payload, "id", { min: 1 });
+      const deleted = await env.DB.prepare(
+        "DELETE FROM event_tasks WHERE id = ? AND business_id = ? AND status = 'Pending' AND event_id IN (SELECT id FROM events WHERE business_id = ? AND status != 'Archived')",
+      ).bind(id, context.businessId, context.businessId).run();
+      if (!deleted.meta.changes) {
+        throw new Error("Only pending tasks from active events can be deleted");
+      }
+      result = { ok: true, taskId: id };
     } else if (action === "addReservation" || action === "updateReservation") {
       const reservationId = integer(payload, "id", { min: 1 });
       const clientId = integer(payload, "clientId", { min: 1 });

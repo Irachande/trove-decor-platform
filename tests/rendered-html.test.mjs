@@ -447,3 +447,32 @@ test("phase 9 event records support editing, safe duplication, and archiving", a
   assert.match(migration, /ALTER TABLE `events` ADD `event_type`/);
   assert.match(manifest, /"test:phase9-api"/);
 });
+
+test("phase 9 step 3 adds durable team tasks and operational checklists", async () => {
+  const [app, styles, api, schema, workspace, migration, backup] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("app/api/data/route.ts"),
+    source("db/schema.ts"),
+    source("app/workspace.ts"),
+    source("drizzle/0011_long_pandemic.sql"),
+    source("app/api/backup/route.ts"),
+  ]);
+
+  assert.match(app, /function EventChecklist/);
+  assert.match(app, /addManagedEventTask/);
+  assert.match(app, /transitionManagedEventTask/);
+  assert.match(app, /CHECKLIST OPERACIONAL/);
+  assert.match(styles, /\.event-checklist/);
+  assert.match(styles, /\.checklist-progress/);
+  assert.match(styles, /\.event-task-list/);
+  assert.match(api, /addEventTask: "manageReservations"/);
+  assert.match(api, /transitionEventTask: "manageReservations"/);
+  assert.match(api, /Event has pending tasks and cannot be archived/);
+  assert.match(api, /tasksCopied: false/);
+  assert.match(schema, /export const eventTasks/);
+  assert.match(workspace, /CREATE TABLE IF NOT EXISTS event_tasks/);
+  assert.match(migration, /CREATE TABLE `event_tasks`/);
+  assert.match(migration, /event_tasks_assignee_due_idx/);
+  assert.match(backup, /eventTasks/);
+});

@@ -17,6 +17,7 @@ const BUSINESS_TABLES: QueryDefinition[] = [
   { key: "kitItems", sql: "SELECT * FROM kit_items WHERE business_id = ? ORDER BY kit_id, id" },
   { key: "clients", sql: "SELECT * FROM clients WHERE business_id = ? ORDER BY id" },
   { key: "events", sql: "SELECT * FROM events WHERE business_id = ? ORDER BY id" },
+  { key: "eventTasks", sql: "SELECT * FROM event_tasks WHERE business_id = ? ORDER BY event_id, sort_order, id" },
   { key: "reservations", sql: "SELECT * FROM reservations WHERE business_id = ? ORDER BY id" },
   { key: "reservationItems", sql: "SELECT * FROM reservation_items WHERE business_id = ? ORDER BY reservation_id, id" },
   { key: "memberships", sql: "SELECT m.business_id, m.user_id, m.role, m.status, m.created_at, u.email, u.display_name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.business_id = ? ORDER BY m.user_id" },

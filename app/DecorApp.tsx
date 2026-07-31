@@ -198,6 +198,24 @@ type EventRecord = {
   updatedAt: string;
   archivedAt?: string;
 };
+type EventTask = {
+  id: number;
+  eventId: number;
+  assigneeUserId?: number;
+  title: string;
+  description: string;
+  category: string;
+  priority: string;
+  status: "Pending" | "Completed";
+  dueDate: string;
+  dueTime: string;
+  sortOrder: number;
+  completedAt?: string;
+  completedByUserId?: number;
+  createdByUserId: number;
+  createdAt: string;
+  updatedAt: string;
+};
 type ReservationItem = { id: number; reservationId: number; itemId: number; itemName: string; quantity: number; unitPrice: number; currency: string };
 type WorkspaceData = {
   items?: Item[];
@@ -212,6 +230,7 @@ type WorkspaceData = {
   kits?: Kit[];
   clients?: Client[];
   events?: EventRecord[];
+  eventTasks?: EventTask[];
   notifications?: NotificationRecord[];
   auditLogs?: AuditEntry[];
   invitations?: Invitation[];
@@ -386,6 +405,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [kits, setKits] = useState<Kit[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
+  const [eventTasks, setEventTasks] = useState<EventTask[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
@@ -484,6 +504,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         if (Array.isArray(data.kits)) setKits(data.kits);
         if (Array.isArray(data.clients)) setClients(data.clients);
         if (Array.isArray(data.events)) setEvents(data.events);
+        if (Array.isArray(data.eventTasks)) setEventTasks(data.eventTasks);
         if (Array.isArray(data.notifications)) setNotifications(data.notifications);
         if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
         if (Array.isArray(data.invitations)) setInvitations(data.invitations);
@@ -1314,6 +1335,55 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
     }
   }
 
+  async function addManagedEventTask(input: {
+    title: string;
+    description: string;
+    category: string;
+    priority: string;
+    assigneeUserId: number | null;
+    dueDate: string;
+    dueTime: string;
+  }) {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("addEventTask", {
+      id: Date.now(),
+      eventId: managedEvent.id,
+      ...input,
+      sortOrder: eventTasks.filter((task) => task.eventId === managedEvent.id).length,
+    })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Tarefa adicionada à checklist", "Task added to the checklist"));
+    }
+  }
+
+  async function updateManagedEventTask(task: EventTask, changes: Partial<EventTask>) {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("updateEventTask", { ...task, ...changes })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Tarefa actualizada", "Task updated"));
+    }
+  }
+
+  async function transitionManagedEventTask(task: EventTask) {
+    if (!canManageReservations) return;
+    const status = task.status === "Completed" ? "Pending" : "Completed";
+    if (await persist("transitionEventTask", { id: task.id, status })) {
+      setReloadToken((value) => value + 1);
+      showToast(status === "Completed"
+        ? t("Tarefa concluída", "Task completed")
+        : t("Tarefa reaberta", "Task reopened"));
+    }
+  }
+
+  async function deleteManagedEventTask(task: EventTask) {
+    if (!canManageReservations || task.status !== "Pending") return;
+    if (!window.confirm(t(`Remover a tarefa “${task.title}”?`, `Remove task “${task.title}”?`))) return;
+    if (await persist("deleteEventTask", { id: task.id })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Tarefa removida", "Task removed"));
+    }
+  }
+
   async function addCategory(name: string) {
     const clean = name.trim();
     if (!clean || categories.includes(clean)) return;
@@ -1682,6 +1752,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
             language={language}
             t={t}
             events={events}
+            tasks={eventTasks}
             clients={clients}
             reservations={reservations}
             canManage={canManageReservations}
@@ -1898,12 +1969,17 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
             clients={clients}
             members={activeMembers}
             reservations={reservations.filter((reservation) => reservation.eventId === managedEvent.id)}
+            tasks={eventTasks.filter((task) => task.eventId === managedEvent.id)}
             language={language}
             t={t}
             canManage={canManageReservations}
             onSubmit={saveManagedEvent}
             onDuplicate={duplicateManagedEvent}
             onArchive={archiveManagedEvent}
+            onAddTask={addManagedEventTask}
+            onUpdateTask={updateManagedEventTask}
+            onTransitionTask={transitionManagedEventTask}
+            onDeleteTask={deleteManagedEventTask}
             onCancel={() => setManagedEvent(null)}
           />
         </Modal>
@@ -2274,27 +2350,125 @@ function RelationshipManager({ clients, events, t, onAddClient, onAddEvent }: { 
   </div>;
 }
 
-function EventManager({ event, clients, members, reservations, language, t, canManage, onSubmit, onDuplicate, onArchive, onCancel }: {
+function EventChecklist({ event, tasks, members, t, canManage, onAdd, onUpdate, onTransition, onDelete }: {
+  event: EventRecord;
+  tasks: EventTask[];
+  members: Member[];
+  t: Translator;
+  canManage: boolean;
+  onAdd: (input: {
+    title: string;
+    description: string;
+    category: string;
+    priority: string;
+    assigneeUserId: number | null;
+    dueDate: string;
+    dueTime: string;
+  }) => void;
+  onUpdate: (task: EventTask, changes: Partial<EventTask>) => void;
+  onTransition: (task: EventTask) => void;
+  onDelete: (task: EventTask) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("Planning");
+  const [priority, setPriority] = useState("Normal");
+  const [assigneeUserId, setAssigneeUserId] = useState("");
+  const [dueDate, setDueDate] = useState(event.startDate);
+  const [dueTime, setDueTime] = useState("");
+  const completed = tasks.filter((task) => task.status === "Completed").length;
+  const progress = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
+  const categoryLabels: Record<string, [string, string]> = {
+    Planning: ["Planeamento", "Planning"],
+    Logistics: ["Logística", "Logistics"],
+    Setup: ["Montagem", "Setup"],
+    Styling: ["Decoração", "Styling"],
+    Pickup: ["Recolha", "Pickup"],
+    General: ["Geral", "General"],
+  };
+  const priorityLabels: Record<string, [string, string]> = {
+    Low: ["Baixa", "Low"],
+    Normal: ["Normal", "Normal"],
+    High: ["Alta", "High"],
+    Urgent: ["Urgente", "Urgent"],
+  };
+  const add = () => {
+    if (!title.trim()) return;
+    onAdd({
+      title: title.trim(),
+      description: description.trim(),
+      category,
+      priority,
+      assigneeUserId: Number(assigneeUserId) || null,
+      dueDate,
+      dueTime,
+    });
+    setTitle("");
+    setDescription("");
+  };
+  return <section className="event-checklist">
+    <header>
+      <span><small>{t("CHECKLIST OPERACIONAL", "OPERATIONAL CHECKLIST")}</small><h3>{t("Tarefas da equipa", "Team tasks")}</h3></span>
+      <strong>{completed}/{tasks.length} · {progress}%</strong>
+    </header>
+    <div className="checklist-progress" aria-label={t(`${progress}% concluído`, `${progress}% complete`)}><i style={{ width: `${progress}%` }} /></div>
+    {canManage && event.status !== "Archived" && <div className="task-composer">
+      <input value={title} onChange={(input) => setTitle(input.target.value)} placeholder={t("Nova tarefa…", "New task…")} maxLength={180} />
+      <select value={category} onChange={(input) => setCategory(input.target.value)} aria-label={t("Categoria da tarefa", "Task category")}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select>
+      <select value={assigneeUserId} onChange={(input) => setAssigneeUserId(input.target.value)} aria-label={t("Responsável pela tarefa", "Task assignee")}><option value="">{t("Sem responsável", "Unassigned")}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.displayName || member.email}</option>)}</select>
+      <select value={priority} onChange={(input) => setPriority(input.target.value)} aria-label={t("Prioridade da tarefa", "Task priority")}>{Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select>
+      <input type="date" value={dueDate} onChange={(input) => setDueDate(input.target.value)} aria-label={t("Prazo da tarefa", "Task due date")} />
+      <input type="time" value={dueTime} onChange={(input) => setDueTime(input.target.value)} aria-label={t("Hora da tarefa", "Task due time")} />
+      <input className="task-description" value={description} onChange={(input) => setDescription(input.target.value)} placeholder={t("Instruções opcionais", "Optional instructions")} maxLength={1000} />
+      <button type="button" className="button-primary" onClick={add} disabled={!title.trim()}>{t("Adicionar", "Add")}</button>
+    </div>}
+    {tasks.length ? <div className="event-task-list">{tasks.map((task) => {
+      const assignee = members.find((member) => member.id === task.assigneeUserId);
+      const completedBy = members.find((member) => member.id === task.completedByUserId);
+      const done = task.status === "Completed";
+      const overdue = !done && task.dueDate && task.dueDate < new Date().toISOString().slice(0, 10);
+      return <article key={task.id} className={cls(done && "completed", overdue && "overdue")}>
+        <button type="button" className="task-toggle" onClick={() => onTransition(task)} disabled={!canManage || event.status === "Archived"} aria-label={done ? t("Reabrir tarefa", "Reopen task") : t("Concluir tarefa", "Complete task")}>{done ? "✓" : ""}</button>
+        <span className="task-copy"><strong>{task.title}</strong><small>{t(categoryLabels[task.category]?.[0] || task.category, categoryLabels[task.category]?.[1] || task.category)}{task.description ? ` · ${task.description}` : ""}{done && task.completedAt ? ` · ${t("Concluída por", "Completed by")} ${completedBy?.displayName || completedBy?.email || t("membro da equipa", "team member")} · ${task.completedAt.slice(0, 10)}` : ""}</small></span>
+        {canManage && !done && event.status !== "Archived"
+          ? <select value={task.assigneeUserId || ""} onChange={(input) => onUpdate(task, { assigneeUserId: Number(input.target.value) || undefined })} aria-label={t(`Responsável por ${task.title}`, `${task.title} assignee`)}><option value="">{t("Sem responsável", "Unassigned")}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.displayName || member.email}</option>)}</select>
+          : <span className="task-assignee">{assignee ? initials(assignee.displayName || assignee.email) : "—"}<small>{assignee?.displayName || assignee?.email || t("Sem responsável", "Unassigned")}</small></span>}
+        <span className={cls("task-priority", task.priority.toLowerCase())}>{t(priorityLabels[task.priority]?.[0] || task.priority, priorityLabels[task.priority]?.[1] || task.priority)}</span>
+        <time className={cls(overdue && "late")} dateTime={task.dueDate}>{task.dueDate || t("Sem prazo", "No due date")}{task.dueTime ? ` · ${task.dueTime}` : ""}</time>
+        {canManage && !done && event.status !== "Archived" && <button type="button" className="task-delete" onClick={() => onDelete(task)} aria-label={t(`Remover ${task.title}`, `Remove ${task.title}`)}>×</button>}
+      </article>;
+    })}</div> : <div className="checklist-empty"><span>✓</span><p>{t("Adicione as tarefas de planeamento, logística, montagem, decoração e recolha.", "Add planning, logistics, setup, styling, and pickup tasks.")}</p></div>}
+  </section>;
+}
+
+function EventManager({ event, clients, members, reservations, tasks, language, t, canManage, onSubmit, onDuplicate, onArchive, onAddTask, onUpdateTask, onTransitionTask, onDeleteTask, onCancel }: {
   event: EventRecord;
   clients: Client[];
   members: Member[];
   reservations: Reservation[];
+  tasks: EventTask[];
   language: Language;
   t: Translator;
   canManage: boolean;
   onSubmit: (formEvent: FormEvent<HTMLFormElement>) => void;
   onDuplicate: () => void;
   onArchive: () => void;
+  onAddTask: (input: { title: string; description: string; category: string; priority: string; assigneeUserId: number | null; dueDate: string; dueTime: string }) => void;
+  onUpdateTask: (task: EventTask, changes: Partial<EventTask>) => void;
+  onTransitionTask: (task: EventTask) => void;
+  onDeleteTask: (task: EventTask) => void;
   onCancel: () => void;
 }) {
   const activeReservations = reservations.filter((entry) => !["Cancelled", "Returned"].includes(entry.status));
   const total = reservations.filter((entry) => entry.status !== "Cancelled").reduce((sum, entry) => sum + (entry.total || 0), 0);
-  const canArchive = ["Completed", "Cancelled"].includes(event.status) && !activeReservations.length;
+  const pendingTasks = tasks.filter((task) => task.status !== "Completed").length;
+  const canArchive = ["Completed", "Cancelled"].includes(event.status) && !activeReservations.length && !pendingTasks;
   const statuses = ["Lead", "Planned", "Confirmed", "Preparing", "InProgress", "Completed", "Cancelled"];
   return <form className="modal-form event-manager" onSubmit={onSubmit}>
     <section className="event-record-summary" style={{ "--event": event.color || "#b75d3f" } as React.CSSProperties}>
       <span><small>{t("Reservas ligadas", "Linked bookings")}</small><strong>{reservations.length}</strong></span>
       <span><small>{t("Reservas activas", "Active bookings")}</small><strong>{activeReservations.length}</strong></span>
+      <span><small>{t("Tarefas concluídas", "Tasks completed")}</small><strong>{tasks.filter((task) => task.status === "Completed").length}/{tasks.length}</strong></span>
       <span><small>{t("Total reservado", "Booked total")}</small><strong>{formatMoney(total, reservations[0]?.currency || event.currency || "MZN", language)}</strong></span>
     </section>
     <div className="form-grid"><label>{t("Cliente", "Client")}<select name="clientId" defaultValue={event.clientId} required disabled={!canManage}>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>{t("Responsável", "Owner")}<select name="ownerUserId" defaultValue={event.ownerUserId || ""} disabled={!canManage}><option value="">{t("Por atribuir", "Unassigned")}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.displayName || member.email}</option>)}</select></label></div>
@@ -2306,15 +2480,17 @@ function EventManager({ event, clients, members, reservations, language, t, canM
     <div className="form-grid three"><label>{t("Convidados", "Guests")}<input name="guestCount" type="number" min="0" defaultValue={event.guestCount || 0} disabled={!canManage} /></label><label>{t("Orçamento", "Budget")}<input name="budget" type="number" min="0" defaultValue={event.budget || 0} disabled={!canManage} /></label><label>{t("Moeda", "Currency")}<select name="currency" defaultValue={event.currency || "MZN"} disabled={!canManage}><option value="MZN">MZN</option><option value="ZAR">ZAR</option><option value="USD">USD</option><option value="EUR">EUR</option></select></label></div>
     <div className="form-grid"><label>{t("Estado", "Status")}<select name="status" defaultValue={event.status} disabled={!canManage}>{statuses.map((status) => <option key={status} value={status}>{eventStatusLabel(status, t)}</option>)}</select></label><label>{t("Cor no calendário", "Calendar color")}<input name="color" type="color" defaultValue={event.color || "#b75d3f"} disabled={!canManage} /></label></div>
     <label>{t("Notas operacionais", "Operational notes")}<textarea name="notes" rows={4} defaultValue={event.notes} disabled={!canManage} /></label>
+    <EventChecklist event={event} tasks={tasks} members={members} t={t} canManage={canManage} onAdd={onAddTask} onUpdate={onUpdateTask} onTransition={onTransitionTask} onDelete={onDeleteTask} />
     {reservations.length > 0 && <section className="event-linked-bookings"><h3>{t("Reservas associadas", "Linked bookings")}</h3>{reservations.map((reservation) => <article key={reservation.id}><span><strong>{reservation.item}</strong><small>{reservation.date} — {reservation.endDate}</small></span><em>{reservationStatusLabel(reservation.status, t)}</em></article>)}</section>}
-    <div className="modal-actions event-manager-actions"><button type="button" className="button-secondary" onClick={onCancel}>{t("Fechar", "Close")}</button>{canManage && <button type="button" className="button-secondary" onClick={onDuplicate}>{t("Duplicar evento", "Duplicate event")}</button>}{canManage && <button type="button" className="button-secondary danger-outline" onClick={onArchive} disabled={!canArchive} title={!canArchive ? t("Conclua ou cancele o evento e feche as reservas activas.", "Complete or cancel the event and close active bookings.") : ""}>{t("Arquivar", "Archive")}</button>}{canManage && event.status !== "Archived" && <button className="button-primary">{t("Guardar alterações", "Save changes")}</button>}</div>
+    <div className="modal-actions event-manager-actions"><button type="button" className="button-secondary" onClick={onCancel}>{t("Fechar", "Close")}</button>{canManage && <button type="button" className="button-secondary" onClick={onDuplicate}>{t("Duplicar evento", "Duplicate event")}</button>}{canManage && <button type="button" className="button-secondary danger-outline" onClick={onArchive} disabled={!canArchive} title={!canArchive ? t("Conclua ou cancele o evento, feche as reservas e conclua a checklist.", "Complete or cancel the event, close bookings, and finish the checklist.") : ""}>{t("Arquivar", "Archive")}</button>}{canManage && event.status !== "Archived" && <button className="button-primary">{t("Guardar alterações", "Save changes")}</button>}</div>
   </form>;
 }
 
-function Events({ language, t, events, clients, reservations, canManage, openCreate, openCalendar, openEvent }: {
+function Events({ language, t, events, tasks, clients, reservations, canManage, openCreate, openCalendar, openEvent }: {
   language: Language;
   t: Translator;
   events: EventRecord[];
+  tasks: EventTask[];
   clients: Client[];
   reservations: Reservation[];
   canManage: boolean;
@@ -2332,10 +2508,12 @@ function Events({ language, t, events, clients, reservations, canManage, openCre
   const eventSummary = (entry: EventRecord) => {
     const client = clients.find((candidate) => candidate.id === entry.clientId);
     const linked = reservations.filter((reservation) => reservation.eventId === entry.id);
+    const linkedTasks = tasks.filter((task) => task.eventId === entry.id);
     return {
       event: entry,
       client,
       reservations: linked,
+      tasks: linkedTasks,
       total: linked
         .filter((reservation) => reservation.status !== "Cancelled")
         .reduce((sum, reservation) => sum + (reservation.total || 0), 0),
@@ -2382,14 +2560,14 @@ function Events({ language, t, events, clients, reservations, canManage, openCre
         <select className="toolbar-select" value={sort} onChange={(event) => setSort(event.target.value as "soonest" | "newest" | "name")} aria-label={t("Ordenar eventos", "Sort events")}><option value="soonest">{t("Data mais próxima", "Soonest date")}</option><option value="newest">{t("Criados recentemente", "Recently created")}</option><option value="name">{t("Nome A–Z", "Name A–Z")}</option></select>
       </div>
       <header className="events-list-header"><span>{t(`${visible.length} eventos`, `${visible.length} events`)}</span><button onClick={openCalendar}>{t("Ver no calendário", "View calendar")} →</button></header>
-      {visible.length ? <div className="events-list">{visible.map(({ event, client, reservations: linked, total }) => {
+      {visible.length ? <div className="events-list">{visible.map(({ event, client, reservations: linked, tasks: linkedTasks, total }) => {
         const start = new Date(`${event.startDate}T00:00:00`);
         const end = new Date(`${event.endDate}T00:00:00`);
         return <article key={event.id}>
           <time dateTime={event.startDate}><small>{start.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { month: "short" }).replace(".", "").toUpperCase()}</small><strong>{start.getDate()}</strong></time>
           <span className="event-main"><small>{client?.name || t("Cliente por definir", "Client not set")}</small><strong>{event.name}</strong><em>⌖ {event.venue || t("Local por definir", "Venue not set")}</em></span>
           <span className="event-dates"><small>{t("Período", "Schedule")}</small><strong>{start.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { day: "numeric", month: "short" })} — {end.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { day: "numeric", month: "short" })}</strong><em>{event.setupTime ? `${t("Montagem", "Setup")} ${event.setupTime}` : t("Horário por definir", "Time not set")}</em></span>
-          <span className="event-bookings"><small>{t("Reservas", "Bookings")}</small><strong>{linked.length}</strong><em>{linked.length ? formatMoney(total, linked[0].currency || "MZN", language) : t("Sem material associado", "No inventory linked")}</em></span>
+          <span className="event-bookings"><small>{t("Reservas · tarefas", "Bookings · tasks")}</small><strong>{linked.length} · {linkedTasks.filter((task) => task.status === "Completed").length}/{linkedTasks.length}</strong><em>{linked.length ? formatMoney(total, linked[0].currency || "MZN", language) : t("Sem material associado", "No inventory linked")}</em></span>
           <span className={cls("event-status", event.status.toLowerCase())}>{eventStatusLabel(event.status, t)}</span>
           <button className="event-calendar-button" onClick={() => openEvent(event)} aria-label={t(`Abrir ficha de ${event.name}`, `Open ${event.name} record`)}>›</button>
         </article>;

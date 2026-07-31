@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("users", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -294,6 +294,37 @@ export const events = sqliteTable("events", {
   updatedAt: text("updated_at").notNull().default(""),
   archivedAt: text("archived_at"),
 });
+
+export const eventTasks = sqliteTable("event_tasks", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  eventId: integer("event_id").notNull(),
+  assigneeUserId: integer("assignee_user_id"),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  category: text("category").notNull().default("General"),
+  priority: text("priority").notNull().default("Normal"),
+  status: text("status").notNull().default("Pending"),
+  dueDate: text("due_date").notNull().default(""),
+  dueTime: text("due_time").notNull().default(""),
+  sortOrder: integer("sort_order").notNull().default(0),
+  completedAt: text("completed_at"),
+  completedByUserId: integer("completed_by_user_id"),
+  createdByUserId: integer("created_by_user_id").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  index("event_tasks_business_event_status_idx").on(
+    table.businessId,
+    table.eventId,
+    table.status,
+  ),
+  index("event_tasks_assignee_due_idx").on(
+    table.businessId,
+    table.assigneeUserId,
+    table.dueDate,
+  ),
+]);
 
 export const reservationItems = sqliteTable("reservation_items", {
   id: integer("id").primaryKey(),
