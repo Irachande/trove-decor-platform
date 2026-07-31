@@ -326,6 +326,62 @@ export const eventTasks = sqliteTable("event_tasks", {
   ),
 ]);
 
+export const suppliers = sqliteTable("suppliers", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  name: text("name").notNull(),
+  serviceType: text("service_type").notNull().default("Other"),
+  contactName: text("contact_name").notNull().default(""),
+  email: text("email").notNull().default(""),
+  phone: text("phone").notNull().default(""),
+  notes: text("notes").notNull().default(""),
+  active: integer("active", { mode: "boolean" }).notNull().default(true),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  index("suppliers_business_name_idx").on(table.businessId, table.name),
+]);
+
+export const eventExpenses = sqliteTable("event_expenses", {
+  id: integer("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  eventId: integer("event_id").notNull(),
+  supplierId: integer("supplier_id"),
+  category: text("category").notNull().default("Other"),
+  description: text("description").notNull(),
+  amount: integer("amount").notNull(),
+  currency: text("currency").notNull().default("MZN"),
+  paymentStatus: text("payment_status").notNull().default("Planned"),
+  incurredDate: text("incurred_date").notNull().default(""),
+  notes: text("notes").notNull().default(""),
+  createdByUserId: integer("created_by_user_id").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  index("event_expenses_business_event_status_idx").on(
+    table.businessId,
+    table.eventId,
+    table.paymentStatus,
+  ),
+  index("event_expenses_supplier_idx").on(table.businessId, table.supplierId),
+]);
+
+export const eventDocuments = sqliteTable("event_documents", {
+  id: text("id").primaryKey(),
+  businessId: integer("business_id").notNull(),
+  eventId: integer("event_id").notNull(),
+  name: text("name").notNull(),
+  objectKey: text("object_key").notNull().unique(),
+  contentType: text("content_type").notNull(),
+  size: integer("size").notNull(),
+  category: text("category").notNull().default("Other"),
+  notes: text("notes").notNull().default(""),
+  uploadedByUserId: integer("uploaded_by_user_id").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  index("event_documents_business_event_idx").on(table.businessId, table.eventId),
+]);
+
 export const reservationItems = sqliteTable("reservation_items", {
   id: integer("id").primaryKey(),
   businessId: integer("business_id").notNull(),

@@ -332,6 +332,15 @@ export async function ensureWorkspaceDatabase() {
       "CREATE TABLE IF NOT EXISTS event_tasks (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, event_id INTEGER NOT NULL, assignee_user_id INTEGER, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', category TEXT NOT NULL DEFAULT 'General', priority TEXT NOT NULL DEFAULT 'Normal', status TEXT NOT NULL DEFAULT 'Pending', due_date TEXT NOT NULL DEFAULT '', due_time TEXT NOT NULL DEFAULT '', sort_order INTEGER NOT NULL DEFAULT 0, completed_at TEXT, completed_by_user_id INTEGER, created_by_user_id INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
     ),
     db.prepare(
+      "CREATE TABLE IF NOT EXISTS suppliers (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, name TEXT NOT NULL, service_type TEXT NOT NULL DEFAULT 'Other', contact_name TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS event_expenses (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, event_id INTEGER NOT NULL, supplier_id INTEGER, category TEXT NOT NULL DEFAULT 'Other', description TEXT NOT NULL, amount INTEGER NOT NULL, currency TEXT NOT NULL DEFAULT 'MZN', payment_status TEXT NOT NULL DEFAULT 'Planned', incurred_date TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', created_by_user_id INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+    ),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS event_documents (id TEXT PRIMARY KEY, business_id INTEGER NOT NULL, event_id INTEGER NOT NULL, name TEXT NOT NULL, object_key TEXT NOT NULL UNIQUE, content_type TEXT NOT NULL, size INTEGER NOT NULL, category TEXT NOT NULL DEFAULT 'Other', notes TEXT NOT NULL DEFAULT '', uploaded_by_user_id INTEGER NOT NULL, created_at TEXT NOT NULL)",
+    ),
+    db.prepare(
       "CREATE TABLE IF NOT EXISTS reservation_items (id INTEGER PRIMARY KEY, business_id INTEGER NOT NULL, reservation_id INTEGER NOT NULL, item_id INTEGER NOT NULL, item_name TEXT NOT NULL, quantity INTEGER NOT NULL, unit_price INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'MZN', UNIQUE (reservation_id, item_id))",
     ),
     db.prepare(
@@ -500,6 +509,18 @@ export async function ensureWorkspaceDatabase() {
     ),
     db.prepare(
       "CREATE INDEX IF NOT EXISTS event_tasks_assignee_due_idx ON event_tasks (business_id, assignee_user_id, due_date)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS suppliers_business_name_idx ON suppliers (business_id, name)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS event_expenses_business_event_status_idx ON event_expenses (business_id, event_id, payment_status)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS event_expenses_supplier_idx ON event_expenses (business_id, supplier_id)",
+    ),
+    db.prepare(
+      "CREATE INDEX IF NOT EXISTS event_documents_business_event_idx ON event_documents (business_id, event_id)",
     ),
     db.prepare(
       "CREATE INDEX IF NOT EXISTS reservation_items_business_item_idx ON reservation_items (business_id, item_id, reservation_id)",

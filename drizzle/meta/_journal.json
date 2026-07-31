@@ -85,6 +85,13 @@
       "when": 1785450897745,
       "tag": "0011_long_pandemic",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1785489726346,
+      "tag": "0012_chunky_shinko_yamashiro",
+      "breakpoints": true
     }
   ]
 }

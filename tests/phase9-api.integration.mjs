@@ -33,6 +33,8 @@ const eventId = stamp + 920;
 const duplicateId = stamp + 930;
 const setupTaskId = stamp + 940;
 const pickupTaskId = stamp + 950;
+const supplierId = stamp + 960;
+const expenseId = stamp + 970;
 
 await json("/api/data", {
   method: "POST",
@@ -115,6 +117,63 @@ await json("/api/data", {
   }),
 });
 
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({
+    action: "addSupplier",
+    payload: {
+      id: supplierId,
+      name: "Flores de Maputo",
+      serviceType: "Flowers",
+      contactName: "Ana",
+      email: "ana@flores.example.test",
+      phone: "+258 84 333 4444",
+      notes: "Fornecedor recorrente.",
+      active: true,
+    },
+  }),
+});
+
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({
+    action: "addEventExpense",
+    payload: {
+      id: expenseId,
+      eventId,
+      supplierId,
+      category: "Flowers",
+      description: "Arranjos florais",
+      amount: 45000,
+      currency: "MZN",
+      paymentStatus: "Pending",
+      incurredDate: "2026-11-10",
+      notes: "50% na adjudicação.",
+    },
+  }),
+});
+
+const documentForm = new FormData();
+documentForm.set("eventId", String(eventId));
+documentForm.set("category", "Contract");
+documentForm.set("notes", "Contrato assinado");
+documentForm.set(
+  "file",
+  new File(["%PDF-1.4\nTrove phase 9"], "contrato-evento.pdf", {
+    type: "application/pdf",
+  }),
+);
+const documentUpload = await json("/api/event-document", {
+  method: "POST",
+  headers: Object.fromEntries(
+    Object.entries(headers).filter(([key]) => key !== "content-type"),
+  ),
+  body: documentForm,
+});
+assert.ok(documentUpload.documentId);
+
 let workspace = await json("/api/data", { headers });
 let event = workspace.events.find((entry) => entry.id === eventId);
 assert.equal(event.eventType, "Wedding");
@@ -123,6 +182,17 @@ assert.equal(event.guestCount, 180);
 assert.equal(event.budget, 350000);
 assert.equal(event.currency, "MZN");
 assert.equal(event.address, "Avenida da Marginal, Maputo");
+assert.equal(workspace.suppliers.find((entry) => entry.id === supplierId).name, "Flores de Maputo");
+assert.equal(workspace.eventExpenses.find((entry) => entry.id === expenseId).amount, 45000);
+assert.equal(workspace.eventDocuments.find((entry) => entry.id === documentUpload.documentId).category, "Contract");
+
+const downloadedDocument = await fetch(
+  `${baseUrl}/api/event-document?id=${encodeURIComponent(documentUpload.documentId)}`,
+  { headers },
+);
+assert.equal(downloadedDocument.status, 200);
+assert.match(downloadedDocument.headers.get("content-disposition") || "", /contrato-evento\.pdf/);
+assert.match(await downloadedDocument.text(), /Trove phase 9/);
 
 await json("/api/data", {
   method: "POST",
@@ -157,6 +227,8 @@ const duplication = await json("/api/data", {
 });
 assert.equal(duplication.reservationsCopied, false);
 assert.equal(duplication.tasksCopied, false);
+assert.equal(duplication.expensesCopied, false);
+assert.equal(duplication.documentsCopied, false);
 
 workspace = await json("/api/data", { headers });
 event = workspace.events.find((entry) => entry.id === eventId);
@@ -172,6 +244,8 @@ assert.equal(
   0,
 );
 assert.equal(workspace.eventTasks.filter((entry) => entry.eventId === duplicateId).length, 0);
+assert.equal(workspace.eventExpenses.filter((entry) => entry.eventId === duplicateId).length, 0);
+assert.equal(workspace.eventDocuments.filter((entry) => entry.eventId === duplicateId).length, 0);
 assert.equal(setupTask.assigneeUserId, ownerId);
 assert.equal(setupTask.priority, "High");
 
@@ -182,6 +256,23 @@ await json("/api/data", {
     action: "updateEventTask",
     payload: { ...setupTask, priority: "Urgent", dueTime: "14:30" },
   }),
+});
+
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({
+    action: "updateEventExpense",
+    payload: {
+      ...workspace.eventExpenses.find((entry) => entry.id === expenseId),
+      paymentStatus: "Paid",
+    },
+  }),
+});
+
+await json(`/api/event-document?id=${encodeURIComponent(documentUpload.documentId)}`, {
+  method: "DELETE",
+  headers,
 });
 
 await json("/api/data", {
@@ -257,5 +348,8 @@ assert.ok(workspace.auditLogs.some((entry) => entry.action === "duplicateEvent")
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "archiveEvent"));
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "addEventTask"));
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "transitionEventTask"));
+assert.ok(workspace.auditLogs.some((entry) => entry.action === "addSupplier"));
+assert.ok(workspace.auditLogs.some((entry) => entry.action === "addEventExpense"));
+assert.ok(workspace.auditLogs.some((entry) => entry.action === "deleteEventDocument"));
 
-console.log("Phase 9 event records and operational checklist integration passed");
+console.log("Phase 9 event operations, finance, suppliers, and documents integration passed");

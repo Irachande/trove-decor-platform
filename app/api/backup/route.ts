@@ -18,6 +18,9 @@ const BUSINESS_TABLES: QueryDefinition[] = [
   { key: "clients", sql: "SELECT * FROM clients WHERE business_id = ? ORDER BY id" },
   { key: "events", sql: "SELECT * FROM events WHERE business_id = ? ORDER BY id" },
   { key: "eventTasks", sql: "SELECT * FROM event_tasks WHERE business_id = ? ORDER BY event_id, sort_order, id" },
+  { key: "suppliers", sql: "SELECT * FROM suppliers WHERE business_id = ? ORDER BY name" },
+  { key: "eventExpenses", sql: "SELECT * FROM event_expenses WHERE business_id = ? ORDER BY event_id, incurred_date, id" },
+  { key: "eventDocuments", sql: "SELECT id, business_id, event_id, name, object_key, content_type, size, category, notes, uploaded_by_user_id, created_at FROM event_documents WHERE business_id = ? ORDER BY event_id, created_at" },
   { key: "reservations", sql: "SELECT * FROM reservations WHERE business_id = ? ORDER BY id" },
   { key: "reservationItems", sql: "SELECT * FROM reservation_items WHERE business_id = ? ORDER BY reservation_id, id" },
   { key: "memberships", sql: "SELECT m.business_id, m.user_id, m.role, m.status, m.created_at, u.email, u.display_name FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.business_id = ? ORDER BY m.user_id" },
@@ -65,7 +68,7 @@ export async function GET(request: Request) {
     business,
     data,
     media: {
-      note: "As fotografias permanecem no armazenamento e são referenciadas pelos respectivos URLs.",
+      note: "As fotografias e documentos permanecem no armazenamento; esta cópia inclui URLs e metadados, não os ficheiros binários.",
     },
   }, null, 2), {
     headers: {

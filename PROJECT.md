@@ -132,6 +132,12 @@ até serem configuradas as credenciais da conta comercial.
   responsáveis activos, prazos, progresso e registo de conclusão.
 - Reatribuição de tarefas pendentes, conclusão/reabertura e remoção controlada,
   com notificações e histórico de actividade.
+- Fornecedores reutilizáveis por empresa, associados opcionalmente aos custos.
+- Custos por categoria, data e estado de pagamento, com MZN como padrão.
+- Indicadores de orçamento, receita reservada, custos pagos/totais, resultado
+  estimado e margem por evento.
+- Documentos privados por evento em PDF, JPG, PNG, DOCX ou XLSX, até 10 MB,
+  guardados no armazenamento da empresa e acessíveis à equipa autorizada.
 
 ### Equipa e perfil
 
@@ -232,7 +238,7 @@ até serem configuradas as credenciais da conta comercial.
 | Upload de imagens | Funcional | JPG/PNG até 5 MB, autenticado e separado por empresa |
 | Reservas | Funcional | Multiartigo, conflitos atómicos, preços e ciclo operacional |
 | Calendário | Funcional | Visões mensal/semanal, detalhes e reservas canceladas excluídas |
-| Gestão de eventos | Funcional (passo 3) | Ficha completa, checklist, tarefas, responsáveis, prazos, progresso e arquivo protegido; custos e rentabilidade continuam no roadmap |
+| Gestão de eventos | Funcional (passo 4) | Ficha, checklist, fornecedores, custos, rentabilidade estimada, documentos privados e arquivo protegido |
 | Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
 | Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
 | Perfil público | Funcional no produto / publicação externa pendente | Rota, visibilidade, contactos, serviços e pedidos funcionam; o Sites continua com acesso privado |
@@ -247,7 +253,7 @@ até serem configuradas as credenciais da conta comercial.
 | Páginas legais | Beta | Publicadas e coerentes com a implementação; revisão jurídica continua obrigatória |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
 | Monitorização | Funcional (MVP) | Saúde pública mínima, erros de interface e painel operacional por empresa |
-| Testes automatizados | Funcional (MVP) | 24 testes estruturais e integração das fases 3 a 9 |
+| Testes automatizados | Funcional (MVP) | 25 testes estruturais e integração das fases 3 a 9 |
 
 ## 7. Arquitectura actual
 
@@ -300,6 +306,8 @@ Next.js / Vinext
 - `app/api/public-profile/route.ts`: leitura pública e pedidos protegidos
   contra abuso.
 - `app/api/backup/route.ts`: exportação integral autorizada ao proprietário.
+- `app/api/event-document/route.ts`: upload, descarga e remoção autorizados de
+  documentos privados dos eventos.
 - `app/email.ts`: adaptador Resend e auditoria de entregas transaccionais.
 - `app/offline-cache.ts`: cópia local não autoritativa para consulta.
 - `public/sw.js` e `public/manifest.webmanifest`: instalação, modo sem ligação
@@ -333,6 +341,9 @@ Next.js / Vinext
   associação a clientes e reservas.
 - `event_tasks`: checklist, atribuição, prioridade, prazo e conclusão das
   tarefas operacionais de cada evento.
+- `suppliers`: fornecedores reutilizáveis, contactos, especialidade e estado.
+- `event_expenses`: custos, categoria, fornecedor, data e estado de pagamento.
+- `event_documents`: metadados dos ficheiros privados guardados no R2.
 - `reservations`: período, valores, logística e estado do ciclo de aluguer.
 - `reservation_items`: artigos, quantidades e preços de cada reserva.
 - `categories`: categorias isoladas por empresa.
@@ -539,14 +550,15 @@ descrevem a versão actual, não substituem revisão jurídica.
 - [x] Ficha completa, edição, duplicação e arquivo.
 - [ ] Ciclo de estados e regras agregadas entre evento e reservas.
 - [x] Tarefas, responsáveis e checklist operacional.
-- [ ] Custos, fornecedores, documentos e rentabilidade.
+- [x] Custos, fornecedores, documentos e rentabilidade.
 - [ ] Eventos sem reserva visíveis no calendário.
 
 Nota: a duplicação copia apenas a configuração do evento e deixa de fora
-reservas, tarefas e bloqueios de stock. O arquivo exige evento concluído ou
-cancelado, sem reservas confirmadas/em aluguer e com todas as tarefas
-concluídas. O ciclo agregado completo, documentos e rentabilidade permanecem
-correctamente pendentes.
+reservas, tarefas, custos, documentos e bloqueios de stock. O arquivo exige
+evento concluído ou cancelado, sem reservas confirmadas/em aluguer e com todas
+as tarefas concluídas. A rentabilidade é estimada a partir da receita reservada,
+não representa receita contabilisticamente reconhecida. O ciclo agregado
+completo permanece pendente.
 
 ## 13. Definição de concluído
 
@@ -601,6 +613,35 @@ pnpm run db:generate
 - Empresas e critérios de sucesso para o primeiro grupo beta.
 
 ## 17. Histórico de iterações
+
+### 31 de Julho de 2026 — Fase 9, passo 4: finanças, fornecedores e documentos
+
+- Criado directório de fornecedores reutilizável por empresa, com especialidade,
+  contacto, email, telefone, notas e estado activo.
+- Adicionados custos por evento com categoria, fornecedor opcional, valor,
+  moeda, data, notas e estados planeado, por pagar ou pago.
+- A ficha calcula orçamento, receita reservada não reconhecida, custos totais e
+  pagos, resultado estimado e margem, sempre com indicação explícita da natureza
+  estimada dos valores.
+- Implementado upload real e privado de contratos, cotações, plantas, facturas
+  e outros documentos para R2; os metadados ficam no D1 e os ficheiros são
+  descarregados apenas após autenticação e verificação da empresa.
+- Upload e remoção exigem permissão de reservas; todos os membros activos podem
+  consultar e descarregar os documentos da sua empresa.
+- A duplicação segura deixa também custos e documentos de fora; a exportação
+  integral passa a incluir fornecedores, custos e metadados dos documentos, sem
+  copiar os binários.
+- Criadas as entidades `suppliers`, `event_expenses` e `event_documents`, com
+  índices por empresa/evento, e gerada a migração
+  `0012_chunky_shinko_yamashiro.sql`.
+- Ampliado o teste integrado da Fase 9 para fornecedores, custos, alteração de
+  pagamento, upload, descarga, remoção, auditoria e duplicação segura, além do
+  25.º teste estrutural.
+- Validação: `node tests/phase9-api.integration.mjs`,
+  `node --test tests/rendered-html.test.mjs` (25 testes),
+  `tsc --noEmit --incremental false`,
+  `eslint . --ignore-pattern dist --ignore-pattern .next`,
+  `vinext build` e `git diff --check`.
 
 ### 31 de Julho de 2026 — Fase 9, passo 3: tarefas e checklist operacional
 

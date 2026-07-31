@@ -476,3 +476,37 @@ test("phase 9 step 3 adds durable team tasks and operational checklists", async 
   assert.match(migration, /event_tasks_assignee_due_idx/);
   assert.match(backup, /eventTasks/);
 });
+
+test("phase 9 step 4 adds suppliers, event costs, protected documents, and profitability", async () => {
+  const [app, styles, api, documentApi, schema, workspace, migration, backup] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("app/api/data/route.ts"),
+    source("app/api/event-document/route.ts"),
+    source("db/schema.ts"),
+    source("app/workspace.ts"),
+    source("drizzle/0012_chunky_shinko_yamashiro.sql"),
+    source("app/api/backup/route.ts"),
+  ]);
+
+  assert.match(app, /function EventFinance/);
+  assert.match(app, /Receita reservada, não recebida/);
+  assert.match(app, /addManagedEventExpense/);
+  assert.match(app, /uploadManagedEventDocument/);
+  assert.match(styles, /\.event-finance-summary/);
+  assert.match(styles, /\.event-finance-columns/);
+  assert.match(api, /addSupplier: "manageReservations"/);
+  assert.match(api, /addEventExpense: "manageReservations"/);
+  assert.match(api, /expensesCopied: false/);
+  assert.match(api, /documentsCopied: false/);
+  assert.match(documentApi, /MAX_FILE_SIZE = 10_000_000/);
+  assert.match(documentApi, /businesses\/\$\{context\.businessId\}\/events/);
+  assert.match(documentApi, /cache-control", "private, no-store"/);
+  assert.match(schema, /export const suppliers/);
+  assert.match(schema, /export const eventExpenses/);
+  assert.match(schema, /export const eventDocuments/);
+  assert.match(workspace, /CREATE TABLE IF NOT EXISTS event_expenses/);
+  assert.match(migration, /CREATE TABLE `event_documents`/);
+  assert.match(backup, /eventExpenses/);
+  assert.match(backup, /eventDocuments/);
+});

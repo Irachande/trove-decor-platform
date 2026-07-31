@@ -61,6 +61,11 @@ const ACTION_PERMISSIONS: Record<string, WorkspacePermission> = {
   updateEventTask: "manageReservations",
   transitionEventTask: "manageReservations",
   deleteEventTask: "manageReservations",
+  addSupplier: "manageReservations",
+  updateSupplier: "manageReservations",
+  addEventExpense: "manageReservations",
+  updateEventExpense: "manageReservations",
+  deleteEventExpense: "manageReservations",
   addCategory: "manageCategories",
   removeCategory: "manageCategories",
   inviteMember: "manageTeam",
@@ -175,6 +180,8 @@ function actionEntity(action: string) {
   if (action.includes("Maintenance")) return "maintenance";
   if (action.includes("Kit")) return "kit";
   if (action.includes("Client")) return "client";
+  if (action.includes("Supplier")) return "supplier";
+  if (action.includes("Expense")) return "event_expense";
   if (action.includes("EventTask")) return "event_task";
   if (action.includes("Event")) return "event";
   if (action.includes("Category")) return "category";
@@ -207,6 +214,11 @@ function actionSummary(action: string) {
     updateEventTask: "Tarefa de evento actualizada",
     transitionEventTask: "Estado da tarefa de evento alterado",
     deleteEventTask: "Tarefa de evento removida",
+    addSupplier: "Fornecedor criado",
+    updateSupplier: "Fornecedor actualizado",
+    addEventExpense: "Custo de evento registado",
+    updateEventExpense: "Custo de evento actualizado",
+    deleteEventExpense: "Custo de evento removido",
   };
   return summaries[action] || action.replace(/([A-Z])/g, " $1").trim();
 }
@@ -428,6 +440,9 @@ export async function GET(request: Request) {
       clients,
       events,
       eventTasks,
+      suppliers,
+      eventExpenses,
+      eventDocuments,
       bookedItems,
       notifications,
       auditLogs,
@@ -481,6 +496,15 @@ export async function GET(request: Request) {
         "SELECT id, event_id AS eventId, assignee_user_id AS assigneeUserId, title, description, category, priority, status, due_date AS dueDate, due_time AS dueTime, sort_order AS sortOrder, completed_at AS completedAt, completed_by_user_id AS completedByUserId, created_by_user_id AS createdByUserId, created_at AS createdAt, updated_at AS updatedAt FROM event_tasks WHERE business_id = ? ORDER BY event_id, status = 'Completed', sort_order, due_date, id",
       ).bind(context.businessId).all(),
       env.DB.prepare(
+        "SELECT id, name, service_type AS serviceType, contact_name AS contactName, email, phone, notes, active, created_at AS createdAt, updated_at AS updatedAt FROM suppliers WHERE business_id = ? ORDER BY active DESC, name",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, event_id AS eventId, supplier_id AS supplierId, category, description, amount, currency, payment_status AS paymentStatus, incurred_date AS incurredDate, notes, created_by_user_id AS createdByUserId, created_at AS createdAt, updated_at AS updatedAt FROM event_expenses WHERE business_id = ? ORDER BY incurred_date DESC, created_at DESC",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, event_id AS eventId, name, content_type AS contentType, size, category, notes, uploaded_by_user_id AS uploadedByUserId, created_at AS createdAt FROM event_documents WHERE business_id = ? ORDER BY created_at DESC",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
         "SELECT id, reservation_id AS reservationId, item_id AS itemId, item_name AS itemName, quantity, unit_price AS unitPrice, currency FROM reservation_items WHERE business_id = ? ORDER BY reservation_id, id",
       ).bind(context.businessId).all(),
       env.DB.prepare(
@@ -529,6 +553,12 @@ export async function GET(request: Request) {
       clients: clients.results,
       events: events.results,
       eventTasks: eventTasks.results,
+      suppliers: suppliers.results.map((supplier: Record<string, unknown>) => ({
+        ...supplier,
+        active: Boolean(supplier.active),
+      })),
+      eventExpenses: eventExpenses.results,
+      eventDocuments: eventDocuments.results,
       notifications: notifications.results,
       auditLogs: auditLogs.results,
       invitations: invitations.results,
@@ -931,7 +961,14 @@ export async function POST(request: Request) {
         source.guestCount, source.budget, source.currency, source.onSiteContact,
         source.color, source.notes, createdAt, createdAt,
       ).run();
-      result = { ok: true, eventId: id, reservationsCopied: false, tasksCopied: false };
+      result = {
+        ok: true,
+        eventId: id,
+        reservationsCopied: false,
+        tasksCopied: false,
+        expensesCopied: false,
+        documentsCopied: false,
+      };
     } else if (action === "archiveEvent") {
       const id = integer(payload, "id", { min: 1 });
       const event = await env.DB.prepare(
@@ -1055,6 +1092,110 @@ export async function POST(request: Request) {
         throw new Error("Only pending tasks from active events can be deleted");
       }
       result = { ok: true, taskId: id };
+    } else if (action === "addSupplier" || action === "updateSupplier") {
+      const id = integer(payload, "id", { min: 1 });
+      const existing = await env.DB.prepare(
+        "SELECT business_id AS businessId FROM suppliers WHERE id = ?",
+      ).bind(id).first<{ businessId: number }>();
+      if (existing && existing.businessId !== context.businessId) {
+        throw new Error("Supplier not found");
+      }
+      if (action === "updateSupplier" && !existing) {
+        throw new Error("Supplier not found");
+      }
+      const serviceType = text(payload, "serviceType", { max: 60 }) || "Other";
+      const values = [
+        text(payload, "name", { required: true, max: 160 }),
+        serviceType,
+        text(payload, "contactName", { max: 160 }),
+        text(payload, "email", { max: 254 }),
+        text(payload, "phone", { max: 80 }),
+        text(payload, "notes", { max: 1000 }),
+        payload.active === false ? 0 : 1,
+      ] as const;
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE suppliers SET name = ?, service_type = ?, contact_name = ?, email = ?, phone = ?, notes = ?, active = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(...values, createdAt, id, context.businessId).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO suppliers (id, business_id, name, service_type, contact_name, email, phone, notes, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).bind(id, context.businessId, ...values, createdAt, createdAt).run();
+      }
+      result = { ok: true, supplierId: id };
+    } else if (
+      action === "addEventExpense" ||
+      action === "updateEventExpense"
+    ) {
+      const id = integer(payload, "id", { min: 1 });
+      const eventId = integer(payload, "eventId", { min: 1 });
+      const event = await env.DB.prepare(
+        "SELECT status FROM events WHERE id = ? AND business_id = ?",
+      ).bind(eventId, context.businessId).first<{ status: string }>();
+      if (!event) throw new Error("Event not found");
+      if (event.status === "Archived") {
+        throw new Error("Archived events cannot be changed");
+      }
+      const supplierId = payload.supplierId
+        ? integer(payload, "supplierId", { min: 1 })
+        : null;
+      if (supplierId) {
+        const supplier = await env.DB.prepare(
+          "SELECT id FROM suppliers WHERE id = ? AND business_id = ? AND active = 1",
+        ).bind(supplierId, context.businessId).first();
+        if (!supplier) throw new Error("Supplier not found");
+      }
+      const existing = await env.DB.prepare(
+        "SELECT business_id AS businessId FROM event_expenses WHERE id = ?",
+      ).bind(id).first<{ businessId: number }>();
+      if (existing && existing.businessId !== context.businessId) {
+        throw new Error("Event expense not found");
+      }
+      if (action === "updateEventExpense" && !existing) {
+        throw new Error("Event expense not found");
+      }
+      const category = text(payload, "category", { max: 30 }) || "Other";
+      if (!["Rental", "Transport", "Labour", "Flowers", "Catering", "Printing", "Other"].includes(category)) {
+        throw new Error("Expense category is invalid");
+      }
+      const paymentStatus = text(payload, "paymentStatus", { max: 20 }) || "Planned";
+      if (!["Planned", "Pending", "Paid"].includes(paymentStatus)) {
+        throw new Error("Payment status is invalid");
+      }
+      const incurredDate = text(payload, "incurredDate", { max: 10 });
+      if (incurredDate && (!/^\d{4}-\d{2}-\d{2}$/.test(incurredDate) || Number.isNaN(Date.parse(`${incurredDate}T00:00:00Z`)))) {
+        throw new Error("Expense date is invalid");
+      }
+      const values = [
+        eventId,
+        supplierId,
+        category,
+        text(payload, "description", { required: true, max: 240 }),
+        integer(payload, "amount", { min: 0, max: 100000000 }),
+        text(payload, "currency", { max: 3 }).toUpperCase() || "MZN",
+        paymentStatus,
+        incurredDate,
+        text(payload, "notes", { max: 1000 }),
+      ] as const;
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE event_expenses SET event_id = ?, supplier_id = ?, category = ?, description = ?, amount = ?, currency = ?, payment_status = ?, incurred_date = ?, notes = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(...values, createdAt, id, context.businessId).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO event_expenses (id, business_id, event_id, supplier_id, category, description, amount, currency, payment_status, incurred_date, notes, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).bind(id, context.businessId, ...values, context.userId, createdAt, createdAt).run();
+      }
+      result = { ok: true, expenseId: id };
+    } else if (action === "deleteEventExpense") {
+      const id = integer(payload, "id", { min: 1 });
+      const deleted = await env.DB.prepare(
+        "DELETE FROM event_expenses WHERE id = ? AND business_id = ? AND event_id IN (SELECT id FROM events WHERE business_id = ? AND status != 'Archived')",
+      ).bind(id, context.businessId, context.businessId).run();
+      if (!deleted.meta.changes) {
+        throw new Error("Event expense not found or event is archived");
+      }
+      result = { ok: true, expenseId: id };
     } else if (action === "addReservation" || action === "updateReservation") {
       const reservationId = integer(payload, "id", { min: 1 });
       const clientId = integer(payload, "clientId", { min: 1 });

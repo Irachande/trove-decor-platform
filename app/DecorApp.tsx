@@ -216,6 +216,44 @@ type EventTask = {
   createdAt: string;
   updatedAt: string;
 };
+type Supplier = {
+  id: number;
+  name: string;
+  serviceType: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  notes: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+type EventExpense = {
+  id: number;
+  eventId: number;
+  supplierId?: number;
+  category: string;
+  description: string;
+  amount: number;
+  currency: string;
+  paymentStatus: "Planned" | "Pending" | "Paid";
+  incurredDate: string;
+  notes: string;
+  createdByUserId: number;
+  createdAt: string;
+  updatedAt: string;
+};
+type EventDocument = {
+  id: string;
+  eventId: number;
+  name: string;
+  contentType: string;
+  size: number;
+  category: string;
+  notes: string;
+  uploadedByUserId: number;
+  createdAt: string;
+};
 type ReservationItem = { id: number; reservationId: number; itemId: number; itemName: string; quantity: number; unitPrice: number; currency: string };
 type WorkspaceData = {
   items?: Item[];
@@ -231,6 +269,9 @@ type WorkspaceData = {
   clients?: Client[];
   events?: EventRecord[];
   eventTasks?: EventTask[];
+  suppliers?: Supplier[];
+  eventExpenses?: EventExpense[];
+  eventDocuments?: EventDocument[];
   notifications?: NotificationRecord[];
   auditLogs?: AuditEntry[];
   invitations?: Invitation[];
@@ -406,6 +447,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
   const [clients, setClients] = useState<Client[]>([]);
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [eventTasks, setEventTasks] = useState<EventTask[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [eventExpenses, setEventExpenses] = useState<EventExpense[]>([]);
+  const [eventDocuments, setEventDocuments] = useState<EventDocument[]>([]);
   const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
@@ -505,6 +549,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
         if (Array.isArray(data.clients)) setClients(data.clients);
         if (Array.isArray(data.events)) setEvents(data.events);
         if (Array.isArray(data.eventTasks)) setEventTasks(data.eventTasks);
+        if (Array.isArray(data.suppliers)) setSuppliers(data.suppliers);
+        if (Array.isArray(data.eventExpenses)) setEventExpenses(data.eventExpenses);
+        if (Array.isArray(data.eventDocuments)) setEventDocuments(data.eventDocuments);
         if (Array.isArray(data.notifications)) setNotifications(data.notifications);
         if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
         if (Array.isArray(data.invitations)) setInvitations(data.invitations);
@@ -1384,6 +1431,92 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
     }
   }
 
+  async function addManagedSupplier(input: Omit<Supplier, "id" | "active" | "createdAt" | "updatedAt">) {
+    if (!canManageReservations) return;
+    if (await persist("addSupplier", { id: Date.now(), active: true, ...input })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Fornecedor guardado", "Supplier saved"));
+    }
+  }
+
+  async function addManagedEventExpense(input: Omit<EventExpense, "id" | "eventId" | "createdByUserId" | "createdAt" | "updatedAt">) {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("addEventExpense", { id: Date.now(), eventId: managedEvent.id, ...input })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Custo adicionado ao evento", "Event cost added"));
+    }
+  }
+
+  async function updateManagedEventExpense(expense: EventExpense, changes: Partial<EventExpense>) {
+    if (!canManageReservations) return;
+    if (await persist("updateEventExpense", { ...expense, ...changes })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Custo actualizado", "Cost updated"));
+    }
+  }
+
+  async function deleteManagedEventExpense(expense: EventExpense) {
+    if (!canManageReservations) return;
+    if (!window.confirm(t(`Remover o custo “${expense.description}”?`, `Remove cost “${expense.description}”?`))) return;
+    if (await persist("deleteEventExpense", { id: expense.id })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Custo removido", "Cost removed"));
+    }
+  }
+
+  async function uploadManagedEventDocument(file: File, category: string, notes: string) {
+    if (!managedEvent || !canManageReservations) return;
+    const form = new FormData();
+    form.set("file", file);
+    form.set("eventId", String(managedEvent.id));
+    form.set("category", category);
+    form.set("notes", notes);
+    const response = await fetch("/api/event-document", {
+      method: "POST",
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+      body: form,
+    });
+    const result = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      showToast(result.error || t("Não foi possível carregar o documento.", "Unable to upload document."));
+      return;
+    }
+    setReloadToken((value) => value + 1);
+    showToast(t("Documento protegido carregado", "Protected document uploaded"));
+  }
+
+  async function deleteManagedEventDocument(document: EventDocument) {
+    if (!canManageReservations) return;
+    if (!window.confirm(t(`Remover o documento “${document.name}”?`, `Remove document “${document.name}”?`))) return;
+    const response = await fetch(`/api/event-document?id=${encodeURIComponent(document.id)}`, {
+      method: "DELETE",
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+    });
+    const result = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      showToast(result.error || t("Não foi possível remover o documento.", "Unable to remove document."));
+      return;
+    }
+    setReloadToken((value) => value + 1);
+    showToast(t("Documento removido", "Document removed"));
+  }
+
+  async function downloadManagedEventDocument(document: EventDocument) {
+    const response = await fetch(`/api/event-document?id=${encodeURIComponent(document.id)}`, {
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+    });
+    if (!response.ok) {
+      showToast(t("Não foi possível descarregar o documento.", "Unable to download document."));
+      return;
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = window.document.createElement("a");
+    anchor.href = url;
+    anchor.download = document.name;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function addCategory(name: string) {
     const clean = name.trim();
     if (!clean || categories.includes(clean)) return;
@@ -1970,6 +2103,9 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
             members={activeMembers}
             reservations={reservations.filter((reservation) => reservation.eventId === managedEvent.id)}
             tasks={eventTasks.filter((task) => task.eventId === managedEvent.id)}
+            expenses={eventExpenses.filter((expense) => expense.eventId === managedEvent.id)}
+            suppliers={suppliers}
+            documents={eventDocuments.filter((document) => document.eventId === managedEvent.id)}
             language={language}
             t={t}
             canManage={canManageReservations}
@@ -1980,6 +2116,13 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
             onUpdateTask={updateManagedEventTask}
             onTransitionTask={transitionManagedEventTask}
             onDeleteTask={deleteManagedEventTask}
+            onAddSupplier={addManagedSupplier}
+            onAddExpense={addManagedEventExpense}
+            onUpdateExpense={updateManagedEventExpense}
+            onDeleteExpense={deleteManagedEventExpense}
+            onUploadDocument={uploadManagedEventDocument}
+            onDownloadDocument={downloadManagedEventDocument}
+            onDeleteDocument={deleteManagedEventDocument}
             onCancel={() => setManagedEvent(null)}
           />
         </Modal>
@@ -2441,12 +2584,159 @@ function EventChecklist({ event, tasks, members, t, canManage, onAdd, onUpdate, 
   </section>;
 }
 
-function EventManager({ event, clients, members, reservations, tasks, language, t, canManage, onSubmit, onDuplicate, onArchive, onAddTask, onUpdateTask, onTransitionTask, onDeleteTask, onCancel }: {
+function EventFinance({ event, reservations, expenses, suppliers, documents, language, t, canManage, onAddSupplier, onAddExpense, onUpdateExpense, onDeleteExpense, onUploadDocument, onDownloadDocument, onDeleteDocument }: {
+  event: EventRecord;
+  reservations: Reservation[];
+  expenses: EventExpense[];
+  suppliers: Supplier[];
+  documents: EventDocument[];
+  language: Language;
+  t: Translator;
+  canManage: boolean;
+  onAddSupplier: (input: Omit<Supplier, "id" | "active" | "createdAt" | "updatedAt">) => void;
+  onAddExpense: (input: Omit<EventExpense, "id" | "eventId" | "createdByUserId" | "createdAt" | "updatedAt">) => void;
+  onUpdateExpense: (expense: EventExpense, changes: Partial<EventExpense>) => void;
+  onDeleteExpense: (expense: EventExpense) => void;
+  onUploadDocument: (file: File, category: string, notes: string) => void;
+  onDownloadDocument: (document: EventDocument) => void;
+  onDeleteDocument: (document: EventDocument) => void;
+}) {
+  const [expenseDescription, setExpenseDescription] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState("Rental");
+  const [expenseSupplierId, setExpenseSupplierId] = useState("");
+  const [expenseAmount, setExpenseAmount] = useState("");
+  const [expenseStatus, setExpenseStatus] = useState<EventExpense["paymentStatus"]>("Planned");
+  const [expenseDate, setExpenseDate] = useState(event.startDate);
+  const [supplierName, setSupplierName] = useState("");
+  const [supplierService, setSupplierService] = useState("Rental");
+  const [supplierContact, setSupplierContact] = useState("");
+  const [supplierPhone, setSupplierPhone] = useState("");
+  const [documentCategory, setDocumentCategory] = useState("Contract");
+  const [documentNotes, setDocumentNotes] = useState("");
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const revenue = reservations
+    .filter((entry) => entry.status !== "Cancelled")
+    .reduce((sum, entry) => sum + (entry.total || 0), 0);
+  const costs = expenses.reduce((sum, entry) => sum + entry.amount, 0);
+  const paid = expenses
+    .filter((entry) => entry.paymentStatus === "Paid")
+    .reduce((sum, entry) => sum + entry.amount, 0);
+  const result = revenue - costs;
+  const margin = revenue > 0 ? Math.round((result / revenue) * 100) : 0;
+  const currency = event.currency || "MZN";
+  const categoryLabels: Record<string, [string, string]> = {
+    Rental: ["Aluguer", "Rental"],
+    Transport: ["Transporte", "Transport"],
+    Labour: ["Mão de obra", "Labour"],
+    Flowers: ["Flores", "Flowers"],
+    Catering: ["Catering", "Catering"],
+    Printing: ["Impressão", "Printing"],
+    Other: ["Outro", "Other"],
+  };
+  const statusLabels: Record<string, [string, string]> = {
+    Planned: ["Planeado", "Planned"],
+    Pending: ["Por pagar", "Pending"],
+    Paid: ["Pago", "Paid"],
+  };
+  const documentLabels: Record<string, [string, string]> = {
+    Contract: ["Contrato", "Contract"],
+    Quote: ["Cotação", "Quote"],
+    FloorPlan: ["Planta", "Floor plan"],
+    Invoice: ["Factura", "Invoice"],
+    Inspiration: ["Inspiração", "Inspiration"],
+    Other: ["Outro", "Other"],
+  };
+  const addExpense = () => {
+    const amount = Number(expenseAmount);
+    if (!expenseDescription.trim() || !Number.isSafeInteger(amount) || amount < 0) return;
+    onAddExpense({
+      supplierId: Number(expenseSupplierId) || undefined,
+      category: expenseCategory,
+      description: expenseDescription.trim(),
+      amount,
+      currency,
+      paymentStatus: expenseStatus,
+      incurredDate: expenseDate,
+      notes: "",
+    });
+    setExpenseDescription("");
+    setExpenseAmount("");
+  };
+  const addSupplier = () => {
+    if (!supplierName.trim()) return;
+    onAddSupplier({
+      name: supplierName.trim(),
+      serviceType: supplierService,
+      contactName: supplierContact.trim(),
+      email: "",
+      phone: supplierPhone.trim(),
+      notes: "",
+    });
+    setSupplierName("");
+    setSupplierContact("");
+    setSupplierPhone("");
+  };
+  const upload = () => {
+    if (!documentFile) return;
+    onUploadDocument(documentFile, documentCategory, documentNotes.trim());
+    setDocumentFile(null);
+    setDocumentNotes("");
+  };
+  return <section className="event-finance">
+    <header><span><small>{t("FINANÇAS E FICHEIROS", "FINANCE & FILES")}</small><h3>{t("Rentabilidade do evento", "Event profitability")}</h3></span><em>{t("Receita reservada, não recebida", "Booked, not recognized revenue")}</em></header>
+    <div className="event-finance-summary">
+      <span><small>{t("Orçamento", "Budget")}</small><strong>{formatMoney(event.budget || 0, currency, language)}</strong></span>
+      <span><small>{t("Receita reservada", "Booked revenue")}</small><strong>{formatMoney(revenue, currency, language)}</strong></span>
+      <span><small>{t("Custos", "Costs")}</small><strong>{formatMoney(costs, currency, language)}</strong><em>{formatMoney(paid, currency, language)} {t("pagos", "paid")}</em></span>
+      <span className={result < 0 ? "negative" : "positive"}><small>{t("Resultado estimado", "Estimated result")}</small><strong>{formatMoney(result, currency, language)}</strong><em>{margin}% {t("margem", "margin")}</em></span>
+    </div>
+    <div className="event-finance-columns">
+      <div className="event-expenses">
+        <h4>{t("Custos do evento", "Event costs")} <span>{expenses.length}</span></h4>
+        {canManage && event.status !== "Archived" && <div className="expense-composer">
+          <input value={expenseDescription} onChange={(input) => setExpenseDescription(input.target.value)} placeholder={t("Descrição do custo", "Cost description")} maxLength={240} />
+          <select value={expenseCategory} onChange={(input) => setExpenseCategory(input.target.value)}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select>
+          <select value={expenseSupplierId} onChange={(input) => setExpenseSupplierId(input.target.value)}><option value="">{t("Sem fornecedor", "No supplier")}</option>{suppliers.filter((entry) => entry.active).map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select>
+          <input type="number" min="0" value={expenseAmount} onChange={(input) => setExpenseAmount(input.target.value)} placeholder="MZN" />
+          <select value={expenseStatus} onChange={(input) => setExpenseStatus(input.target.value as EventExpense["paymentStatus"])}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select>
+          <input type="date" value={expenseDate} onChange={(input) => setExpenseDate(input.target.value)} />
+          <button type="button" className="button-primary" onClick={addExpense} disabled={!expenseDescription.trim() || expenseAmount === ""}>{t("Adicionar custo", "Add cost")}</button>
+        </div>}
+        <div className="expense-list">{expenses.length ? expenses.map((expense) => {
+          const supplier = suppliers.find((entry) => entry.id === expense.supplierId);
+          return <article key={expense.id}>
+            <span><strong>{expense.description}</strong><small>{t(categoryLabels[expense.category]?.[0] || expense.category, categoryLabels[expense.category]?.[1] || expense.category)}{supplier ? ` · ${supplier.name}` : ""}{expense.incurredDate ? ` · ${expense.incurredDate}` : ""}</small></span>
+            <b>{formatMoney(expense.amount, expense.currency, language)}</b>
+            {canManage && event.status !== "Archived" ? <select value={expense.paymentStatus} onChange={(input) => onUpdateExpense(expense, { paymentStatus: input.target.value as EventExpense["paymentStatus"] })}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select> : <em>{t(statusLabels[expense.paymentStatus]?.[0] || expense.paymentStatus, statusLabels[expense.paymentStatus]?.[1] || expense.paymentStatus)}</em>}
+            {canManage && event.status !== "Archived" && <button type="button" onClick={() => onDeleteExpense(expense)} aria-label={t(`Remover ${expense.description}`, `Remove ${expense.description}`)}>×</button>}
+          </article>;
+        }) : <p>{t("Ainda não há custos registados.", "No costs recorded yet.")}</p>}</div>
+      </div>
+      <div className="event-resources">
+        <div className="supplier-panel">
+          <h4>{t("Fornecedores", "Suppliers")} <span>{suppliers.filter((entry) => entry.active).length}</span></h4>
+          {canManage && event.status !== "Archived" && <div className="supplier-composer"><input value={supplierName} onChange={(input) => setSupplierName(input.target.value)} placeholder={t("Nome do fornecedor", "Supplier name")} /><select value={supplierService} onChange={(input) => setSupplierService(input.target.value)}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select><input value={supplierContact} onChange={(input) => setSupplierContact(input.target.value)} placeholder={t("Pessoa de contacto", "Contact person")} /><input value={supplierPhone} onChange={(input) => setSupplierPhone(input.target.value)} placeholder={t("Telefone", "Phone")} /><button type="button" className="button-secondary" onClick={addSupplier} disabled={!supplierName.trim()}>{t("Guardar fornecedor", "Save supplier")}</button></div>}
+          <div className="supplier-list">{suppliers.filter((entry) => entry.active).slice(0, 6).map((supplier) => <span key={supplier.id}><b>{supplier.name}</b><small>{t(categoryLabels[supplier.serviceType]?.[0] || supplier.serviceType, categoryLabels[supplier.serviceType]?.[1] || supplier.serviceType)}{supplier.phone ? ` · ${supplier.phone}` : ""}</small></span>)}</div>
+        </div>
+        <div className="document-panel">
+          <h4>{t("Documentos protegidos", "Protected documents")} <span>{documents.length}</span></h4>
+          {canManage && event.status !== "Archived" && <div className="document-composer"><input type="file" accept=".pdf,.jpg,.jpeg,.png,.docx,.xlsx" onChange={(input) => setDocumentFile(input.target.files?.[0] || null)} /><select value={documentCategory} onChange={(input) => setDocumentCategory(input.target.value)}>{Object.entries(documentLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select><input value={documentNotes} onChange={(input) => setDocumentNotes(input.target.value)} placeholder={t("Nota opcional", "Optional note")} /><button type="button" className="button-secondary" onClick={upload} disabled={!documentFile}>{t("Carregar", "Upload")}</button></div>}
+          <div className="document-list">{documents.length ? documents.map((document) => <article key={document.id}><button type="button" className="document-download" onClick={() => onDownloadDocument(document)}><span>▤</span><span><strong>{document.name}</strong><small>{t(documentLabels[document.category]?.[0] || document.category, documentLabels[document.category]?.[1] || document.category)} · {(document.size / 1_000_000).toFixed(1)} MB</small></span></button>{canManage && event.status !== "Archived" && <button type="button" onClick={() => onDeleteDocument(document)} aria-label={t(`Remover ${document.name}`, `Remove ${document.name}`)}>×</button>}</article>) : <p>{t("Contratos, cotações e plantas ficam acessíveis à equipa.", "Contracts, quotes, and floor plans stay accessible to the team.")}</p>}</div>
+        </div>
+      </div>
+    </div>
+  </section>;
+}
+
+function EventManager({ event, clients, members, reservations, tasks, expenses, suppliers, documents, language, t, canManage, onSubmit, onDuplicate, onArchive, onAddTask, onUpdateTask, onTransitionTask, onDeleteTask, onAddSupplier, onAddExpense, onUpdateExpense, onDeleteExpense, onUploadDocument, onDownloadDocument, onDeleteDocument, onCancel }: {
   event: EventRecord;
   clients: Client[];
   members: Member[];
   reservations: Reservation[];
   tasks: EventTask[];
+  expenses: EventExpense[];
+  suppliers: Supplier[];
+  documents: EventDocument[];
   language: Language;
   t: Translator;
   canManage: boolean;
@@ -2457,6 +2747,13 @@ function EventManager({ event, clients, members, reservations, tasks, language, 
   onUpdateTask: (task: EventTask, changes: Partial<EventTask>) => void;
   onTransitionTask: (task: EventTask) => void;
   onDeleteTask: (task: EventTask) => void;
+  onAddSupplier: (input: Omit<Supplier, "id" | "active" | "createdAt" | "updatedAt">) => void;
+  onAddExpense: (input: Omit<EventExpense, "id" | "eventId" | "createdByUserId" | "createdAt" | "updatedAt">) => void;
+  onUpdateExpense: (expense: EventExpense, changes: Partial<EventExpense>) => void;
+  onDeleteExpense: (expense: EventExpense) => void;
+  onUploadDocument: (file: File, category: string, notes: string) => void;
+  onDownloadDocument: (document: EventDocument) => void;
+  onDeleteDocument: (document: EventDocument) => void;
   onCancel: () => void;
 }) {
   const activeReservations = reservations.filter((entry) => !["Cancelled", "Returned"].includes(entry.status));
@@ -2481,6 +2778,7 @@ function EventManager({ event, clients, members, reservations, tasks, language, 
     <div className="form-grid"><label>{t("Estado", "Status")}<select name="status" defaultValue={event.status} disabled={!canManage}>{statuses.map((status) => <option key={status} value={status}>{eventStatusLabel(status, t)}</option>)}</select></label><label>{t("Cor no calendário", "Calendar color")}<input name="color" type="color" defaultValue={event.color || "#b75d3f"} disabled={!canManage} /></label></div>
     <label>{t("Notas operacionais", "Operational notes")}<textarea name="notes" rows={4} defaultValue={event.notes} disabled={!canManage} /></label>
     <EventChecklist event={event} tasks={tasks} members={members} t={t} canManage={canManage} onAdd={onAddTask} onUpdate={onUpdateTask} onTransition={onTransitionTask} onDelete={onDeleteTask} />
+    <EventFinance event={event} reservations={reservations} expenses={expenses} suppliers={suppliers} documents={documents} language={language} t={t} canManage={canManage} onAddSupplier={onAddSupplier} onAddExpense={onAddExpense} onUpdateExpense={onUpdateExpense} onDeleteExpense={onDeleteExpense} onUploadDocument={onUploadDocument} onDownloadDocument={onDownloadDocument} onDeleteDocument={onDeleteDocument} />
     {reservations.length > 0 && <section className="event-linked-bookings"><h3>{t("Reservas associadas", "Linked bookings")}</h3>{reservations.map((reservation) => <article key={reservation.id}><span><strong>{reservation.item}</strong><small>{reservation.date} — {reservation.endDate}</small></span><em>{reservationStatusLabel(reservation.status, t)}</em></article>)}</section>}
     <div className="modal-actions event-manager-actions"><button type="button" className="button-secondary" onClick={onCancel}>{t("Fechar", "Close")}</button>{canManage && <button type="button" className="button-secondary" onClick={onDuplicate}>{t("Duplicar evento", "Duplicate event")}</button>}{canManage && <button type="button" className="button-secondary danger-outline" onClick={onArchive} disabled={!canArchive} title={!canArchive ? t("Conclua ou cancele o evento, feche as reservas e conclua a checklist.", "Complete or cancel the event, close bookings, and finish the checklist.") : ""}>{t("Arquivar", "Archive")}</button>}{canManage && event.status !== "Archived" && <button className="button-primary">{t("Guardar alterações", "Save changes")}</button>}</div>
   </form>;
