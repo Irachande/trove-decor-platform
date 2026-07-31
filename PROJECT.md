@@ -138,6 +138,12 @@ até serem configuradas as credenciais da conta comercial.
   estimado e margem por evento.
 - Documentos privados por evento em PDF, JPG, PNG, DOCX ou XLSX, até 10 MB,
   guardados no armazenamento da empresa e acessíveis à equipa autorizada.
+- Ciclo orientado de lead, planeamento, confirmação, preparação, execução e
+  conclusão, com transições validadas no servidor.
+- Regras agregadas que impedem iniciar com reservas sem saída, concluir com
+  reservas activas ou tarefas pendentes e cancelar com material em aluguer.
+- Cancelamento opcionalmente agregado das reservas confirmadas e sincronização
+  automática após todas as saídas ou devoluções relevantes.
 
 ### Equipa e perfil
 
@@ -216,7 +222,7 @@ até serem configuradas as credenciais da conta comercial.
 
 - Aplicação React/Next executada através de Vinext.
 - Cloudflare D1 para dados relacionais.
-- Cloudflare R2 para fotografias.
+- Cloudflare R2 para fotografias e documentos privados.
 - Drizzle ORM para a definição do esquema.
 - `read-excel-file` para leitura de ficheiros XLSX no navegador.
 - Alojamento privado através de OpenAI Sites.
@@ -238,7 +244,7 @@ até serem configuradas as credenciais da conta comercial.
 | Upload de imagens | Funcional | JPG/PNG até 5 MB, autenticado e separado por empresa |
 | Reservas | Funcional | Multiartigo, conflitos atómicos, preços e ciclo operacional |
 | Calendário | Funcional | Visões mensal/semanal, detalhes e reservas canceladas excluídas |
-| Gestão de eventos | Funcional (passo 4) | Ficha, checklist, fornecedores, custos, rentabilidade estimada, documentos privados e arquivo protegido |
+| Gestão de eventos | Funcional (passo 5) | Ciclo agregado, ficha, checklist, fornecedores, custos, rentabilidade, documentos privados e arquivo protegido |
 | Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
 | Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
 | Perfil público | Funcional no produto / publicação externa pendente | Rota, visibilidade, contactos, serviços e pedidos funcionam; o Sites continua com acesso privado |
@@ -253,7 +259,7 @@ até serem configuradas as credenciais da conta comercial.
 | Páginas legais | Beta | Publicadas e coerentes com a implementação; revisão jurídica continua obrigatória |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
 | Monitorização | Funcional (MVP) | Saúde pública mínima, erros de interface e painel operacional por empresa |
-| Testes automatizados | Funcional (MVP) | 25 testes estruturais e integração das fases 3 a 9 |
+| Testes automatizados | Funcional (MVP) | 26 testes estruturais e integração das fases 3 a 9 |
 
 ## 7. Arquitectura actual
 
@@ -374,6 +380,9 @@ Para suportar várias empresas com segurança, o modelo deverá evoluir para:
 - `clients` — implementado
 - `events` — implementado
 - `event_tasks` — implementado
+- `suppliers` — implementado
+- `event_expenses` — implementado
+- `event_documents` — implementado
 - `reservations`
 - `reservation_items` — implementado
 - `marketplace_listings` — implementado
@@ -548,7 +557,7 @@ descrevem a versão actual, não substituem revisão jurídica.
 - [x] Pesquisa, filtros de estado/período e ordenação.
 - [x] Resumo de cliente, local, datas, reservas e valor por evento.
 - [x] Ficha completa, edição, duplicação e arquivo.
-- [ ] Ciclo de estados e regras agregadas entre evento e reservas.
+- [x] Ciclo de estados e regras agregadas entre evento e reservas.
 - [x] Tarefas, responsáveis e checklist operacional.
 - [x] Custos, fornecedores, documentos e rentabilidade.
 - [ ] Eventos sem reserva visíveis no calendário.
@@ -557,8 +566,10 @@ Nota: a duplicação copia apenas a configuração do evento e deixa de fora
 reservas, tarefas, custos, documentos e bloqueios de stock. O arquivo exige
 evento concluído ou cancelado, sem reservas confirmadas/em aluguer e com todas
 as tarefas concluídas. A rentabilidade é estimada a partir da receita reservada,
-não representa receita contabilisticamente reconhecida. O ciclo agregado
-completo permanece pendente.
+não representa receita contabilisticamente reconhecida. As reservas confirmadas
+podem ser canceladas em conjunto com o evento, mas uma reserva em aluguer deve
+ser devolvida antes do cancelamento. O próximo passo é representar no calendário
+os eventos que ainda não possuem reservas.
 
 ## 13. Definição de concluído
 
@@ -613,6 +624,34 @@ pnpm run db:generate
 - Empresas e critérios de sucesso para o primeiro grupo beta.
 
 ## 17. Histórico de iterações
+
+### 31 de Julho de 2026 — Fase 9, passo 5: ciclo agregado do evento
+
+- Substituído o selector livre de estado por um ciclo visual e bilingue com
+  etapas explícitas entre lead, planeamento, confirmação, preparação, execução
+  e conclusão.
+- Todas as transições passam pela nova acção autorizada `transitionEvent`; a
+  edição normal da ficha já não consegue contornar as regras de estado.
+- Um evento só entra em execução depois de todas as reservas confirmadas terem
+  a saída registada; eventos sem reservas continuam suportados.
+- A conclusão exige todas as reservas devolvidas ou canceladas e todas as
+  tarefas concluídas, com bloqueios apresentados antecipadamente na ficha.
+- O cancelamento é impedido enquanto existir material em aluguer e pode cancelar
+  atomicamente todas as reservas ainda confirmadas após confirmação explícita.
+- Corrigida a sincronização agregada: devolver ou cancelar uma única reserva já
+  não conclui nem cancela indevidamente um evento com outras reservas activas.
+- A última saída pode colocar o evento em execução e a última devolução pode
+  concluí-lo automaticamente apenas quando não existirem tarefas pendentes.
+- Reservas deixam de poder ser adicionadas ou editadas depois de o evento entrar
+  em execução, ficar concluído ou ser cancelado.
+- Ampliado o teste integrado da Fase 9 com bloqueios, saída e devolução de stock,
+  conclusão agregada e cancelamento em cascata, além do 26.º teste estrutural.
+- Validação: `node tests/phase3-api.integration.mjs`,
+  `node tests/phase9-api.integration.mjs`,
+  `node --test tests/rendered-html.test.mjs` (26 testes),
+  `tsc --noEmit --incremental false`,
+  `eslint . --ignore-pattern dist --ignore-pattern .next`,
+  `vinext build` e `git diff --check`.
 
 ### 31 de Julho de 2026 — Fase 9, passo 4: finanças, fornecedores e documentos
 

@@ -1356,11 +1356,36 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
       onSiteContact: String(form.get("onSiteContact") || ""),
       color: String(form.get("color") || "#b75d3f"),
       notes: String(form.get("notes") || ""),
-      status: String(form.get("status") || "Planned"),
+      status: managedEvent.status,
     })) {
       setManagedEvent(null);
       setReloadToken((value) => value + 1);
       showToast(t("Ficha do evento actualizada", "Event record updated"));
+    }
+  }
+
+  async function transitionManagedEvent(status: string) {
+    if (!managedEvent || !canManageReservations) return;
+    const linkedReservations = reservations.filter((entry) => entry.eventId === managedEvent.id);
+    const confirmed = linkedReservations.filter((entry) => entry.status === "Confirmed").length;
+    if (status === "Cancelled") {
+      const message = confirmed
+        ? t(
+          `Cancelar o evento e ${confirmed} reserva${confirmed === 1 ? "" : "s"} confirmada${confirmed === 1 ? "" : "s"}?`,
+          `Cancel the event and ${confirmed} confirmed booking${confirmed === 1 ? "" : "s"}?`,
+        )
+        : t("Cancelar este evento?", "Cancel this event?");
+      if (!window.confirm(message)) return;
+    }
+    if (await persist("transitionEvent", {
+      id: managedEvent.id,
+      status,
+      cancelReservations: status === "Cancelled" && confirmed > 0,
+    })) {
+      setManagedEvent((current) => current ? { ...current, status } : current);
+      setEvents((current) => current.map((entry) => entry.id === managedEvent.id ? { ...entry, status } : entry));
+      setReloadToken((value) => value + 1);
+      showToast(t("Estado do evento actualizado", "Event status updated"));
     }
   }
 
@@ -2110,6 +2135,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
             t={t}
             canManage={canManageReservations}
             onSubmit={saveManagedEvent}
+            onTransitionEvent={transitionManagedEvent}
             onDuplicate={duplicateManagedEvent}
             onArchive={archiveManagedEvent}
             onAddTask={addManagedEventTask}
@@ -2728,7 +2754,71 @@ function EventFinance({ event, reservations, expenses, suppliers, documents, lan
   </section>;
 }
 
-function EventManager({ event, clients, members, reservations, tasks, expenses, suppliers, documents, language, t, canManage, onSubmit, onDuplicate, onArchive, onAddTask, onUpdateTask, onTransitionTask, onDeleteTask, onAddSupplier, onAddExpense, onUpdateExpense, onDeleteExpense, onUploadDocument, onDownloadDocument, onDeleteDocument, onCancel }: {
+function EventLifecycle({ event, reservations, tasks, t, canManage, onTransition }: {
+  event: EventRecord;
+  reservations: Reservation[];
+  tasks: EventTask[];
+  t: Translator;
+  canManage: boolean;
+  onTransition: (status: string) => void;
+}) {
+  const stages = ["Lead", "Planned", "Confirmed", "Preparing", "InProgress", "Completed"];
+  const nextByStatus: Record<string, string | undefined> = {
+    Lead: "Planned",
+    Planned: "Confirmed",
+    Confirmed: "Preparing",
+    Preparing: "InProgress",
+    InProgress: "Completed",
+    Cancelled: "Planned",
+  };
+  const actionLabels: Record<string, [string, string]> = {
+    Planned: ["Iniciar planeamento", "Start planning"],
+    Confirmed: ["Confirmar evento", "Confirm event"],
+    Preparing: ["Iniciar preparação", "Start preparation"],
+    InProgress: ["Iniciar execução", "Start event"],
+    Completed: ["Concluir evento", "Complete event"],
+  };
+  const next = nextByStatus[event.status];
+  const confirmed = reservations.filter((entry) => entry.status === "Confirmed").length;
+  const checkedOut = reservations.filter((entry) => entry.status === "CheckedOut").length;
+  const pendingTasks = tasks.filter((task) => task.status !== "Completed").length;
+  const blockers: string[] = [];
+  if (next === "InProgress" && confirmed > 0) {
+    blockers.push(t(
+      `${confirmed} reserva${confirmed === 1 ? "" : "s"} ainda sem saída registada`,
+      `${confirmed} booking${confirmed === 1 ? "" : "s"} still awaiting checkout`,
+    ));
+  }
+  if (next === "Completed" && confirmed + checkedOut > 0) {
+    blockers.push(t(
+      `${confirmed + checkedOut} reserva${confirmed + checkedOut === 1 ? "" : "s"} ainda activa${confirmed + checkedOut === 1 ? "" : "s"}`,
+      `${confirmed + checkedOut} booking${confirmed + checkedOut === 1 ? "" : "s"} still active`,
+    ));
+  }
+  if (next === "Completed" && pendingTasks > 0) {
+    blockers.push(t(
+      `${pendingTasks} tarefa${pendingTasks === 1 ? "" : "s"} por concluir`,
+      `${pendingTasks} task${pendingTasks === 1 ? "" : "s"} remaining`,
+    ));
+  }
+  const canCancel = canManage && !["Completed", "Cancelled", "Archived"].includes(event.status) && checkedOut === 0;
+  return <section className="event-lifecycle">
+    <header><span><small>{t("CICLO DO EVENTO", "EVENT LIFECYCLE")}</small><h3>{eventStatusLabel(event.status, t)}</h3></span><em>{t("Reservas e checklist controlam o avanço", "Bookings and checklist control progress")}</em></header>
+    <div className="event-lifecycle-track">{stages.map((stage, index) => {
+      const activeIndex = stages.indexOf(event.status);
+      const complete = event.status !== "Cancelled" && activeIndex > index;
+      const active = event.status === stage;
+      return <span key={stage} className={cls(complete && "complete", active && "active")}><i>{complete ? "✓" : index + 1}</i><small>{eventStatusLabel(stage, t)}</small></span>;
+    })}</div>
+    {event.status === "Cancelled" && <div className="event-lifecycle-cancelled">× {t("Evento cancelado. Pode reabrir em planeamento.", "Event cancelled. It can be reopened in planning.")}</div>}
+    <footer>
+      <span>{blockers.length ? <><b>{t("Antes de avançar:", "Before moving on:")}</b> {blockers.join(" · ")}</> : next ? t("Tudo pronto para a próxima etapa.", "Ready for the next stage.") : t("Ciclo operacional concluído.", "Operational lifecycle complete.")}</span>
+      <div>{canCancel && <button type="button" className="button-secondary danger-outline" onClick={() => onTransition("Cancelled")}>{t("Cancelar evento", "Cancel event")}</button>}{canManage && next && <button type="button" className="button-primary" disabled={blockers.length > 0} onClick={() => onTransition(next)}>{event.status === "Cancelled" ? t("Reabrir planeamento", "Reopen planning") : t(actionLabels[next]?.[0] || next, actionLabels[next]?.[1] || next)}</button>}</div>
+    </footer>
+  </section>;
+}
+
+function EventManager({ event, clients, members, reservations, tasks, expenses, suppliers, documents, language, t, canManage, onSubmit, onTransitionEvent, onDuplicate, onArchive, onAddTask, onUpdateTask, onTransitionTask, onDeleteTask, onAddSupplier, onAddExpense, onUpdateExpense, onDeleteExpense, onUploadDocument, onDownloadDocument, onDeleteDocument, onCancel }: {
   event: EventRecord;
   clients: Client[];
   members: Member[];
@@ -2741,6 +2831,7 @@ function EventManager({ event, clients, members, reservations, tasks, expenses, 
   t: Translator;
   canManage: boolean;
   onSubmit: (formEvent: FormEvent<HTMLFormElement>) => void;
+  onTransitionEvent: (status: string) => void;
   onDuplicate: () => void;
   onArchive: () => void;
   onAddTask: (input: { title: string; description: string; category: string; priority: string; assigneeUserId: number | null; dueDate: string; dueTime: string }) => void;
@@ -2760,7 +2851,6 @@ function EventManager({ event, clients, members, reservations, tasks, expenses, 
   const total = reservations.filter((entry) => entry.status !== "Cancelled").reduce((sum, entry) => sum + (entry.total || 0), 0);
   const pendingTasks = tasks.filter((task) => task.status !== "Completed").length;
   const canArchive = ["Completed", "Cancelled"].includes(event.status) && !activeReservations.length && !pendingTasks;
-  const statuses = ["Lead", "Planned", "Confirmed", "Preparing", "InProgress", "Completed", "Cancelled"];
   return <form className="modal-form event-manager" onSubmit={onSubmit}>
     <section className="event-record-summary" style={{ "--event": event.color || "#b75d3f" } as React.CSSProperties}>
       <span><small>{t("Reservas ligadas", "Linked bookings")}</small><strong>{reservations.length}</strong></span>
@@ -2768,6 +2858,7 @@ function EventManager({ event, clients, members, reservations, tasks, expenses, 
       <span><small>{t("Tarefas concluídas", "Tasks completed")}</small><strong>{tasks.filter((task) => task.status === "Completed").length}/{tasks.length}</strong></span>
       <span><small>{t("Total reservado", "Booked total")}</small><strong>{formatMoney(total, reservations[0]?.currency || event.currency || "MZN", language)}</strong></span>
     </section>
+    <EventLifecycle event={event} reservations={reservations} tasks={tasks} t={t} canManage={canManage} onTransition={onTransitionEvent} />
     <div className="form-grid"><label>{t("Cliente", "Client")}<select name="clientId" defaultValue={event.clientId} required disabled={!canManage}>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>{t("Responsável", "Owner")}<select name="ownerUserId" defaultValue={event.ownerUserId || ""} disabled={!canManage}><option value="">{t("Por atribuir", "Unassigned")}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.displayName || member.email}</option>)}</select></label></div>
     <div className="form-grid"><label>{t("Nome do evento", "Event name")}<input name="name" defaultValue={event.name} required disabled={!canManage} /></label><label>{t("Tipo", "Type")}<select name="eventType" defaultValue={event.eventType || "Other"} disabled={!canManage}><option value="Wedding">{t("Casamento", "Wedding")}</option><option value="Corporate">{t("Corporativo", "Corporate")}</option><option value="Birthday">{t("Aniversário", "Birthday")}</option><option value="Social">{t("Social", "Social")}</option><option value="Other">{t("Outro", "Other")}</option></select></label></div>
     <div className="form-grid"><label>{t("Local", "Venue")}<input name="venue" defaultValue={event.venue} disabled={!canManage} /></label><label>{t("Contacto no local", "On-site contact")}<input name="onSiteContact" defaultValue={event.onSiteContact || ""} disabled={!canManage} /></label></div>
@@ -2775,7 +2866,7 @@ function EventManager({ event, clients, members, reservations, tasks, expenses, 
     <div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={event.startDate} required disabled={!canManage} /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={event.endDate} required disabled={!canManage} /></label></div>
     <div className="form-grid"><label>{t("Hora de montagem", "Setup time")}<input name="setupTime" type="time" defaultValue={event.setupTime} disabled={!canManage} /></label><label>{t("Hora de recolha", "Pickup time")}<input name="pickupTime" type="time" defaultValue={event.pickupTime} disabled={!canManage} /></label></div>
     <div className="form-grid three"><label>{t("Convidados", "Guests")}<input name="guestCount" type="number" min="0" defaultValue={event.guestCount || 0} disabled={!canManage} /></label><label>{t("Orçamento", "Budget")}<input name="budget" type="number" min="0" defaultValue={event.budget || 0} disabled={!canManage} /></label><label>{t("Moeda", "Currency")}<select name="currency" defaultValue={event.currency || "MZN"} disabled={!canManage}><option value="MZN">MZN</option><option value="ZAR">ZAR</option><option value="USD">USD</option><option value="EUR">EUR</option></select></label></div>
-    <div className="form-grid"><label>{t("Estado", "Status")}<select name="status" defaultValue={event.status} disabled={!canManage}>{statuses.map((status) => <option key={status} value={status}>{eventStatusLabel(status, t)}</option>)}</select></label><label>{t("Cor no calendário", "Calendar color")}<input name="color" type="color" defaultValue={event.color || "#b75d3f"} disabled={!canManage} /></label></div>
+    <div className="form-grid"><label>{t("Estado actual", "Current status")}<span className={cls("event-current-status", event.status.toLowerCase())}>{eventStatusLabel(event.status, t)}</span></label><label>{t("Cor no calendário", "Calendar color")}<input name="color" type="color" defaultValue={event.color || "#b75d3f"} disabled={!canManage} /></label></div>
     <label>{t("Notas operacionais", "Operational notes")}<textarea name="notes" rows={4} defaultValue={event.notes} disabled={!canManage} /></label>
     <EventChecklist event={event} tasks={tasks} members={members} t={t} canManage={canManage} onAdd={onAddTask} onUpdate={onUpdateTask} onTransition={onTransitionTask} onDelete={onDeleteTask} />
     <EventFinance event={event} reservations={reservations} expenses={expenses} suppliers={suppliers} documents={documents} language={language} t={t} canManage={canManage} onAddSupplier={onAddSupplier} onAddExpense={onAddExpense} onUpdateExpense={onUpdateExpense} onDeleteExpense={onDeleteExpense} onUploadDocument={onUploadDocument} onDownloadDocument={onDownloadDocument} onDeleteDocument={onDeleteDocument} />

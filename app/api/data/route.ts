@@ -55,6 +55,7 @@ const ACTION_PERMISSIONS: Record<string, WorkspacePermission> = {
   updateClient: "manageReservations",
   addEvent: "manageReservations",
   updateEvent: "manageReservations",
+  transitionEvent: "manageReservations",
   duplicateEvent: "manageReservations",
   archiveEvent: "manageReservations",
   addEventTask: "manageReservations",
@@ -210,6 +211,7 @@ function actionSummary(action: string) {
     updateEnquiryStatus: "Estado do pedido público alterado",
     duplicateEvent: "Evento duplicado sem reservas",
     archiveEvent: "Evento arquivado",
+    transitionEvent: "Estado do evento alterado",
     addEventTask: "Tarefa de evento criada",
     updateEventTask: "Tarefa de evento actualizada",
     transitionEventTask: "Estado da tarefa de evento alterado",
@@ -324,6 +326,7 @@ async function emitActionNotification(
     addReservation: ["reservation", "Nova reserva", "New reservation", "Foi criada uma reserva para a equipa.", "A reservation was created for the team."],
     updateReservation: ["reservation", "Reserva actualizada", "Reservation updated", "Os detalhes de uma reserva foram alterados.", "Reservation details were changed."],
     transitionReservation: ["reservation", "Estado da reserva alterado", "Reservation status changed", `Novo estado: ${String(payload.status || "")}.`, `New status: ${String(payload.status || "")}.`],
+    transitionEvent: ["event", "Estado do evento alterado", "Event status changed", `Novo estado: ${String(payload.status || "")}.`, `New status: ${String(payload.status || "")}.`],
     adjustStock: ["inventory", "Stock actualizado", "Stock updated", "A quantidade disponível de um artigo foi alterada.", "An item's available quantity was changed."],
     addMaintenance: ["maintenance", "Intervenção registada", "Maintenance recorded", "Foi adicionada uma intervenção ao inventário.", "An inventory maintenance record was added."],
     updateMaintenance: ["maintenance", "Intervenção concluída", "Maintenance completed", "Uma intervenção foi actualizada.", "A maintenance record was updated."],
@@ -908,6 +911,12 @@ export async function POST(request: Request) {
       if (!["Lead", "Planned", "Confirmed", "Preparing", "InProgress", "Completed", "Cancelled"].includes(status)) {
         throw new Error("Event status is invalid");
       }
+      if (existing && status !== existing.status) {
+        throw new Error("Status must be changed with the event lifecycle controls");
+      }
+      if (!existing && !["Lead", "Planned"].includes(status)) {
+        throw new Error("New events must start as a lead or in planning");
+      }
       const currency = text(payload, "currency", { max: 3 }).toUpperCase() || "MZN";
       const color = text(payload, "color", { max: 7 }) || "#b75d3f";
       if (!/#[0-9a-f]{6}/i.test(color)) throw new Error("Event color is invalid");
@@ -940,6 +949,66 @@ export async function POST(request: Request) {
         ).bind(id, context.businessId, ...values, createdAt, createdAt).run();
       }
       result = { ok: true, eventId: id };
+    } else if (action === "transitionEvent") {
+      const id = integer(payload, "id", { min: 1 });
+      const target = text(payload, "status", { required: true, max: 30 });
+      const event = await env.DB.prepare(
+        "SELECT status FROM events WHERE id = ? AND business_id = ?",
+      ).bind(id, context.businessId).first<{ status: string }>();
+      if (!event) throw new Error("Event not found");
+      const allowed: Record<string, string[]> = {
+        Lead: ["Planned", "Cancelled"],
+        Planned: ["Lead", "Confirmed", "Cancelled"],
+        Confirmed: ["Preparing", "Cancelled"],
+        Preparing: ["Confirmed", "InProgress", "Cancelled"],
+        InProgress: ["Completed"],
+        Cancelled: ["Planned"],
+      };
+      if (!allowed[event.status]?.includes(target)) {
+        throw new Error("Invalid event transition");
+      }
+      const reservationCounts = await env.DB.prepare(
+        "SELECT COALESCE(SUM(CASE WHEN status = 'Confirmed' THEN 1 ELSE 0 END), 0) AS confirmed, COALESCE(SUM(CASE WHEN status = 'CheckedOut' THEN 1 ELSE 0 END), 0) AS checkedOut FROM reservations WHERE event_id = ? AND business_id = ?",
+      ).bind(id, context.businessId).first<{ confirmed: number; checkedOut: number }>();
+      const confirmed = Number(reservationCounts?.confirmed || 0);
+      const checkedOut = Number(reservationCounts?.checkedOut || 0);
+      const pendingTasks = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM event_tasks WHERE event_id = ? AND business_id = ? AND status != 'Completed'",
+      ).bind(id, context.businessId).first<{ count: number }>();
+      if (target === "InProgress" && confirmed > 0) {
+        throw new Error("All confirmed reservations must be checked out before the event can start");
+      }
+      if (target === "Completed" && (confirmed > 0 || checkedOut > 0)) {
+        throw new Error("All linked reservations must be returned or cancelled before completing the event");
+      }
+      if (target === "Completed" && Number(pendingTasks?.count || 0) > 0) {
+        throw new Error("All event tasks must be completed before completing the event");
+      }
+      if (target === "Cancelled" && checkedOut > 0) {
+        throw new Error("Checked out reservations must be returned before cancelling the event");
+      }
+      if (target === "Cancelled" && confirmed > 0 && payload.cancelReservations !== true) {
+        throw new Error("Cannot cancel without confirming the linked reservations");
+      }
+      const statements = [
+        env.DB.prepare(
+          "UPDATE events SET status = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(target, createdAt, id, context.businessId),
+      ];
+      if (target === "Cancelled" && confirmed > 0) {
+        statements.push(
+          env.DB.prepare(
+            "UPDATE reservations SET status = 'Cancelled', cancelled_at = ? WHERE event_id = ? AND business_id = ? AND status = 'Confirmed'",
+          ).bind(createdAt, id, context.businessId),
+        );
+      }
+      await env.DB.batch(statements);
+      result = {
+        ok: true,
+        eventId: id,
+        status: target,
+        cancelledReservations: target === "Cancelled" ? confirmed : 0,
+      };
     } else if (action === "duplicateEvent") {
       const sourceId = integer(payload, "sourceId", { min: 1 });
       const id = integer(payload, "id", { min: 1 });
@@ -1252,8 +1321,8 @@ export async function POST(request: Request) {
         "SELECT business_id AS businessId FROM clients WHERE id = ?",
       ).bind(clientId).first<{ businessId: number }>();
       const existingEvent = await env.DB.prepare(
-        "SELECT business_id AS businessId FROM events WHERE id = ?",
-      ).bind(eventId).first<{ businessId: number }>();
+        "SELECT business_id AS businessId, status FROM events WHERE id = ?",
+      ).bind(eventId).first<{ businessId: number; status: string }>();
       const existingReservation = await env.DB.prepare(
         "SELECT business_id AS businessId, status FROM reservations WHERE id = ?",
       ).bind(reservationId).first<{ businessId: number; status: string }>();
@@ -1262,6 +1331,9 @@ export async function POST(request: Request) {
       }
       if (existingEvent && existingEvent.businessId !== context.businessId) {
         throw new Error("Event not found");
+      }
+      if (existingEvent && !["Lead", "Planned", "Confirmed", "Preparing"].includes(existingEvent.status)) {
+        throw new Error("Reservations cannot be changed after an event starts or closes");
       }
       if (existingReservation && existingReservation.businessId !== context.businessId) {
         throw new Error("Reservation not found");
@@ -1314,8 +1386,8 @@ export async function POST(request: Request) {
       const id = integer(payload, "id", { min: 1 });
       const target = text(payload, "status", { required: true, max: 30 });
       const reservation = await env.DB.prepare(
-        "SELECT status, event_id AS eventId, event_name AS eventName FROM reservations WHERE id = ? AND business_id = ?",
-      ).bind(id, context.businessId).first<{ status: string; eventId: number; eventName: string }>();
+        "SELECT r.status, r.event_id AS eventId, r.event_name AS eventName, e.status AS eventStatus FROM reservations r JOIN events e ON e.id = r.event_id AND e.business_id = r.business_id WHERE r.id = ? AND r.business_id = ?",
+      ).bind(id, context.businessId).first<{ status: string; eventId: number; eventName: string; eventStatus: string }>();
       if (!reservation) throw new Error("Reservation not found");
       const allowed: Record<string, string[]> = {
         Confirmed: ["Cancelled", "CheckedOut"],
@@ -1323,6 +1395,9 @@ export async function POST(request: Request) {
       };
       if (!allowed[reservation.status]?.includes(target)) {
         throw new Error("Invalid reservation transition");
+      }
+      if (target === "CheckedOut" && !["Confirmed", "Preparing", "InProgress"].includes(reservation.eventStatus)) {
+        throw new Error("The event must be confirmed or preparing before checkout");
       }
       const lines = await env.DB.prepare(
         "SELECT item_id AS itemId, quantity FROM reservation_items WHERE reservation_id = ? AND business_id = ?",
@@ -1333,8 +1408,20 @@ export async function POST(request: Request) {
           "UPDATE reservations SET status = ?, checked_out_at = CASE WHEN ? = 'CheckedOut' THEN ? ELSE checked_out_at END, returned_at = CASE WHEN ? = 'Returned' THEN ? ELSE returned_at END, cancelled_at = CASE WHEN ? = 'Cancelled' THEN ? ELSE cancelled_at END WHERE id = ? AND business_id = ?",
         ).bind(target, target, createdAt, target, createdAt, target, createdAt, id, context.businessId),
         env.DB.prepare(
-          "UPDATE events SET status = ? WHERE id = ? AND business_id = ?",
-        ).bind(target === "CheckedOut" ? "InProgress" : target === "Returned" ? "Completed" : "Cancelled", reservation.eventId, context.businessId),
+          "UPDATE events SET status = CASE WHEN ? = 'CheckedOut' AND status IN ('Confirmed', 'Preparing') AND NOT EXISTS (SELECT 1 FROM reservations WHERE event_id = ? AND business_id = ? AND status = 'Confirmed') THEN 'InProgress' WHEN ? = 'Returned' AND status = 'InProgress' AND NOT EXISTS (SELECT 1 FROM reservations WHERE event_id = ? AND business_id = ? AND status IN ('Confirmed', 'CheckedOut')) AND NOT EXISTS (SELECT 1 FROM event_tasks WHERE event_id = ? AND business_id = ? AND status != 'Completed') THEN 'Completed' ELSE status END, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(
+          target,
+          reservation.eventId,
+          context.businessId,
+          target,
+          reservation.eventId,
+          context.businessId,
+          reservation.eventId,
+          context.businessId,
+          createdAt,
+          reservation.eventId,
+          context.businessId,
+        ),
       ];
       if (target === "CheckedOut") {
         lines.results.forEach((line, index) => {

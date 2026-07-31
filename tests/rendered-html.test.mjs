@@ -510,3 +510,24 @@ test("phase 9 step 4 adds suppliers, event costs, protected documents, and profi
   assert.match(backup, /eventExpenses/);
   assert.match(backup, /eventDocuments/);
 });
+
+test("phase 9 step 5 enforces an aggregate event and reservation lifecycle", async () => {
+  const [app, styles, api] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("app/api/data/route.ts"),
+  ]);
+
+  assert.match(app, /function EventLifecycle/);
+  assert.match(app, /transitionManagedEvent/);
+  assert.match(app, /Reservas e checklist controlam o avanço/);
+  assert.match(app, /Reabrir planeamento/);
+  assert.match(styles, /\.event-lifecycle-track/);
+  assert.match(styles, /\.event-current-status/);
+  assert.match(api, /transitionEvent: "manageReservations"/);
+  assert.match(api, /Status must be changed with the event lifecycle controls/);
+  assert.match(api, /All confirmed reservations must be checked out before the event can start/);
+  assert.match(api, /All linked reservations must be returned or cancelled before completing the event/);
+  assert.match(api, /Cannot cancel without confirming the linked reservations/);
+  assert.match(api, /NOT EXISTS \(SELECT 1 FROM event_tasks/);
+});

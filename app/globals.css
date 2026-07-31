@@ -209,6 +209,28 @@ h1, h2, h3, p { margin-top: 0; }
 .event-record-summary span { display: grid; gap: 4px; }
 .event-record-summary small { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .06em; }
 .event-record-summary strong { font: 400 17px Georgia, serif; }
+.event-lifecycle { display: grid; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: #f8f5ef; }
+.event-lifecycle > header { display: flex; align-items: end; justify-content: space-between; gap: 12px; }
+.event-lifecycle > header span { display: grid; gap: 3px; }
+.event-lifecycle > header small { color: var(--brand); font-size: 7px; font-weight: 700; letter-spacing: .09em; }
+.event-lifecycle > header h3 { font: 400 18px Georgia, serif; }
+.event-lifecycle > header em { color: var(--muted); font-size: 8px; font-style: normal; }
+.event-lifecycle-track { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
+.event-lifecycle-track span { min-width: 0; display: grid; justify-items: center; gap: 6px; position: relative; color: #a3a097; text-align: center; }
+.event-lifecycle-track span::before { content: ""; position: absolute; z-index: 0; top: 13px; left: -50%; width: 100%; height: 2px; background: #ddd7cc; }
+.event-lifecycle-track span:first-child::before { display: none; }
+.event-lifecycle-track i { width: 27px; height: 27px; z-index: 1; display: grid; place-items: center; border: 2px solid #d8d2c7; border-radius: 50%; background: #f8f5ef; font-size: 8px; font-style: normal; font-weight: 700; }
+.event-lifecycle-track small { overflow: hidden; max-width: 100%; font-size: 7px; white-space: nowrap; text-overflow: ellipsis; }
+.event-lifecycle-track span.complete::before, .event-lifecycle-track span.active::before { background: var(--olive); }
+.event-lifecycle-track span.complete, .event-lifecycle-track span.active { color: var(--ink); }
+.event-lifecycle-track span.complete i { border-color: var(--olive); background: var(--olive); color: white; }
+.event-lifecycle-track span.active i { border-color: var(--brand); background: var(--white); color: var(--brand); box-shadow: 0 0 0 3px #eadbd4; }
+.event-lifecycle > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-top: 10px; border-top: 1px solid #e4ded3; }
+.event-lifecycle > footer > span { color: var(--muted); font-size: 8px; line-height: 1.5; }
+.event-lifecycle > footer > span b { color: #9a4938; }
+.event-lifecycle > footer > div { display: flex; gap: 7px; flex: none; }
+.event-lifecycle-cancelled { padding: 9px 11px; border-radius: 7px; background: #f4e3df; color: #95513f; font-size: 8px; }
+.event-current-status { min-height: 38px; display: flex; align-items: center; padding: 0 11px; border: 1px solid var(--line); border-radius: 7px; background: #f3f0e9; color: var(--ink); font-size: 9px; font-weight: 700; }
 .event-linked-bookings { display: grid; gap: 8px; padding: 14px; border: 1px solid var(--line); border-radius: 9px; }
 .event-linked-bookings h3 { font: 400 15px Georgia, serif; }
 .event-linked-bookings article { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 8px; border-top: 1px solid #ebe6de; }
@@ -854,6 +876,8 @@ h1, h2, h3, p { margin-top: 0; }
   .events-list time { width: 44px; }
   .event-dates, .event-bookings { display: none; }
   .event-main strong { font-size: 14px; }
+  .event-lifecycle > footer { align-items: stretch; flex-direction: column; }
+  .event-lifecycle > footer > div { justify-content: flex-end; }
   .task-composer { grid-template-columns: 1fr 1fr; }
   .task-composer .task-description { grid-column: 1 / -1; }
   .task-composer .button-primary { grid-column: 1 / -1; }
@@ -931,6 +955,10 @@ h1, h2, h3, p { margin-top: 0; }
   .event-stat-grid article { min-height: 82px; padding: 12px; }
   .event-stat-grid i { width: 35px; height: 35px; }
   .event-record-summary { grid-template-columns: 1fr; }
+  .event-lifecycle > header { align-items: start; flex-direction: column; }
+  .event-lifecycle-track { grid-template-columns: repeat(3, 1fr); row-gap: 13px; }
+  .event-lifecycle-track span::before { display: none; }
+  .event-lifecycle > footer > div { display: grid; grid-template-columns: 1fr; }
   .event-manager-actions button { flex: 1 1 45%; }
   .task-composer { grid-template-columns: 1fr; }
   .task-composer .task-description, .task-composer .button-primary { grid-column: 1; }

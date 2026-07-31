@@ -128,6 +128,10 @@ assert.equal(
   1850,
 );
 
+await action("transitionEvent", {
+  id: eventId,
+  status: "Confirmed",
+});
 await action("transitionReservation", {
   id: reservationId,
   status: "CheckedOut",

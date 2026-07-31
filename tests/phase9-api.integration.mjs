@@ -35,6 +35,9 @@ const setupTaskId = stamp + 940;
 const pickupTaskId = stamp + 950;
 const supplierId = stamp + 960;
 const expenseId = stamp + 970;
+const itemId = stamp + 980;
+const reservationId = stamp + 990;
+const cancelledReservationId = stamp + 995;
 
 await json("/api/data", {
   method: "POST",
@@ -74,7 +77,7 @@ await json("/api/data", {
       onSiteContact: "Celina · +258 82 000 1111",
       color: "#78836a",
       notes: "Montagem exterior.",
-      status: "Confirmed",
+      status: "Planned",
     },
   }),
 });
@@ -97,6 +100,61 @@ await json("/api/data", {
       sortOrder: 0,
     },
   }),
+});
+
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({
+    action: "addItem",
+    payload: {
+      id: itemId,
+      name: "Cadeira cerimónia",
+      category: "Mobiliário",
+      quantity: 4,
+      available: 4,
+      status: "Available",
+      tone: "clay",
+      symbol: "CC",
+      price: 600,
+      currency: "MZN",
+      storageLocation: "A1",
+      condition: "Bom",
+      description: "",
+      sku: `EVENT-${stamp}`,
+      replacementValue: 1200,
+      minStock: 0,
+    },
+  }),
+});
+
+const reservationPayload = {
+  id: reservationId,
+  clientId,
+  clientName: "Cliente Evento",
+  clientEmail: "cliente-evento@example.test",
+  clientPhone: "+258 84 111 2222",
+  eventId,
+  eventName: "Casamento Maputo",
+  venue: "Jardim dos Namorados",
+  date: "2026-11-14",
+  endDate: "2026-11-15",
+  setupTime: "08:00",
+  pickupTime: "18:30",
+  eventNotes: "Montagem exterior.",
+  notes: "Reserva agregada ao evento.",
+  logistics: "Viatura 1",
+  discount: 0,
+  deliveryFee: 2000,
+  deposit: 10000,
+  paymentStatus: "Partial",
+  color: "#78836a",
+  items: [{ itemId, quantity: 2 }],
+};
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "addReservation", payload: reservationPayload }),
 });
 await json("/api/data", {
   method: "POST",
@@ -182,6 +240,7 @@ assert.equal(event.guestCount, 180);
 assert.equal(event.budget, 350000);
 assert.equal(event.currency, "MZN");
 assert.equal(event.address, "Avenida da Marginal, Maputo");
+assert.equal(event.status, "Planned");
 assert.equal(workspace.suppliers.find((entry) => entry.id === supplierId).name, "Flores de Maputo");
 assert.equal(workspace.eventExpenses.find((entry) => entry.id === expenseId).amount, 45000);
 assert.equal(workspace.eventDocuments.find((entry) => entry.id === documentUpload.documentId).category, "Contract");
@@ -203,10 +262,46 @@ await json("/api/data", {
       ...event,
       venue: "Jardim dos Namorados · Pavilhão",
       guestCount: 200,
-      status: "Preparing",
+      status: "Planned",
     },
   }),
 });
+
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "updateEvent", payload: { ...event, status: "Confirmed" } }),
+}, 400);
+
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "transitionEvent", payload: { id: eventId, status: "Confirmed" } }),
+});
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "transitionEvent", payload: { id: eventId, status: "Preparing" } }),
+});
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "transitionEvent", payload: { id: eventId, status: "InProgress" } }),
+}, 400);
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "transitionReservation", payload: { id: reservationId, status: "CheckedOut" } }),
+});
+workspace = await json("/api/data", { headers });
+event = workspace.events.find((entry) => entry.id === eventId);
+assert.equal(event.status, "InProgress");
+assert.equal(workspace.items.find((entry) => entry.id === itemId).available, 2);
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "transitionEvent", payload: { id: eventId, status: "Completed" } }),
+}, 400);
 
 await json("/api/data", {
   method: "POST",
@@ -253,6 +348,38 @@ await json("/api/data", {
   method: "POST",
   headers,
   body: JSON.stringify({
+    action: "addReservation",
+    payload: {
+      ...reservationPayload,
+      id: cancelledReservationId,
+      eventId: duplicateId,
+      eventName: duplicate.name,
+      date: "2026-12-10",
+      endDate: "2026-12-11",
+      items: [{ itemId, quantity: 1 }],
+    },
+  }),
+});
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "transitionEvent", payload: { id: duplicateId, status: "Confirmed" } }),
+});
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "transitionEvent", payload: { id: duplicateId, status: "Cancelled" } }),
+}, 400);
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ action: "transitionEvent", payload: { id: duplicateId, status: "Cancelled", cancelReservations: true } }),
+});
+
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({
     action: "updateEventTask",
     payload: { ...setupTask, priority: "Urgent", dueTime: "14:30" },
   }),
@@ -278,11 +405,14 @@ await json(`/api/event-document?id=${encodeURIComponent(documentUpload.documentI
 await json("/api/data", {
   method: "POST",
   headers,
-  body: JSON.stringify({
-    action: "updateEvent",
-    payload: { ...event, status: "Completed" },
-  }),
+  body: JSON.stringify({ action: "transitionReservation", payload: { id: reservationId, status: "Returned" } }),
 });
+workspace = await json("/api/data", { headers });
+event = workspace.events.find((entry) => entry.id === eventId);
+assert.equal(event.status, "InProgress");
+assert.equal(workspace.items.find((entry) => entry.id === itemId).available, 4);
+assert.equal(workspace.events.find((entry) => entry.id === duplicateId).status, "Cancelled");
+assert.equal(workspace.reservations.find((entry) => entry.id === cancelledReservationId).status, "Cancelled");
 await json("/api/data", {
   method: "POST",
   headers,
@@ -334,6 +464,11 @@ await json("/api/data", {
 await json("/api/data", {
   method: "POST",
   headers,
+  body: JSON.stringify({ action: "transitionEvent", payload: { id: eventId, status: "Completed" } }),
+});
+await json("/api/data", {
+  method: "POST",
+  headers,
   body: JSON.stringify({
     action: "archiveEvent",
     payload: { id: eventId },
@@ -351,5 +486,6 @@ assert.ok(workspace.auditLogs.some((entry) => entry.action === "transitionEventT
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "addSupplier"));
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "addEventExpense"));
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "deleteEventDocument"));
+assert.ok(workspace.auditLogs.some((entry) => entry.action === "transitionEvent"));
 
-console.log("Phase 9 event operations, finance, suppliers, and documents integration passed");
+console.log("Phase 9 event lifecycle, operations, finance, suppliers, and documents integration passed");
