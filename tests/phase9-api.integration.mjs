@@ -30,6 +30,7 @@ assert.ok(ownerId);
 
 const clientId = stamp + 910;
 const eventId = stamp + 920;
+const calendarEventId = stamp + 925;
 const duplicateId = stamp + 930;
 const setupTaskId = stamp + 940;
 const pickupTaskId = stamp + 950;
@@ -50,6 +51,34 @@ await json("/api/data", {
       email: "cliente-evento@example.test",
       phone: "+258 84 111 2222",
       notes: "Cliente criado pelo teste da Fase 9.",
+    },
+  }),
+});
+
+await json("/api/data", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({
+    action: "addEvent",
+    payload: {
+      id: calendarEventId,
+      clientId,
+      ownerUserId: ownerId,
+      name: "Visita técnica sem material",
+      eventType: "Corporate",
+      venue: "Centro de Conferências",
+      address: "Maputo",
+      startDate: "2026-11-20",
+      endDate: "2026-11-20",
+      setupTime: "10:00",
+      pickupTime: "12:00",
+      guestCount: 20,
+      budget: 15000,
+      currency: "MZN",
+      onSiteContact: "Equipa técnica",
+      color: "#b75d3f",
+      notes: "Deve aparecer no calendário mesmo sem reserva.",
+      status: "Planned",
     },
   }),
 });
@@ -479,6 +508,8 @@ workspace = await json("/api/data", { headers });
 event = workspace.events.find((entry) => entry.id === eventId);
 assert.equal(event.status, "Archived");
 assert.ok(event.archivedAt);
+assert.equal(workspace.events.find((entry) => entry.id === calendarEventId).name, "Visita técnica sem material");
+assert.equal(workspace.reservations.some((entry) => entry.eventId === calendarEventId), false);
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "duplicateEvent"));
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "archiveEvent"));
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "addEventTask"));
@@ -488,4 +519,4 @@ assert.ok(workspace.auditLogs.some((entry) => entry.action === "addEventExpense"
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "deleteEventDocument"));
 assert.ok(workspace.auditLogs.some((entry) => entry.action === "transitionEvent"));
 
-console.log("Phase 9 event lifecycle, operations, finance, suppliers, and documents integration passed");
+console.log("Phase 9 event lifecycle, operations, finance, calendar, suppliers, and documents integration passed");

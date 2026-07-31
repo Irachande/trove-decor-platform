@@ -113,6 +113,9 @@ até serem configuradas as credenciais da conta comercial.
 - Datas do evento, montagem e recolha, contacto, local e notas.
 - Calendário mensal e semanal.
 - Consulta dos detalhes da reserva.
+- Eventos sem reserva activa aparecem no mesmo calendário, com identificação
+  própria, ficha resumida e acesso directo ao evento.
+- Exportação unificada da agenda com reservas e eventos sem material associado.
 - Exportação de reservas.
 
 ### Eventos
@@ -144,6 +147,8 @@ até serem configuradas as credenciais da conta comercial.
   reservas activas ou tarefas pendentes e cancelar com material em aluguer.
 - Cancelamento opcionalmente agregado das reservas confirmadas e sincronização
   automática após todas as saídas ou devoluções relevantes.
+- Eventos sem reserva activa integrados nas vistas mensal e semanal sem duplicar
+  aqueles que já estão representados por uma reserva.
 
 ### Equipa e perfil
 
@@ -243,8 +248,8 @@ até serem configuradas as credenciais da conta comercial.
 | Categorias | Funcional | Isoladas por empresa |
 | Upload de imagens | Funcional | JPG/PNG até 5 MB, autenticado e separado por empresa |
 | Reservas | Funcional | Multiartigo, conflitos atómicos, preços e ciclo operacional |
-| Calendário | Funcional | Visões mensal/semanal, detalhes e reservas canceladas excluídas |
-| Gestão de eventos | Funcional (passo 5) | Ciclo agregado, ficha, checklist, fornecedores, custos, rentabilidade, documentos privados e arquivo protegido |
+| Calendário | Funcional | Visões mensal/semanal com reservas e eventos sem material; cancelamentos excluídos |
+| Gestão de eventos | Funcional (Fase 9 concluída) | Ciclo agregado, ficha, checklist, finanças, documentos e integração completa com o calendário |
 | Inventário operacional | Funcional | Fichas, stock, fotografias, kits e manutenção isolados por empresa |
 | Importação/exportação | Funcional | Importação XLSX/CSV validada e exportação CSV |
 | Perfil público | Funcional no produto / publicação externa pendente | Rota, visibilidade, contactos, serviços e pedidos funcionam; o Sites continua com acesso privado |
@@ -259,7 +264,7 @@ até serem configuradas as credenciais da conta comercial.
 | Páginas legais | Beta | Publicadas e coerentes com a implementação; revisão jurídica continua obrigatória |
 | Histórico de actividade | Funcional | Alterações importantes registadas por empresa e autor |
 | Monitorização | Funcional (MVP) | Saúde pública mínima, erros de interface e painel operacional por empresa |
-| Testes automatizados | Funcional (MVP) | 26 testes estruturais e integração das fases 3 a 9 |
+| Testes automatizados | Funcional (MVP) | 27 testes estruturais e integração das fases 3 a 9 |
 
 ## 7. Arquitectura actual
 
@@ -560,7 +565,7 @@ descrevem a versão actual, não substituem revisão jurídica.
 - [x] Ciclo de estados e regras agregadas entre evento e reservas.
 - [x] Tarefas, responsáveis e checklist operacional.
 - [x] Custos, fornecedores, documentos e rentabilidade.
-- [ ] Eventos sem reserva visíveis no calendário.
+- [x] Eventos sem reserva visíveis no calendário.
 
 Nota: a duplicação copia apenas a configuração do evento e deixa de fora
 reservas, tarefas, custos, documentos e bloqueios de stock. O arquivo exige
@@ -568,8 +573,9 @@ evento concluído ou cancelado, sem reservas confirmadas/em aluguer e com todas
 as tarefas concluídas. A rentabilidade é estimada a partir da receita reservada,
 não representa receita contabilisticamente reconhecida. As reservas confirmadas
 podem ser canceladas em conjunto com o evento, mas uma reserva em aluguer deve
-ser devolvida antes do cancelamento. O próximo passo é representar no calendário
-os eventos que ainda não possuem reservas.
+ser devolvida antes do cancelamento. A Fase 9 está funcionalmente concluída; a
+próxima iteração deve regressar aos bloqueios de lançamento, nomeadamente
+credenciais reais, revisão jurídica, restauro e beta com empresas reais.
 
 ## 13. Definição de concluído
 
@@ -624,6 +630,27 @@ pnpm run db:generate
 - Empresas e critérios de sucesso para o primeiro grupo beta.
 
 ## 17. Histórico de iterações
+
+### 31 de Julho de 2026 — Fase 9, passo 6: eventos na agenda partilhada
+
+- O calendário mensal e semanal passa a combinar reservas activas com eventos
+  que ainda não possuem uma reserva activa, sem duplicar o mesmo trabalho.
+- Eventos cancelados e arquivados permanecem fora da agenda operacional;
+  eventos cuja única reserva foi cancelada continuam visíveis pela sua ficha.
+- Adicionada identificação visual tracejada para distinguir eventos sem material
+  das reservas que bloqueiam inventário.
+- A selecção de um evento abre um resumo com cliente, tipo, datas, horários,
+  local e contacto, além de acesso directo à ficha operacional completa.
+- A lista inferior e a exportação CSV passam a representar a agenda completa,
+  incluindo reservas e eventos sem material associado.
+- Ampliado o teste integrado da Fase 9 com um evento persistente sem reservas e
+  adicionado o 27.º teste estrutural para a integração do calendário.
+- A Fase 9 fica concluída sem alterações de esquema ou nova migração.
+- Validação: `node tests/phase9-api.integration.mjs`,
+  `node --test tests/rendered-html.test.mjs` (27 testes),
+  `tsc --noEmit --incremental false`,
+  `eslint . --ignore-pattern dist --ignore-pattern .next`,
+  `vinext build` e `git diff --check`.
 
 ### 31 de Julho de 2026 — Fase 9, passo 5: ciclo agregado do evento
 

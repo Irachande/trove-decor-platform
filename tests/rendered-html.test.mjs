@@ -531,3 +531,20 @@ test("phase 9 step 5 enforces an aggregate event and reservation lifecycle", asy
   assert.match(api, /Cannot cancel without confirming the linked reservations/);
   assert.match(api, /NOT EXISTS \(SELECT 1 FROM event_tasks/);
 });
+
+test("phase 9 step 6 places events without bookings in the shared calendar", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /const standaloneEvents = events\.filter/);
+  assert.match(app, /representedEventIds/);
+  assert.match(app, /function EventCalendarInspector/);
+  assert.match(app, /Evento · sem material/);
+  assert.match(app, /Reservas e eventos/);
+  assert.match(app, /trove-agenda\.csv/);
+  assert.match(styles, /\.calendar-day > button\.standalone-event/);
+  assert.match(styles, /\.calendar-legend/);
+  assert.match(styles, /\.event-calendar-inspector/);
+});

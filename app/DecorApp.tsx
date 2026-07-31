@@ -1923,6 +1923,8 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
           {view === "calendar" && <Calendar
             language={language}
             t={t}
+            events={events}
+            clients={clients}
             reservations={reservations}
             openAdd={() => {
               if (canManageReservations) {
@@ -1932,6 +1934,7 @@ export default function DecorApp({ initialUser }: { initialUser: SessionUser }) 
               } else showToast(t("A sua função não permite criar reservas.", "Your role cannot create reservations."));
             }}
             openDirectory={() => setDirectoryOpen(true)}
+            openEvent={setManagedEvent}
             onEdit={editReservation}
             onTransition={transitionReservation}
           />}
@@ -2965,11 +2968,38 @@ function Events({ language, t, events, tasks, clients, reservations, canManage, 
   </>;
 }
 
-function Calendar({ language, t, reservations, openAdd, openDirectory, onEdit, onTransition }: { language: Language; t: Translator; reservations: Reservation[]; openAdd: () => void; openDirectory: () => void; onEdit: (reservation: Reservation) => void; onTransition: (reservation: Reservation, status: string) => void }) {
+function Calendar({ language, t, events, clients, reservations, openAdd, openDirectory, openEvent, onEdit, onTransition }: {
+  language: Language;
+  t: Translator;
+  events: EventRecord[];
+  clients: Client[];
+  reservations: Reservation[];
+  openAdd: () => void;
+  openDirectory: () => void;
+  openEvent: (event: EventRecord) => void;
+  onEdit: (reservation: Reservation) => void;
+  onTransition: (reservation: Reservation, status: string) => void;
+}) {
   const [calendarView, setCalendarView] = useState<"month" | "week">("month");
   const [cursor, setCursor] = useState(new Date());
-  const [selectedReservationId, setSelectedReservationId] = useState<number | null>(reservations[0]?.id || null);
-  const selectedReservation = reservations.find((reservation) => reservation.id === selectedReservationId) || reservations[0] || null;
+  const activeReservations = reservations.filter((reservation) => reservation.status !== "Cancelled");
+  const representedEventIds = new Set(activeReservations.map((reservation) => reservation.eventId).filter((id): id is number => Boolean(id)));
+  const standaloneEvents = events.filter((event) => !["Archived", "Cancelled"].includes(event.status) && !representedEventIds.has(event.id));
+  const [selection, setSelection] = useState("");
+  const selectionExists = selection.startsWith("reservation:")
+    ? activeReservations.some((reservation) => `reservation:${reservation.id}` === selection)
+    : standaloneEvents.some((event) => `event:${event.id}` === selection);
+  const effectiveSelection = selectionExists
+    ? selection
+    : activeReservations[0]
+      ? `reservation:${activeReservations[0].id}`
+      : standaloneEvents[0]
+        ? `event:${standaloneEvents[0].id}`
+        : "";
+  const selectedReservationId = effectiveSelection.startsWith("reservation:") ? Number(effectiveSelection.split(":")[1]) : null;
+  const selectedEventId = effectiveSelection.startsWith("event:") ? Number(effectiveSelection.split(":")[1]) : null;
+  const selectedReservation = activeReservations.find((reservation) => reservation.id === selectedReservationId) || null;
+  const selectedEvent = standaloneEvents.find((event) => event.id === selectedEventId) || null;
   const days = calendarView === "month" ? getMonthCells(cursor) : getWeekDays(cursor);
   const title = calendarView === "month"
     ? cursor.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { month: "long", year: "numeric" })
@@ -2980,7 +3010,36 @@ function Calendar({ language, t, reservations, openAdd, openDirectory, onEdit, o
     else next.setDate(next.getDate() + direction * 7);
     setCursor(next);
   };
-  const reservationsFor = (date: Date) => reservations.filter((reservation) => reservation.status !== "Cancelled" && dateKey(date) >= reservation.date && dateKey(date) <= reservation.endDate);
+  const reservationsFor = (date: Date) => activeReservations.filter((reservation) => dateKey(date) >= reservation.date && dateKey(date) <= reservation.endDate);
+  const eventsFor = (date: Date) => standaloneEvents.filter((event) => dateKey(date) >= event.startDate && dateKey(date) <= event.endDate);
+  const clientFor = (event: EventRecord) => clients.find((client) => client.id === event.clientId);
+  const scheduleRows = [
+    ...activeReservations.map((reservation) => ({
+      key: `reservation:${reservation.id}`,
+      kind: "reservation" as const,
+      name: reservation.eventName || reservation.item,
+      client: reservation.client,
+      detail: reservation.item,
+      startDate: reservation.date,
+      endDate: reservation.endDate,
+      color: reservation.color,
+      status: reservationStatusLabel(reservation.status, t),
+      reservation,
+    })),
+    ...standaloneEvents.map((event) => ({
+      key: `event:${event.id}`,
+      kind: "event" as const,
+      name: event.name,
+      client: clientFor(event)?.name || t("Cliente por definir", "Client not set"),
+      detail: t("Sem material associado", "No inventory linked"),
+      startDate: event.startDate,
+      endDate: event.endDate,
+      color: event.color || "#b75d3f",
+      status: eventStatusLabel(event.status, t),
+      reservation: undefined,
+      event,
+    })),
+  ].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.name.localeCompare(b.name));
   return (
     <>
       <PageHeading eyebrow={t("AGENDA PARTILHADA", "SHARED SCHEDULE")} title={t("Calendário", "Calendar")} detail={t("Veja eventos e reservas por semana ou mês — sem procurar item por item.", "See events and reservations by week or month—without browsing item by item.")} action={<div className="heading-actions"><button className="button-secondary" onClick={openDirectory}>◎ {t("Clientes e eventos", "Clients & events")}</button><button className="button-primary" onClick={openAdd}><span>＋</span>{t("Nova reserva", "New reservation")}</button></div>} />
@@ -2991,21 +3050,54 @@ function Calendar({ language, t, reservations, openAdd, openDirectory, onEdit, o
             {(language === "pt" ? ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"] : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]).map((day) => <div className="weekday" key={day}>{day}</div>)}
             {days.map((day) => {
               const dayReservations = reservationsFor(day);
+              const dayEvents = eventsFor(day);
+              const dayEntries = [
+                ...dayReservations.map((reservation) => ({ key: `reservation:${reservation.id}`, name: reservation.eventName || reservation.client, detail: reservation.item, color: reservation.color, kind: "reservation" as const, id: reservation.id })),
+                ...dayEvents.map((event) => ({ key: `event:${event.id}`, name: event.name, detail: t("Evento · sem material", "Event · no inventory"), color: event.color || "#b75d3f", kind: "event" as const, id: event.id })),
+              ];
               const muted = day.getMonth() !== cursor.getMonth();
-              return <div className={cls("calendar-day", muted && "muted", dateKey(day) === dateKey(new Date()) && "today")} key={dateKey(day)}><span>{day.getDate()}</span>{dayReservations.slice(0, 3).map((reservation) => <button key={reservation.id} onClick={() => setSelectedReservationId(reservation.id)} style={{ "--event": reservation.color } as React.CSSProperties}><b>{reservation.eventName || reservation.client}</b><small>{reservation.item}</small></button>)}{dayReservations.length > 3 && <em>+{dayReservations.length - 3}</em>}</div>;
+              return <div className={cls("calendar-day", muted && "muted", dateKey(day) === dateKey(new Date()) && "today")} key={dateKey(day)}><span>{day.getDate()}</span>{dayEntries.slice(0, 3).map((entry) => <button className={cls(entry.kind === "event" && "standalone-event")} key={entry.key} onClick={() => setSelection(entry.key)} style={{ "--event": entry.color } as React.CSSProperties}><b>{entry.name}</b><small>{entry.detail}</small></button>)}{dayEntries.length > 3 && <em>+{dayEntries.length - 3}</em>}</div>;
             })}
           </div> : <div className="week-calendar">
-            {days.map((day) => <div className={cls("week-day", dateKey(day) === dateKey(new Date()) && "today")} key={dateKey(day)}><header><span>{day.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { weekday: "short" })}</span><strong>{day.getDate()}</strong></header><div className="week-day-body">{reservationsFor(day).map((reservation) => <button key={reservation.id} style={{ "--event": reservation.color } as React.CSSProperties} onClick={() => setSelectedReservationId(reservation.id)}><small>09:30</small><strong>{reservation.eventName || reservation.client}</strong><span>{reservation.item}</span></button>)}{!reservationsFor(day).length && <span className="week-empty">—</span>}</div></div>)}
+            {days.map((day) => {
+              const dayReservations = reservationsFor(day);
+              const dayEvents = eventsFor(day);
+              return <div className={cls("week-day", dateKey(day) === dateKey(new Date()) && "today")} key={dateKey(day)}><header><span>{day.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { weekday: "short" })}</span><strong>{day.getDate()}</strong></header><div className="week-day-body">{dayReservations.map((reservation) => <button key={`reservation:${reservation.id}`} style={{ "--event": reservation.color } as React.CSSProperties} onClick={() => setSelection(`reservation:${reservation.id}`)}><small>{t("RESERVA", "BOOKING")} · {reservation.status === "CheckedOut" ? t("Em aluguer", "Checked out") : "09:30"}</small><strong>{reservation.eventName || reservation.client}</strong><span>{reservation.item}</span></button>)}{dayEvents.map((event) => <button className="standalone-event" key={`event:${event.id}`} style={{ "--event": event.color || "#b75d3f" } as React.CSSProperties} onClick={() => setSelection(`event:${event.id}`)}><small>{t("EVENTO", "EVENT")} · {event.setupTime || t("Sem horário", "No time")}</small><strong>{event.name}</strong><span>{t("Sem material associado", "No inventory linked")}</span></button>)}{!dayReservations.length && !dayEvents.length && <span className="week-empty">—</span>}</div></div>;
+            })}
           </div>}
         </article>
-        <ReservationInspector language={language} t={t} reservation={selectedReservation} onEdit={onEdit} onTransition={onTransition} />
+        {selectedEvent
+          ? <EventCalendarInspector language={language} t={t} event={selectedEvent} client={clientFor(selectedEvent)} openEvent={openEvent} />
+          : <ReservationInspector language={language} t={t} reservation={selectedReservation} onEdit={onEdit} onTransition={onTransition} />}
       </section>
-      <section className="card reservation-list">
-        <div className="card-heading"><div><span className="eyebrow">{t("RESERVAS", "RESERVATIONS")}</span><h2>{t("Próximos eventos", "Upcoming events")}</h2></div><button onClick={() => downloadCsv("trove-reservas.csv", [["event", "client", "item", "start", "end", "contact", "notes"], ...reservations.map((r) => [r.eventName, r.client, r.item, r.date, r.endDate, r.contact, r.notes])])}>{t("Exportar agenda", "Export schedule")} ↓</button></div>
-        {reservations.map((reservation) => <button className="reservation-row" key={reservation.id} onClick={() => setSelectedReservationId(reservation.id)}><i style={{ background: reservation.color }} /><span><strong>{reservation.eventName || reservation.item}</strong><small>{reservation.item} · {reservation.client}</small></span><span><strong>{new Date(`${reservation.date}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${reservation.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</strong><small>{formatMoney(reservation.total || 0, reservation.currency || "MZN", language)}</small></span><span className={cls("status-pill", reservation.status === "Cancelled" ? "cancelled" : reservation.status === "Returned" ? "return" : reservation.status === "CheckedOut" ? "delivery" : "pickup")}>{reservationStatusLabel(reservation.status, t)}</span><span>›</span></button>)}
+      <section className="card reservation-list calendar-agenda-list">
+        <div className="card-heading"><div><span className="eyebrow">{t("AGENDA COMPLETA", "FULL SCHEDULE")}</span><h2>{t("Reservas e eventos", "Bookings and events")}</h2></div><button onClick={() => downloadCsv("trove-agenda.csv", [["type", "event", "client", "item", "start", "end", "status"], ...scheduleRows.map((row) => [row.kind, row.name, row.client, row.detail, row.startDate, row.endDate, row.status])])}>{t("Exportar agenda", "Export schedule")} ↓</button></div>
+        <div className="calendar-legend"><span><i className="booking" />{t("Reserva com material", "Booking with inventory")}</span><span><i className="event" />{t("Evento sem material", "Event without inventory")}</span></div>
+        {scheduleRows.map((row) => <button className={cls("reservation-row", row.kind === "event" && "standalone-event-row")} key={row.key} onClick={() => setSelection(row.key)}><i style={{ background: row.color }} /><span><strong>{row.name}</strong><small>{row.detail} · {row.client}</small></span><span><strong>{new Date(`${row.startDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${row.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</strong><small>{row.kind === "event" ? t("Ficha operacional", "Operational record") : formatMoney(row.reservation?.total || 0, row.reservation?.currency || "MZN", language)}</small></span><span className={cls("status-pill", row.kind === "event" ? "event-only" : row.reservation?.status === "Returned" ? "return" : row.reservation?.status === "CheckedOut" ? "delivery" : "pickup")}>{row.status}</span><span>›</span></button>)}
+        {!scheduleRows.length && <div className="calendar-agenda-empty">{t("Ainda não existem reservas ou eventos para apresentar.", "There are no bookings or events to show yet.")}</div>}
       </section>
     </>
   );
+}
+
+function EventCalendarInspector({ language, t, event, client, openEvent }: { language: Language; t: Translator; event: EventRecord; client?: Client; openEvent: (event: EventRecord) => void }) {
+  const start = new Date(`${event.startDate}T00:00:00`);
+  const end = new Date(`${event.endDate}T00:00:00`);
+  return <aside className="card agenda-card reservation-inspector event-calendar-inspector">
+    <span className="eyebrow">{t("DETALHES DO EVENTO", "EVENT DETAILS")}</span>
+    <h2>{event.name}</h2>
+    <span className={cls("event-status", event.status.toLowerCase())}>{eventStatusLabel(event.status, t)}</span>
+    <div className="event-without-booking">{t("Evento sem reserva de material", "Event without an inventory booking")}</div>
+    <dl>
+      <div><dt>{t("Cliente", "Client")}</dt><dd>{client?.name || t("Por definir", "Not set")}</dd></div>
+      <div><dt>{t("Tipo", "Type")}</dt><dd>{event.eventType || t("Outro", "Other")}</dd></div>
+      <div><dt>{t("Datas", "Dates")}</dt><dd>{start.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {end.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</dd></div>
+      <div><dt>{t("Operação", "Operations")}</dt><dd>{event.setupTime ? `${t("Montagem", "Setup")} ${event.setupTime}` : t("Montagem por definir", "Setup not set")} · {event.pickupTime ? `${t("Recolha", "Pickup")} ${event.pickupTime}` : t("Recolha por definir", "Pickup not set")}</dd></div>
+      <div><dt>{t("Local", "Venue")}</dt><dd>{event.venue || event.address || t("Por definir", "Not set")}</dd></div>
+      <div><dt>{t("Contacto", "Contact")}</dt><dd>{event.onSiteContact || client?.phone || "—"}</dd></div>
+    </dl>
+    <div className="inspector-actions"><button className="button-primary" onClick={() => openEvent(event)}>{t("Abrir ficha do evento", "Open event record")}</button></div>
+  </aside>;
 }
 
 function Network({
