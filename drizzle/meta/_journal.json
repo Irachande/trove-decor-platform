@@ -15,6 +15,83 @@
       "when": 1785150983158,
       "tag": "0001_safe_bruce_banner",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1785230006163,
+      "tag": "0002_free_caretaker",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1785321431439,
+      "tag": "0003_sleepy_wolfpack",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1785347550475,
+      "tag": "0004_numerous_slyde",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1785348685033,
+      "tag": "0005_reflective_exiles",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1785399798803,
+      "tag": "0006_confused_snowbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1785411184953,
+      "tag": "0007_peaceful_moon_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1785415763766,
+      "tag": "0008_lovely_fabian_cortez",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1785425628694,
+      "tag": "0009_cheerful_bedlam",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1785449366798,
+      "tag": "0010_square_marauders",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1785450897745,
+      "tag": "0011_long_pandemic",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1785489726346,
+      "tag": "0012_chunky_shinko_yamashiro",
+      "breakpoints": true
     }
   ]
 }

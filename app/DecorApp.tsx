@@ -1,11 +1,152 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { loadOfflineSnapshot, saveOfflineSnapshot } from "./offline-cache";
 
-type View = "home" | "storage" | "calendar" | "network" | "profile" | "plans";
+type View = "home" | "storage" | "events" | "calendar" | "network" | "profile" | "plans";
 type ItemStatus = "Available" | "Reserved" | "Rented";
 type Language = "pt" | "en";
 type Translator = (pt: string, en: string) => string;
+type WorkspaceRole = "owner" | "manager" | "inventory" | "reservations" | "viewer";
+
+type SessionUser = {
+  displayName: string;
+  email: string;
+  fullName: string | null;
+};
+
+type Workspace = {
+  id: number;
+  name: string;
+  handle: string;
+  role: WorkspaceRole;
+  plan: "Basic" | "Network";
+  subscriptionStatus?: string;
+  currentPeriodEnd?: string;
+  graceUntil?: string | null;
+  cancelAtPeriodEnd?: boolean;
+};
+
+type Member = {
+  id: number;
+  email: string;
+  displayName?: string;
+  role: string;
+  status: string;
+  createdAt?: string;
+  expiresAt?: string;
+};
+type NotificationRecord = { id: number; type: string; titlePt: string; titleEn: string; bodyPt: string; bodyEn: string; link: string; readAt?: string; createdAt: string };
+type AuditEntry = { id: number; action: string; entityType: string; entityId: string; summary: string; createdAt: string; actorName?: string; actorEmail?: string };
+type Invitation = { id: number; businessId: number; businessName: string; role: string; createdAt: string; expiresAt: string };
+type SubscriptionRecord = { id: number; plan: "Basic" | "Network"; pendingPlan?: "Basic" | "Network"; status: string; amount: number; currency: string; currentPeriodStart: string; currentPeriodEnd: string; graceUntil?: string; cancelAtPeriodEnd: boolean; provider: string; createdAt: string; updatedAt: string };
+type PaymentRecord = { id: number; provider: string; providerPaymentId?: string; reference: string; kind: string; plan: "Basic" | "Network"; amount: number; currency: string; status: string; checkoutUrl?: string; method?: string; paidAt?: string; failureReason?: string; receiptNumber?: string; createdAt: string; updatedAt: string };
+type BillingInfo = { provider: string; configured: boolean; catalog: Record<"Basic" | "Network", { amount: number; currency: string; collaboratorLimit: number | null; network: boolean }> };
+type CommunicationInfo = { provider: string; configured: boolean };
+type PublicEnquiry = { id: number; name: string; email: string; phone: string; eventDate: string; message: string; status: "New" | "Contacted" | "Closed"; createdAt: string };
+type EmailDelivery = { id: number; recipient: string; template: string; provider: string; providerMessageId?: string; status: string; error: string; createdAt: string; updatedAt: string };
+type NetworkListing = {
+  id: number;
+  ownerBusinessId: number;
+  itemId: number;
+  name: string;
+  category: string;
+  description: string;
+  tone: string;
+  symbol: string;
+  dailyPrice: number;
+  deposit: number;
+  currency: string;
+  minimumQuantity: number;
+  maximumQuantity: number;
+  location: string;
+  latitude?: string;
+  longitude?: string;
+  deliveryOptions: string;
+  terms: string;
+  ownerName: string;
+  ownerHandle: string;
+  ownerAvatarUrl?: string;
+  hasPhoto: boolean;
+  imageUrl?: string;
+  rating: number;
+  ratingCount: number;
+  available: number;
+  distanceKm: number | null;
+};
+type OwnNetworkListing = {
+  id: number;
+  itemId: number;
+  name: string;
+  category: string;
+  quantity: number;
+  dailyPrice: number;
+  deposit: number;
+  currency: string;
+  minimumQuantity: number;
+  maximumQuantity: number;
+  location: string;
+  latitude?: string;
+  longitude?: string;
+  deliveryOptions: string;
+  terms: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+type NetworkRequest = {
+  id: number;
+  listingId: number;
+  ownerBusinessId: number;
+  requesterBusinessId: number;
+  quantity: number;
+  startDate: string;
+  endDate: string;
+  status: string;
+  unitPrice: number;
+  deposit: number;
+  total: number;
+  currency: string;
+  requesterNote: string;
+  ownerNote: string;
+  deliveryMethod: string;
+  proposedByBusinessId?: number;
+  paymentStatus: string;
+  depositStatus: string;
+  checkedOutAt?: string;
+  returnedAt?: string;
+  cancelledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  itemId: number;
+  itemName: string;
+  ownerName: string;
+  requesterName: string;
+  disputeId?: number;
+  disputeOpenedByBusinessId?: number;
+  disputeReason?: string;
+  disputeStatus?: string;
+  proposedResolution?: string;
+  resolutionProposedByBusinessId?: number;
+  reviewId?: number;
+  myRating?: number;
+  myReview?: string;
+};
+type NetworkReview = { id: number; rentalRequestId: number; reviewerBusinessId: number; reviewedBusinessId: number; reviewerName: string; rating: number; comment: string; createdAt: string };
+type NetworkData = { listings: NetworkListing[]; ownListings: OwnNetworkListing[]; requests: NetworkRequest[]; reviews: NetworkReview[] };
+type InstallPrompt = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed" }>;
+};
+type OperationsStatus = {
+  status: string;
+  clientErrors24h: number;
+  latestClientError: string | null;
+  pushDevices: number;
+  pushConfigured: boolean;
+  feedbackEntries: number;
+  checkedAt: string;
+};
 
 type Item = {
   id: number;
@@ -21,6 +162,126 @@ type Item = {
   photoUrl?: string;
   storageLocation: string;
   condition: string;
+  description: string;
+  sku: string;
+  replacementValue: number;
+  minStock: number;
+};
+
+type ItemPhoto = { id: number; itemId: number; url: string; sortOrder: number };
+type StockMovement = { id: number; itemId: number; type: string; quantityDelta: number; note: string; createdAt: string };
+type MaintenanceRecord = { id: number; itemId: number; type: string; status: string; notes: string; cost: number; scheduledDate: string; completedAt?: string; createdAt: string };
+type KitEntry = { id: number; kitId: number; itemId: number; quantity: number };
+type Kit = { id: number; name: string; description: string; price: number; currency: string; active: boolean; createdAt: string; items: KitEntry[] };
+type ImportReport = { title: string; detail: string; errors: string[] };
+type Client = { id: number; name: string; email: string; phone: string; notes: string; createdAt: string };
+type EventRecord = {
+  id: number;
+  clientId: number;
+  ownerUserId?: number;
+  name: string;
+  eventType: string;
+  venue: string;
+  address: string;
+  startDate: string;
+  endDate: string;
+  setupTime: string;
+  pickupTime: string;
+  guestCount: number;
+  budget: number;
+  currency: string;
+  onSiteContact: string;
+  color: string;
+  notes: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt?: string;
+};
+type EventTask = {
+  id: number;
+  eventId: number;
+  assigneeUserId?: number;
+  title: string;
+  description: string;
+  category: string;
+  priority: string;
+  status: "Pending" | "Completed";
+  dueDate: string;
+  dueTime: string;
+  sortOrder: number;
+  completedAt?: string;
+  completedByUserId?: number;
+  createdByUserId: number;
+  createdAt: string;
+  updatedAt: string;
+};
+type Supplier = {
+  id: number;
+  name: string;
+  serviceType: string;
+  contactName: string;
+  email: string;
+  phone: string;
+  notes: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+type EventExpense = {
+  id: number;
+  eventId: number;
+  supplierId?: number;
+  category: string;
+  description: string;
+  amount: number;
+  currency: string;
+  paymentStatus: "Planned" | "Pending" | "Paid";
+  incurredDate: string;
+  notes: string;
+  createdByUserId: number;
+  createdAt: string;
+  updatedAt: string;
+};
+type EventDocument = {
+  id: string;
+  eventId: number;
+  name: string;
+  contentType: string;
+  size: number;
+  category: string;
+  notes: string;
+  uploadedByUserId: number;
+  createdAt: string;
+};
+type ReservationItem = { id: number; reservationId: number; itemId: number; itemName: string; quantity: number; unitPrice: number; currency: string };
+type WorkspaceData = {
+  items?: Item[];
+  reservations?: Reservation[];
+  categories?: { name: string }[];
+  profile?: Partial<Profile>;
+  workspace?: Workspace;
+  members?: Member[];
+  photos?: ItemPhoto[];
+  movements?: StockMovement[];
+  maintenance?: MaintenanceRecord[];
+  kits?: Kit[];
+  clients?: Client[];
+  events?: EventRecord[];
+  eventTasks?: EventTask[];
+  suppliers?: Supplier[];
+  eventExpenses?: EventExpense[];
+  eventDocuments?: EventDocument[];
+  notifications?: NotificationRecord[];
+  auditLogs?: AuditEntry[];
+  invitations?: Invitation[];
+  workspaces?: Workspace[];
+  subscription?: SubscriptionRecord | null;
+  payments?: PaymentRecord[];
+  billing?: BillingInfo;
+  publicEnquiries?: PublicEnquiry[];
+  emailDeliveries?: EmailDelivery[];
+  communication?: CommunicationInfo;
 };
 
 type Reservation = {
@@ -35,6 +296,21 @@ type Reservation = {
   notes: string;
   quantity: number;
   status: string;
+  clientId?: number;
+  eventId?: number;
+  subtotal: number;
+  discount: number;
+  deliveryFee: number;
+  total: number;
+  deposit: number;
+  currency: string;
+  logistics: string;
+  paymentStatus: string;
+  checkedOutAt?: string;
+  returnedAt?: string;
+  cancelledAt?: string;
+  createdAt?: string;
+  items: ReservationItem[];
 };
 
 type Profile = {
@@ -46,41 +322,27 @@ type Profile = {
   email: string;
   color: string;
   avatarUrl?: string;
+  website: string;
+  instagram: string;
+  services: string;
+  isPublic: boolean;
+  acceptsEnquiries: boolean;
 };
-
-const seedItems: Item[] = [
-  { id: 1, name: "Cadeira Bentwood", category: "Mobiliário", quantity: 48, available: 36, status: "Reserved", tone: "sand", symbol: "CB", price: 650, currency: "MZN", storageLocation: "Corredor A · Prateleira 2", condition: "Excelente", photoUrl: "https://images.unsplash.com/photo-1503602642458-232111445657?auto=format&fit=crop&w=900&q=80" },
-  { id: 2, name: "Jarra âmbar pequena", category: "Mesa", quantity: 72, available: 72, status: "Available", tone: "amber", symbol: "JA", price: 180, currency: "MZN", storageLocation: "Corredor C · Caixa 14", condition: "Bom", photoUrl: "https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&w=900&q=80" },
-  { id: 3, name: "Guardanapo de linho · Sálvia", category: "Têxteis", quantity: 120, available: 84, status: "Rented", tone: "sage", symbol: "GL", price: 75, currency: "MZN", storageLocation: "Corredor B · Caixa 6", condition: "Excelente", photoUrl: "https://images.unsplash.com/photo-1493663284031-b7e3aefcae8e?auto=format&fit=crop&w=900&q=80" },
-  { id: 4, name: "Lanterna de rattan · Grande", category: "Iluminação", quantity: 18, available: 14, status: "Reserved", tone: "clay", symbol: "LR", price: 900, currency: "MZN", storageLocation: "Corredor D · Chão 3", condition: "Bom", photoUrl: "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=80" },
-  { id: 5, name: "Plinto canelado · Marfim", category: "Estruturas", quantity: 8, available: 8, status: "Available", tone: "ivory", symbol: "PC", price: 2500, currency: "MZN", storageLocation: "Zona E · Posição 5", condition: "Excelente", photoUrl: "https://images.unsplash.com/photo-1615873968403-89e068629265?auto=format&fit=crop&w=900&q=80" },
-  { id: 6, name: "Castiçal de pedra", category: "Mesa", quantity: 34, available: 28, status: "Available", tone: "stone", symbol: "CP", price: 220, currency: "MZN", storageLocation: "Corredor C · Caixa 9", condition: "Requer inspeção", photoUrl: "https://images.unsplash.com/photo-1602874801006-e26b7af32e9f?auto=format&fit=crop&w=900&q=80" },
-];
-
-const seedReservations: Reservation[] = [
-  { id: 1, item: "Cadeiras Bentwood × 12", client: "Maya & Tom", eventName: "Casamento na Casa Flora", contact: "+258 84 221 1002", notes: "Levantamento pela equipa do cliente às 09:30.", date: "2026-07-28", endDate: "2026-07-29", color: "#bb6242", quantity: 12, status: "Confirmed" },
-  { id: 2, item: "Lanternas de rattan × 4", client: "Luma Events", eventName: "Jantar corporativo", contact: "eventos@luma.co.mz", notes: "Entrega no Hotel Polana, entrada de serviço.", date: "2026-07-30", endDate: "2026-07-31", color: "#778567", quantity: 4, status: "Confirmed" },
-  { id: 3, item: "Guardanapos de linho × 36", client: "Sofia & Liam", eventName: "Celebração no Glasshouse", contact: "+258 86 446 8821", notes: "Confirmar contagem no regresso.", date: "2026-08-01", endDate: "2026-08-02", color: "#c3974d", quantity: 36, status: "Confirmed" },
-];
 
 const seedProfile: Profile = {
-  businessName: "Terra & Table",
-  handle: "terraandtable",
-  bio: "Warm, considered event styling and soulful tablescapes for weddings and intimate gatherings.",
-  location: "Maputo, Mozambique",
-  phone: "+258 84 555 0192",
-  email: "hello@terraandtable.co",
+  businessName: "Trove Studio",
+  handle: "trove-studio",
+  bio: "",
+  location: "Maputo, Moçambique",
+  phone: "",
+  email: "",
   color: "#b75d3f",
+  website: "",
+  instagram: "",
+  services: "",
+  isPublic: true,
+  acceptsEnquiries: true,
 };
-
-const networkItems = [
-  { name: "Cadeira Ghost transparente", owner: "Aster Events", distance: "2,4 km", available: 42, price: "450 MZN / dia", symbol: "CG", tone: "mist", rating: "4.9" },
-  { name: "Candeeiro de mesa em latão", owner: "Gather & Glow", distance: "4,8 km", available: 12, price: "1 050 MZN / dia", symbol: "CL", tone: "gold", rating: "4.8" },
-  { name: "Tenda sailcloth branca", owner: "Marée Rentals", distance: "8,1 km", available: 2, price: "15 500 MZN / dia", symbol: "TS", tone: "ivory", rating: "5.0" },
-  { name: "Conjunto lounge em cana", owner: "Olive House", distance: "11 km", available: 3, price: "5 500 MZN / dia", symbol: "LC", tone: "sage", rating: "4.7" },
-];
-
-const seedCategories = ["Mobiliário", "Mesa", "Têxteis", "Iluminação", "Estruturas"];
 
 function formatMoney(value: number, currency = "MZN", language: Language = "pt") {
   return new Intl.NumberFormat(language === "pt" ? "pt-MZ" : "en-MZ", {
@@ -90,10 +352,17 @@ function formatMoney(value: number, currency = "MZN", language: Language = "pt")
   }).format(value);
 }
 
+function offsetDate(days: number) {
+  const value = new Date();
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
 function navItems(t: Translator): { id: View; label: string; icon: string }[] {
   return [
     { id: "home", label: t("Visão geral", "Overview"), icon: "⌂" },
     { id: "storage", label: t("Inventário", "Inventory"), icon: "▦" },
+    { id: "events", label: t("Eventos", "Events"), icon: "◫" },
     { id: "calendar", label: t("Calendário", "Calendar"), icon: "□" },
     { id: "network", label: t("Rede local", "Nearby network"), icon: "◎" },
     { id: "profile", label: t("Perfil público", "Public profile"), icon: "◇" },
@@ -104,13 +373,93 @@ function cls(...names: (string | false | undefined)[]) {
   return names.filter(Boolean).join(" ");
 }
 
-export default function DecorApp() {
-  const [view, setView] = useState<View>("home");
-  const [language, setLanguage] = useState<Language>("pt");
-  const [items, setItems] = useState<Item[]>(seedItems);
-  const [reservations, setReservations] = useState<Reservation[]>(seedReservations);
-  const [categories, setCategories] = useState<string[]>(seedCategories);
-  const [profile, setProfile] = useState<Profile>(seedProfile);
+function initials(value: string) {
+  return value.split(/\s+|@/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase();
+}
+
+function roleLabel(role: string, t: Translator) {
+  if (role === "owner") return t("Proprietária", "Owner");
+  if (role === "manager") return t("Gestor", "Manager");
+  if (role === "inventory") return t("Inventário", "Inventory");
+  if (role === "reservations") return t("Reservas", "Reservations");
+  return t("Consulta", "Viewer");
+}
+
+function reservationStatusLabel(status: string, t: Translator) {
+  if (status === "CheckedOut") return t("Em aluguer", "Checked out");
+  if (status === "Returned") return t("Devolvida", "Returned");
+  if (status === "Cancelled") return t("Cancelada", "Cancelled");
+  return t("Confirmada", "Confirmed");
+}
+
+function eventStatusLabel(status: string, t: Translator) {
+  const labels: Record<string, [string, string]> = {
+    Lead: ["Lead", "Lead"],
+    Planned: ["Em planeamento", "Planning"],
+    Confirmed: ["Confirmado", "Confirmed"],
+    Preparing: ["Em preparação", "Preparing"],
+    InProgress: ["Em execução", "In progress"],
+    Completed: ["Concluído", "Completed"],
+    Cancelled: ["Cancelado", "Cancelled"],
+    Archived: ["Arquivado", "Archived"],
+  };
+  const label = labels[status] || [status, status];
+  return t(label[0], label[1]);
+}
+
+function networkStatusLabel(status: string, t: Translator) {
+  const labels: Record<string, [string, string]> = {
+    Pending: ["Pendente", "Pending"],
+    Countered: ["Contraproposta", "Countered"],
+    Accepted: ["Aceite", "Accepted"],
+    Rejected: ["Rejeitado", "Rejected"],
+    Cancelled: ["Cancelado", "Cancelled"],
+    CheckedOut: ["Em aluguer", "Checked out"],
+    Returned: ["Devolvido", "Returned"],
+    Completed: ["Concluído", "Completed"],
+    Disputed: ["Em disputa", "Disputed"],
+  };
+  const label = labels[status] || [status, status];
+  return t(label[0], label[1]);
+}
+
+export default function DecorApp({ initialUser }: { initialUser: SessionUser }) {
+  const [view, setView] = useState<View>(() => {
+    if (typeof window === "undefined") return "home";
+    const requested = new URLSearchParams(window.location.search).get("view");
+    return ["storage", "events", "calendar", "network", "profile"].includes(requested || "") ? requested as View : "home";
+  });
+  const [language, setLanguage] = useState<Language>(() => {
+    if (typeof window === "undefined") return "pt";
+    const saved = window.localStorage.getItem("trove-language");
+    return saved === "en" ? "en" : "pt";
+  });
+  const [items, setItems] = useState<Item[]>([]);
+  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [profile, setProfile] = useState<Profile>({ ...seedProfile, email: initialUser.email });
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [photos, setPhotos] = useState<ItemPhoto[]>([]);
+  const [movements, setMovements] = useState<StockMovement[]>([]);
+  const [maintenance, setMaintenance] = useState<MaintenanceRecord[]>([]);
+  const [kits, setKits] = useState<Kit[]>([]);
+  const [clients, setClients] = useState<Client[]>([]);
+  const [events, setEvents] = useState<EventRecord[]>([]);
+  const [eventTasks, setEventTasks] = useState<EventTask[]>([]);
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [eventExpenses, setEventExpenses] = useState<EventExpense[]>([]);
+  const [eventDocuments, setEventDocuments] = useState<EventDocument[]>([]);
+  const [notifications, setNotifications] = useState<NotificationRecord[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditEntry[]>([]);
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [subscription, setSubscription] = useState<SubscriptionRecord | null>(null);
+  const [payments, setPayments] = useState<PaymentRecord[]>([]);
+  const [billing, setBilling] = useState<BillingInfo | null>(null);
+  const [publicEnquiries, setPublicEnquiries] = useState<PublicEnquiry[]>([]);
+  const [emailDeliveries, setEmailDeliveries] = useState<EmailDelivery[]>([]);
+  const [communication, setCommunication] = useState<CommunicationInfo | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("All items");
   const [categoryFilter, setCategoryFilter] = useState("All");
@@ -118,35 +467,259 @@ export default function DecorApp() {
   const [addOpen, setAddOpen] = useState(false);
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [teamOpen, setTeamOpen] = useState(false);
+  const [notificationOpen, setNotificationOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const [enquiriesOpen, setEnquiriesOpen] = useState(false);
+  const [operationsStatus, setOperationsStatus] = useState<OperationsStatus | null>(null);
+  const [installPrompt, setInstallPrompt] = useState<InstallPrompt | null>(null);
+  const [isOnline, setIsOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
+  const [pushState, setPushState] = useState<"idle" | "active" | "unsupported" | "unconfigured">("idle");
+  const [selectedReceipt, setSelectedReceipt] = useState<PaymentRecord | null>(null);
   const [reserveOpen, setReserveOpen] = useState(false);
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
+  const [managedReservation, setManagedReservation] = useState<Reservation | null>(null);
+  const [managedEvent, setManagedEvent] = useState<EventRecord | null>(null);
+  const [directoryOpen, setDirectoryOpen] = useState(false);
+  const [managedItem, setManagedItem] = useState<Item | null>(null);
+  const [kitsOpen, setKitsOpen] = useState(false);
+  const [importReport, setImportReport] = useState<ImportReport | null>(null);
   const [networkQuery, setNetworkQuery] = useState("");
-  const [requested, setRequested] = useState<string[]>([]);
+  const [networkListings, setNetworkListings] = useState<NetworkListing[]>([]);
+  const [ownNetworkListings, setOwnNetworkListings] = useState<OwnNetworkListing[]>([]);
+  const [networkRequests, setNetworkRequests] = useState<NetworkRequest[]>([]);
+  const [networkReviews, setNetworkReviews] = useState<NetworkReview[]>([]);
+  const [networkTab, setNetworkTab] = useState<"explore" | "listings" | "requests">("explore");
+  const [networkStart, setNetworkStart] = useState(() => offsetDate(1));
+  const [networkEnd, setNetworkEnd] = useState(() => offsetDate(3));
+  const [networkQuantity, setNetworkQuantity] = useState(1);
+  const [networkMaxPrice, setNetworkMaxPrice] = useState(0);
+  const [networkDistance, setNetworkDistance] = useState(50);
+  const [networkCoordinates, setNetworkCoordinates] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [networkLoading, setNetworkLoading] = useState(false);
+  const [networkReloadToken, setNetworkReloadToken] = useState(0);
+  const [requestedListing, setRequestedListing] = useState<NetworkListing | null>(null);
+  const [managedNetworkListing, setManagedNetworkListing] = useState<OwnNetworkListing | null | undefined>(undefined);
+  const [managedNetworkRequest, setManagedNetworkRequest] = useState<NetworkRequest | null>(null);
   const [toast, setToast] = useState("");
   const [saving, setSaving] = useState(false);
-  const [plan, setPlan] = useState<"Basic" | "Network">("Network");
+  const [plan, setPlan] = useState<"Basic" | "Network">("Basic");
+  const [reloadToken, setReloadToken] = useState(0);
+  const [activeBusinessId, setActiveBusinessId] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    const saved = Number(window.localStorage.getItem("trove-business-id"));
+    return Number.isSafeInteger(saved) && saved > 0 ? saved : null;
+  });
   const importRef = useRef<HTMLInputElement>(null);
   const t: Translator = (pt, en) => language === "pt" ? pt : en;
   const navigation = navItems(t);
+  const role = workspace?.role || "viewer";
+  const canManageInventory = ["owner", "manager", "inventory"].includes(role);
+  const canManageReservations = ["owner", "manager", "reservations"].includes(role);
+  const canManageTeam = ["owner", "manager"].includes(role);
+  const canManageProfile = ["owner", "manager"].includes(role);
+  const canManageBilling = role === "owner";
+  const networkEnabled = plan === "Network" && !["PastDue", "Cancelled"].includes(subscription?.status || "");
+  const activeMembers = members.filter((member) => member.status === "Active");
+  const unreadCount = notifications.filter((entry) => !entry.readAt).length;
 
   useEffect(() => {
-    fetch("/api/data")
+    fetch("/api/data", {
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+    })
       .then((response) => response.ok ? response.json() : Promise.reject())
-      .then((data) => {
-        if (data.items?.length) setItems(data.items);
-        if (data.reservations?.length) setReservations(data.reservations);
-        if (data.categories?.length) setCategories(data.categories.map((entry: { name: string }) => entry.name));
+      .then((raw) => {
+        const data = raw as WorkspaceData;
+        if (Array.isArray(data.items)) setItems(data.items);
+        if (Array.isArray(data.reservations)) setReservations(data.reservations);
+        if (Array.isArray(data.categories)) setCategories(data.categories.map((entry: { name: string }) => entry.name));
         if (data.profile) setProfile({ ...seedProfile, ...data.profile });
+        if (data.workspace) {
+          setWorkspace(data.workspace);
+          setPlan(data.workspace.plan);
+          setActiveBusinessId(data.workspace.id);
+          window.localStorage.setItem("trove-business-id", String(data.workspace.id));
+        }
+        if (Array.isArray(data.members)) setMembers(data.members);
+        if (Array.isArray(data.photos)) setPhotos(data.photos);
+        if (Array.isArray(data.movements)) setMovements(data.movements);
+        if (Array.isArray(data.maintenance)) setMaintenance(data.maintenance);
+        if (Array.isArray(data.kits)) setKits(data.kits);
+        if (Array.isArray(data.clients)) setClients(data.clients);
+        if (Array.isArray(data.events)) setEvents(data.events);
+        if (Array.isArray(data.eventTasks)) setEventTasks(data.eventTasks);
+        if (Array.isArray(data.suppliers)) setSuppliers(data.suppliers);
+        if (Array.isArray(data.eventExpenses)) setEventExpenses(data.eventExpenses);
+        if (Array.isArray(data.eventDocuments)) setEventDocuments(data.eventDocuments);
+        if (Array.isArray(data.notifications)) setNotifications(data.notifications);
+        if (Array.isArray(data.auditLogs)) setAuditLogs(data.auditLogs);
+        if (Array.isArray(data.invitations)) setInvitations(data.invitations);
+        if (Array.isArray(data.workspaces)) setWorkspaces(data.workspaces);
+        if (data.subscription !== undefined) setSubscription(data.subscription || null);
+        if (Array.isArray(data.payments)) setPayments(data.payments);
+        if (data.billing) setBilling(data.billing);
+        if (Array.isArray(data.publicEnquiries)) setPublicEnquiries(data.publicEnquiries);
+        if (Array.isArray(data.emailDeliveries)) setEmailDeliveries(data.emailDeliveries);
+        if (data.communication) setCommunication(data.communication);
+        if (data.workspace) {
+          saveOfflineSnapshot({
+            businessId: data.workspace.id,
+            businessName: data.workspace.name,
+            itemCount: data.items?.length || 0,
+            upcomingReservations: (data.reservations || []).filter(
+              (reservation) => reservation.endDate >= new Date().toISOString().slice(0, 10) && reservation.status !== "Cancelled",
+            ).length,
+            data,
+          }).catch(() => undefined);
+        }
       })
-      .catch(() => {
-        // The seeded demo remains fully usable if local database bindings are unavailable.
+      .catch(async () => {
+        const snapshot = await loadOfflineSnapshot().catch(() => undefined);
+        const cached = snapshot?.data as WorkspaceData | undefined;
+        if (cached?.workspace) {
+          if (Array.isArray(cached.items)) setItems(cached.items);
+          if (Array.isArray(cached.reservations)) setReservations(cached.reservations);
+          if (Array.isArray(cached.categories)) setCategories(cached.categories.map((entry) => entry.name));
+          if (cached.profile) setProfile({ ...seedProfile, ...cached.profile });
+          setWorkspace(cached.workspace);
+          setToast(language === "pt"
+            ? "A mostrar a última cópia guardada. Alterações indisponíveis sem ligação."
+            : "Showing the latest saved copy. Changes are unavailable offline.");
+          return;
+        }
+        setToast(language === "pt"
+          ? "Não foi possível carregar o espaço da empresa."
+          : "Unable to load the business workspace.");
       });
+  }, [reloadToken, activeBusinessId, language]);
+
+  useEffect(() => {
+    const online = () => {
+      setIsOnline(true);
+      setReloadToken((value) => value + 1);
+    };
+    const offline = () => setIsOnline(false);
+    const beforeInstall = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as InstallPrompt);
+    };
+    const installed = () => setInstallPrompt(null);
+    window.addEventListener("online", online);
+    window.addEventListener("offline", offline);
+    window.addEventListener("beforeinstallprompt", beforeInstall);
+    window.addEventListener("appinstalled", installed);
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    }
+    return () => {
+      window.removeEventListener("online", online);
+      window.removeEventListener("offline", offline);
+      window.removeEventListener("beforeinstallprompt", beforeInstall);
+      window.removeEventListener("appinstalled", installed);
+    };
   }, []);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("trove-language");
-    if (saved === "pt" || saved === "en") setLanguage(saved);
-  }, []);
+    const report = (source: string, message: string) => {
+      fetch("/api/operations", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({
+          action: "clientError",
+          source,
+          message,
+          route: window.location.pathname,
+        }),
+      }).catch(() => undefined);
+    };
+    const onError = (event: ErrorEvent) => report("window-error", event.message || "Unknown client error");
+    const onRejection = (event: PromiseRejectionEvent) => report(
+      "unhandled-rejection",
+      event.reason instanceof Error ? event.reason.message : String(event.reason || "Unhandled promise rejection"),
+    );
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+    return () => {
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
+    };
+  }, [activeBusinessId]);
+
+  useEffect(() => {
+    if (!activeBusinessId || !isOnline) return;
+    fetch("/api/push", {
+      headers: { "x-trove-business-id": String(activeBusinessId) },
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unable to load push status");
+        return await response.json() as { configured?: boolean; subscribed?: boolean };
+      })
+      .then((status) => {
+        if (!status.configured) setPushState("unconfigured");
+        else if (status.subscribed) setPushState("active");
+        else setPushState("idle");
+      })
+      .catch(() => undefined);
+  }, [activeBusinessId, isOnline]);
+
+  useEffect(() => {
+    if (view !== "network" || !networkEnabled) return;
+    const timeout = window.setTimeout(() => {
+      setNetworkLoading(true);
+      const params = new URLSearchParams({
+        q: networkQuery,
+        start: networkStart,
+        end: networkEnd,
+        quantity: String(networkQuantity),
+        maxPrice: String(networkMaxPrice),
+        distance: String(networkDistance),
+      });
+      if (networkCoordinates) {
+        params.set("latitude", String(networkCoordinates.latitude));
+        params.set("longitude", String(networkCoordinates.longitude));
+      }
+      fetch(`/api/network?${params}`, {
+        headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+      })
+        .then(async (response) => {
+          const result = await response.json().catch(() => ({})) as NetworkData & { error?: string };
+          if (!response.ok) throw new Error(result.error || "Unable to load Trove Network");
+          return result;
+        })
+        .then((data) => {
+          setNetworkListings(data.listings || []);
+          setOwnNetworkListings(data.ownListings || []);
+          setNetworkRequests(data.requests || []);
+          setNetworkReviews(data.reviews || []);
+        })
+        .catch((error) => setToast(
+          error instanceof Error
+            ? error.message
+            : language === "pt"
+              ? "Não foi possível carregar a rede."
+              : "Unable to load the network.",
+        ))
+        .finally(() => setNetworkLoading(false));
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [
+    view,
+    networkEnabled,
+    networkQuery,
+    networkStart,
+    networkEnd,
+    networkQuantity,
+    networkMaxPrice,
+    networkDistance,
+    networkCoordinates,
+    networkReloadToken,
+    activeBusinessId,
+    language,
+  ]);
 
   function changeLanguage(next: Language) {
     setLanguage(next);
@@ -174,25 +747,375 @@ export default function DecorApp() {
     });
   }, [items, query, filter, categoryFilter, sort]);
 
-  const filteredNetwork = useMemo(() => {
-    const normalized = networkQuery.toLowerCase();
-    return networkItems.filter((item) =>
-      `${item.name} ${item.owner}`.toLowerCase().includes(normalized),
-    );
-  }, [networkQuery]);
-
   const showToast = (message: string) => setToast(message);
 
   async function persist(action: string, payload: unknown) {
     try {
-      await fetch("/api/data", {
+      if (!navigator.onLine) {
+        throw new Error(t("Esta alteração precisa de ligação à internet.", "This change requires an internet connection."));
+      }
+      const response = await fetch("/api/data", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
         body: JSON.stringify({ action, payload }),
       });
-    } catch {
-      // Optimistic UI stays available in a local-only preview.
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      if (response.status === 401) {
+        window.location.href = "/signin-with-chatgpt?return_to=%2F";
+        return false;
+      }
+      if (response.status === 402) {
+        setView("plans");
+        throw new Error(t("A subscrição precisa de ser renovada para continuar a editar.", "The subscription must be renewed to continue editing."));
+      }
+      if (!response.ok) {
+        const message = String(result.error || "Unable to save");
+        if (message.includes("unavailable for the selected dates")) {
+          throw new Error(t("Um ou mais artigos já não estão disponíveis para estas datas.", "One or more items are no longer available for these dates."));
+        }
+        if (message.includes("physical stock")) {
+          throw new Error(t("Não existe stock físico suficiente para registar a saída.", "There is not enough physical stock to check out."));
+        }
+        throw new Error(message);
+      }
+      return result as {
+        ok?: boolean;
+        inviteUrl?: string;
+        workspaceId?: number;
+        emailConfigured?: boolean;
+        emailSent?: boolean;
+      };
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("Não foi possível guardar.", "Unable to save."));
+      return false;
     }
+  }
+
+  async function networkPersist(action: string, payload: unknown) {
+    try {
+      const response = await fetch("/api/network", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({ action, payload }),
+      });
+      const result = await response.json().catch(() => ({})) as { error?: string; requestId?: number; listingId?: number };
+      if (response.status === 401) {
+        window.location.href = "/signin-with-chatgpt?return_to=%2F";
+        return false;
+      }
+      if (response.status === 402) {
+        setView("plans");
+        throw new Error(t("Renove o plano Network para continuar.", "Renew the Network plan to continue."));
+      }
+      if (response.status === 403) {
+        if (String(result.error || "").includes("Network plan")) setView("plans");
+        throw new Error(result.error || t("A sua função não permite esta acção.", "Your role does not allow this action."));
+      }
+      if (!response.ok) {
+        const message = String(result.error || "Unable to save");
+        if (message.includes("no longer available") || message.includes("not available")) {
+          throw new Error(t("O artigo deixou de estar disponível para essas datas.", "The item is no longer available for those dates."));
+        }
+        throw new Error(message);
+      }
+      setNetworkReloadToken((value) => value + 1);
+      setReloadToken((value) => value + 1);
+      return result;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("Não foi possível guardar na rede.", "Unable to save to the network."));
+      return false;
+    }
+  }
+
+  function locateForNetwork() {
+    if (!navigator.geolocation) {
+      showToast(t("Este dispositivo não fornece localização.", "This device does not provide location."));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setNetworkCoordinates({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+        });
+        showToast(t("Pesquisa por distância activada", "Distance search enabled"));
+      },
+      () => showToast(t("Não foi possível obter a localização.", "Unable to get your location.")),
+      { enableHighAccuracy: false, maximumAge: 300_000, timeout: 10_000 },
+    );
+  }
+
+  async function publishNetworkListing(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const itemId = Number(form.get("itemId"));
+    const existing = ownNetworkListings.find((entry) => entry.itemId === itemId);
+    const result = await networkPersist("publishListing", {
+      id: existing?.id || Date.now(),
+      itemId,
+      dailyPrice: Number(form.get("dailyPrice") || 0),
+      deposit: Number(form.get("deposit") || 0),
+      minimumQuantity: Number(form.get("minimumQuantity") || 1),
+      maximumQuantity: Number(form.get("maximumQuantity") || 1),
+      location: String(form.get("location") || profile.location),
+      latitude: String(form.get("latitude") || ""),
+      longitude: String(form.get("longitude") || ""),
+      deliveryOptions: String(form.get("deliveryOptions") || "Pickup"),
+      terms: String(form.get("terms") || ""),
+    });
+    if (result) {
+      setManagedNetworkListing(undefined);
+      showToast(t("Artigo publicado na Trove Network", "Item published to Trove Network"));
+    }
+  }
+
+  async function createNetworkRequest(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!requestedListing) return;
+    const form = new FormData(event.currentTarget);
+    const result = await networkPersist("createRentalRequest", {
+      id: Date.now(),
+      listingId: requestedListing.id,
+      quantity: Number(form.get("quantity") || 1),
+      startDate: String(form.get("startDate") || networkStart),
+      endDate: String(form.get("endDate") || networkEnd),
+      deliveryMethod: String(form.get("deliveryMethod") || "Pickup"),
+      note: String(form.get("note") || ""),
+    });
+    if (result) {
+      setRequestedListing(null);
+      setNetworkTab("requests");
+      showToast(t("Pedido enviado à empresa proprietária", "Request sent to the owner business"));
+    }
+  }
+
+  async function runNetworkAction(action: string, payload: Record<string, unknown>, messagePt: string, messageEn: string) {
+    if (await networkPersist(action, payload)) {
+      showToast(t(messagePt, messageEn));
+    }
+  }
+
+  function switchWorkspace(id: number) {
+    if (id === activeBusinessId) return;
+    window.localStorage.setItem("trove-business-id", String(id));
+    setActiveBusinessId(id);
+    setView("home");
+  }
+
+  async function acceptInvitation(invitation: Invitation) {
+    const result = await persist("acceptInvitation", { id: invitation.id });
+    if (!result) return;
+    const workspaceId = result.workspaceId || invitation.businessId;
+    window.localStorage.setItem("trove-business-id", String(workspaceId));
+    setActiveBusinessId(workspaceId);
+    setInvitations((current) => current.filter((entry) => entry.id !== invitation.id));
+    showToast(t(`Entrou na equipa de ${invitation.businessName}`, `You joined ${invitation.businessName}`));
+  }
+
+  async function declineInvitation(invitation: Invitation) {
+    if (await persist("declineInvitation", { id: invitation.id })) {
+      setInvitations((current) => current.filter((entry) => entry.id !== invitation.id));
+      showToast(t("Convite recusado", "Invitation declined"));
+    }
+  }
+
+  async function markNotification(notification: NotificationRecord) {
+    if (!notification.readAt && await persist("markNotificationRead", { id: notification.id })) {
+      setNotifications((current) => current.map((entry) =>
+        entry.id === notification.id ? { ...entry, readAt: new Date().toISOString() } : entry,
+      ));
+    }
+  }
+
+  async function markAllNotifications() {
+    if (await persist("markAllNotificationsRead", {})) {
+      const readAt = new Date().toISOString();
+      setNotifications((current) => current.map((entry) => ({ ...entry, readAt: entry.readAt || readAt })));
+    }
+  }
+
+  async function enableBrowserAlerts() {
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) {
+      setPushState("unsupported");
+      showToast(t("Este navegador não suporta notificações push.", "This browser does not support push notifications."));
+      return;
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      showToast(t("Permissão de alertas não concedida.", "Alert permission was not granted."));
+      return;
+    }
+    try {
+      const configuration = await fetch("/api/push", {
+        headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+      }).then((response) => response.json()) as { configured?: boolean; publicKey?: string };
+      if (!configuration.configured || !configuration.publicKey) {
+        setPushState("unconfigured");
+        throw new Error(t("As chaves de push ainda não estão configuradas.", "Push keys are not configured yet."));
+      }
+      const registration = await navigator.serviceWorker.ready;
+      const applicationServerKey = Uint8Array.from(
+        atob(configuration.publicKey.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(configuration.publicKey.length / 4) * 4, "=")),
+        (character) => character.charCodeAt(0),
+      );
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      });
+      const serialized = subscription.toJSON();
+      const response = await fetch("/api/push", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({
+          action: "subscribe",
+          endpoint: serialized.endpoint,
+          keys: serialized.keys,
+        }),
+      });
+      if (!response.ok) throw new Error(t("Não foi possível guardar este dispositivo.", "Unable to save this device."));
+      const testResponse = await fetch("/api/push", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({ action: "test" }),
+      });
+      if (!testResponse.ok) {
+        throw new Error(t("O dispositivo foi guardado, mas o alerta de teste falhou.", "The device was saved, but the test notification failed."));
+      }
+      setPushState("active");
+      showToast(t("Notificações em segundo plano activadas.", "Background notifications enabled."));
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("Não foi possível activar as notificações.", "Unable to enable notifications."));
+    }
+  }
+
+  async function installApplication() {
+    if (!installPrompt) {
+      showToast(t("Use a opção “Adicionar ao ecrã principal” do navegador.", "Use the browser's “Add to Home Screen” option."));
+      return;
+    }
+    await installPrompt.prompt();
+    const choice = await installPrompt.userChoice;
+    if (choice.outcome === "accepted") setInstallPrompt(null);
+  }
+
+  async function loadOperations() {
+    setOperationsOpen(true);
+    setOperationsStatus(null);
+    const response = await fetch("/api/operations", {
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+    });
+    if (response.ok) setOperationsStatus(await response.json() as OperationsStatus);
+  }
+
+  async function submitFeedback(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const response = await fetch("/api/operations", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+      },
+      body: JSON.stringify({
+        action: "feedback",
+        category: form.get("category"),
+        rating: Number(form.get("rating")),
+        message: form.get("message"),
+      }),
+    });
+    if (!response.ok) {
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      showToast(result.error || t("Não foi possível enviar o feedback.", "Unable to send feedback."));
+      return;
+    }
+    setFeedbackOpen(false);
+    showToast(t("Obrigado. O feedback foi registado.", "Thank you. Your feedback was recorded."));
+  }
+
+  useEffect(() => {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    const unread = notifications.find((entry) => !entry.readAt);
+    if (!unread) return;
+    const key = `trove-notified-${unread.id}`;
+    if (window.localStorage.getItem(key)) return;
+    new Notification(language === "pt" ? unread.titlePt : unread.titleEn, {
+      body: language === "pt" ? unread.bodyPt : unread.bodyEn,
+    });
+    window.localStorage.setItem(key, "1");
+  }, [notifications, language]);
+
+  async function startSubscriptionCheckout(nextPlan: "Basic" | "Network") {
+    try {
+      const response = await fetch("/api/billing/checkout", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {}),
+        },
+        body: JSON.stringify({ plan: nextPlan }),
+      });
+      const result = await response.json().catch(() => ({})) as {
+        error?: string;
+        code?: string;
+        checkoutUrl?: string;
+      };
+      if (response.status === 401) {
+        window.location.href = "/signin-with-chatgpt?return_to=%2F";
+        return;
+      }
+      if (!response.ok) {
+        if (result.code === "PAYMENTS_NOT_CONFIGURED") {
+          throw new Error(t(
+            "A integração PaySuite está pronta, mas ainda precisa das credenciais da conta comercial.",
+            "The PaySuite integration is ready but still needs the merchant account credentials.",
+          ));
+        }
+        throw new Error(result.error || t("Não foi possível iniciar o pagamento.", "Unable to start payment."));
+      }
+      if (!result.checkoutUrl) throw new Error(t("Link de pagamento em falta.", "Missing payment link."));
+      window.location.href = result.checkoutUrl;
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t("Não foi possível iniciar o pagamento.", "Unable to start payment."));
+    }
+  }
+
+  async function changeCancellation(cancel: boolean) {
+    const action = cancel ? "cancelSubscription" : "resumeSubscription";
+    if (await persist(action, {})) {
+      setReloadToken((value) => value + 1);
+      showToast(cancel
+        ? t("Cancelamento agendado para o fim do período", "Cancellation scheduled for the period end")
+        : t("Subscrição retomada", "Subscription resumed"));
+    }
+  }
+
+  async function uploadItemPhotos(files: File[]) {
+    const urls: string[] = [];
+    for (const file of files.slice(0, 8)) {
+      try {
+        const upload = new FormData();
+        upload.append("file", file);
+        const response = await fetch("/api/item-image", { method: "POST", body: upload });
+        if (!response.ok) throw new Error();
+        urls.push(((await response.json()) as { url: string }).url);
+      } catch {
+        showToast(t("Algumas fotografias não foram carregadas.", "Some photos could not be uploaded."));
+        break;
+      }
+    }
+    return urls;
   }
 
   async function handleAddItem(event: FormEvent<HTMLFormElement>) {
@@ -202,18 +1125,9 @@ export default function DecorApp() {
     const category = String(form.get("category") || categories[0] || t("Sem categoria", "Uncategorized"));
     const quantity = Number(form.get("quantity") || 1);
     if (!name) return;
-    let photoUrl = "";
-    const photo = form.get("photo");
-    if (photo instanceof File && photo.size) {
-      const upload = new FormData();
-      upload.append("file", photo);
-      try {
-        const response = await fetch("/api/item-image", { method: "POST", body: upload });
-        if (response.ok) photoUrl = (await response.json()).url;
-      } catch {
-        showToast(t("O item será guardado sem fotografia.", "The item will be saved without a photo."));
-      }
-    }
+    let photoUrls: string[] = [];
+    const photoFiles = form.getAll("photo").filter((value): value is File => value instanceof File && value.size > 0);
+    photoUrls = await uploadItemPhotos(photoFiles);
     const item: Item = {
       id: Date.now(),
       name,
@@ -225,55 +1139,407 @@ export default function DecorApp() {
       symbol: name.split(/\s+/).slice(0, 2).map((word) => word[0]).join("").toUpperCase(),
       price: Number(form.get("price") || 0),
       currency: String(form.get("currency") || "MZN"),
-      photoUrl,
+      photoUrl: photoUrls[0] || "",
       storageLocation: String(form.get("location") || ""),
       condition: String(form.get("condition") || t("Bom", "Good")),
+      description: String(form.get("description") || ""),
+      sku: String(form.get("sku") || ""),
+      replacementValue: Number(form.get("replacementValue") || 0),
+      minStock: Number(form.get("minStock") || 0),
     };
-    setItems((current) => [item, ...current]);
-    setAddOpen(false);
-    showToast(t(`${name} adicionado ao inventário`, `${name} added to Inventory`));
-    await persist("addItem", item);
+    if (await persist("addItem", item)) {
+      if (photoUrls.length > 1) {
+        await persist("addItemPhotos", { itemId: item.id, urls: photoUrls.slice(1) });
+      }
+      setItems((current) => [item, ...current]);
+      setAddOpen(false);
+      setReloadToken((value) => value + 1);
+      showToast(t(`${name} adicionado ao inventário`, `${name} added to Inventory`));
+    }
   }
 
   async function handleReservation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const itemId = Number(form.get("itemId") || selectedItem?.id);
-    const itemForReservation = items.find((item) => item.id === itemId);
-    if (!itemForReservation) return;
-    const quantity = Number(form.get("quantity") || 1);
-    const reservation: Reservation = {
-      id: Date.now(),
-      item: `${itemForReservation.name} × ${quantity}`,
-      client: String(form.get("client") || t("Nova reserva", "New reservation")),
-      eventName: String(form.get("eventName") || ""),
-      contact: String(form.get("contact") || ""),
+    const selectedLines = items.flatMap((item) => {
+      if (!form.get(`reservation-item-${item.id}`)) return [];
+      return [{ itemId: item.id, quantity: Number(form.get(`reservation-quantity-${item.id}`) || 1) }];
+    });
+    if (!selectedLines.length) {
+      showToast(t("Seleccione pelo menos um artigo.", "Select at least one item."));
+      return;
+    }
+    const clientChoice = String(form.get("clientChoice") || "new");
+    const chosenClient = clients.find((client) => client.id === Number(clientChoice));
+    const eventChoice = String(form.get("eventChoice") || "new");
+    const chosenEvent = events.find((entry) => entry.id === Number(eventChoice));
+    const stamp = Date.now();
+    const payload = {
+      id: managedReservation?.id || stamp,
+      clientId: chosenClient?.id || managedReservation?.clientId || stamp + 1,
+      clientName: chosenClient?.name || String(form.get("clientName") || ""),
+      clientEmail: chosenClient?.email || String(form.get("clientEmail") || ""),
+      clientPhone: chosenClient?.phone || String(form.get("clientPhone") || ""),
+      eventId: chosenEvent?.id || managedReservation?.eventId || stamp + 2,
+      eventName: chosenEvent?.name || String(form.get("eventName") || ""),
+      venue: String(form.get("venue") || chosenEvent?.venue || ""),
+      date: String(form.get("start") || chosenEvent?.startDate || ""),
+      endDate: String(form.get("end") || chosenEvent?.endDate || ""),
+      setupTime: String(form.get("setupTime") || chosenEvent?.setupTime || ""),
+      pickupTime: String(form.get("pickupTime") || chosenEvent?.pickupTime || ""),
+      eventNotes: String(form.get("eventNotes") || chosenEvent?.notes || ""),
       notes: String(form.get("notes") || ""),
-      date: String(form.get("start")),
-      endDate: String(form.get("end")),
+      logistics: String(form.get("logistics") || ""),
+      discount: Number(form.get("discount") || 0),
+      deliveryFee: Number(form.get("deliveryFee") || 0),
+      deposit: Number(form.get("deposit") || 0),
+      paymentStatus: String(form.get("paymentStatus") || "Pending"),
       color: profile.color,
-      quantity,
-      status: "Confirmed",
+      items: selectedLines,
     };
-    setReservations((current) => [reservation, ...current]);
-    setItems((current) => current.map((item) => item.id === itemForReservation.id ? { ...item, status: "Reserved" } : item));
-    setReserveOpen(false);
-    showToast(t(`Datas reservadas para ${itemForReservation.name}`, `Dates reserved for ${itemForReservation.name}`));
-    await persist("addReservation", reservation);
+    const action = managedReservation ? "updateReservation" : "addReservation";
+    if (await persist(action, payload)) {
+      setReserveOpen(false);
+      setManagedReservation(null);
+      setSelectedItem(null);
+      setReloadToken((value) => value + 1);
+      showToast(t(
+        managedReservation ? "Reserva actualizada" : "Reserva confirmada sem conflitos",
+        managedReservation ? "Reservation updated" : "Reservation confirmed without conflicts",
+      ));
+    }
   }
 
   async function saveProfile() {
     setSaving(true);
-    await persist("updateProfile", profile);
+    const saved = await persist("updateProfile", profile);
     window.setTimeout(() => {
       setSaving(false);
-      showToast(t("Perfil público actualizado", "Public profile updated"));
+      if (saved) {
+        setReloadToken((value) => value + 1);
+        showToast(t("Perfil público actualizado", "Public profile updated"));
+      }
     }, 450);
   }
 
+  async function exportWorkspaceBackup() {
+    try {
+      const response = await fetch("/api/backup", {
+        headers: activeBusinessId
+          ? { "x-trove-business-id": String(activeBusinessId) }
+          : {},
+      });
+      if (!response.ok) throw new Error();
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") || "";
+      const filename = disposition.match(/filename="([^"]+)"/)?.[1] || "trove-backup.json";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(url);
+      showToast(t("Cópia integral exportada", "Full backup exported"));
+    } catch {
+      showToast(t("Não foi possível exportar a cópia.", "Unable to export the backup."));
+    }
+  }
+
+  async function updateEnquiryStatus(enquiry: PublicEnquiry, status: PublicEnquiry["status"]) {
+    if (await persist("updateEnquiryStatus", { id: enquiry.id, status })) {
+      setPublicEnquiries((current) =>
+        current.map((entry) => entry.id === enquiry.id ? { ...entry, status } : entry),
+      );
+      showToast(t("Estado do pedido actualizado", "Enquiry status updated"));
+    }
+  }
+
   function openReserve(item: Item) {
+    if (!canManageReservations) {
+      showToast(t("A sua função não permite criar reservas.", "Your role cannot create reservations."));
+      return;
+    }
     setSelectedItem(item);
+    setManagedReservation(null);
     setReserveOpen(true);
+  }
+
+  function editReservation(reservation: Reservation) {
+    if (!canManageReservations) {
+      showToast(t("A sua função não permite editar reservas.", "Your role cannot edit reservations."));
+      return;
+    }
+    setManagedReservation(reservation);
+    setSelectedItem(null);
+    setReserveOpen(true);
+  }
+
+  async function transitionReservation(reservation: Reservation, status: string) {
+    if (!canManageReservations) return;
+    if (await persist("transitionReservation", { id: reservation.id, status })) {
+      setReloadToken((value) => value + 1);
+      showToast(
+        status === "Cancelled"
+          ? t("Reserva cancelada", "Reservation cancelled")
+          : status === "CheckedOut"
+            ? t("Saída registada e stock actualizado", "Checkout recorded and stock updated")
+            : t("Devolução registada e stock reposto", "Return recorded and stock restored"),
+      );
+    }
+  }
+
+  async function saveDirectoryClient(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    if (await persist("addClient", {
+      id: Date.now(),
+      name: String(form.get("name") || ""),
+      email: String(form.get("email") || ""),
+      phone: String(form.get("phone") || ""),
+      notes: String(form.get("notes") || ""),
+    })) {
+      formElement.reset();
+      setReloadToken((value) => value + 1);
+      showToast(t("Cliente adicionado", "Client added"));
+    }
+  }
+
+  async function saveDirectoryEvent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    if (await persist("addEvent", {
+      id: Date.now(),
+      clientId: Number(form.get("clientId")),
+      name: String(form.get("name") || ""),
+      eventType: String(form.get("eventType") || "Other"),
+      venue: String(form.get("venue") || ""),
+      address: "",
+      startDate: String(form.get("startDate") || ""),
+      endDate: String(form.get("endDate") || ""),
+      setupTime: String(form.get("setupTime") || ""),
+      pickupTime: String(form.get("pickupTime") || ""),
+      guestCount: Number(form.get("guestCount") || 0),
+      budget: 0,
+      currency: "MZN",
+      onSiteContact: "",
+      color: "#b75d3f",
+      notes: String(form.get("notes") || ""),
+      status: "Planned",
+    })) {
+      formElement.reset();
+      setReloadToken((value) => value + 1);
+      showToast(t("Evento adicionado", "Event added"));
+    }
+  }
+
+  async function saveManagedEvent(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!managedEvent || !canManageReservations) return;
+    const form = new FormData(event.currentTarget);
+    if (await persist("updateEvent", {
+      id: managedEvent.id,
+      clientId: Number(form.get("clientId")),
+      ownerUserId: Number(form.get("ownerUserId")) || null,
+      name: String(form.get("name") || ""),
+      eventType: String(form.get("eventType") || "Other"),
+      venue: String(form.get("venue") || ""),
+      address: String(form.get("address") || ""),
+      startDate: String(form.get("startDate") || ""),
+      endDate: String(form.get("endDate") || ""),
+      setupTime: String(form.get("setupTime") || ""),
+      pickupTime: String(form.get("pickupTime") || ""),
+      guestCount: Number(form.get("guestCount") || 0),
+      budget: Number(form.get("budget") || 0),
+      currency: String(form.get("currency") || "MZN"),
+      onSiteContact: String(form.get("onSiteContact") || ""),
+      color: String(form.get("color") || "#b75d3f"),
+      notes: String(form.get("notes") || ""),
+      status: managedEvent.status,
+    })) {
+      setManagedEvent(null);
+      setReloadToken((value) => value + 1);
+      showToast(t("Ficha do evento actualizada", "Event record updated"));
+    }
+  }
+
+  async function transitionManagedEvent(status: string) {
+    if (!managedEvent || !canManageReservations) return;
+    const linkedReservations = reservations.filter((entry) => entry.eventId === managedEvent.id);
+    const confirmed = linkedReservations.filter((entry) => entry.status === "Confirmed").length;
+    if (status === "Cancelled") {
+      const message = confirmed
+        ? t(
+          `Cancelar o evento e ${confirmed} reserva${confirmed === 1 ? "" : "s"} confirmada${confirmed === 1 ? "" : "s"}?`,
+          `Cancel the event and ${confirmed} confirmed booking${confirmed === 1 ? "" : "s"}?`,
+        )
+        : t("Cancelar este evento?", "Cancel this event?");
+      if (!window.confirm(message)) return;
+    }
+    if (await persist("transitionEvent", {
+      id: managedEvent.id,
+      status,
+      cancelReservations: status === "Cancelled" && confirmed > 0,
+    })) {
+      setManagedEvent((current) => current ? { ...current, status } : current);
+      setEvents((current) => current.map((entry) => entry.id === managedEvent.id ? { ...entry, status } : entry));
+      setReloadToken((value) => value + 1);
+      showToast(t("Estado do evento actualizado", "Event status updated"));
+    }
+  }
+
+  async function duplicateManagedEvent() {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("duplicateEvent", { sourceId: managedEvent.id, id: Date.now() })) {
+      setManagedEvent(null);
+      setReloadToken((value) => value + 1);
+      showToast(t("Evento duplicado sem copiar reservas", "Event duplicated without copying bookings"));
+    }
+  }
+
+  async function archiveManagedEvent() {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("archiveEvent", { id: managedEvent.id })) {
+      setManagedEvent(null);
+      setReloadToken((value) => value + 1);
+      showToast(t("Evento arquivado", "Event archived"));
+    }
+  }
+
+  async function addManagedEventTask(input: {
+    title: string;
+    description: string;
+    category: string;
+    priority: string;
+    assigneeUserId: number | null;
+    dueDate: string;
+    dueTime: string;
+  }) {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("addEventTask", {
+      id: Date.now(),
+      eventId: managedEvent.id,
+      ...input,
+      sortOrder: eventTasks.filter((task) => task.eventId === managedEvent.id).length,
+    })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Tarefa adicionada à checklist", "Task added to the checklist"));
+    }
+  }
+
+  async function updateManagedEventTask(task: EventTask, changes: Partial<EventTask>) {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("updateEventTask", { ...task, ...changes })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Tarefa actualizada", "Task updated"));
+    }
+  }
+
+  async function transitionManagedEventTask(task: EventTask) {
+    if (!canManageReservations) return;
+    const status = task.status === "Completed" ? "Pending" : "Completed";
+    if (await persist("transitionEventTask", { id: task.id, status })) {
+      setReloadToken((value) => value + 1);
+      showToast(status === "Completed"
+        ? t("Tarefa concluída", "Task completed")
+        : t("Tarefa reaberta", "Task reopened"));
+    }
+  }
+
+  async function deleteManagedEventTask(task: EventTask) {
+    if (!canManageReservations || task.status !== "Pending") return;
+    if (!window.confirm(t(`Remover a tarefa “${task.title}”?`, `Remove task “${task.title}”?`))) return;
+    if (await persist("deleteEventTask", { id: task.id })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Tarefa removida", "Task removed"));
+    }
+  }
+
+  async function addManagedSupplier(input: Omit<Supplier, "id" | "active" | "createdAt" | "updatedAt">) {
+    if (!canManageReservations) return;
+    if (await persist("addSupplier", { id: Date.now(), active: true, ...input })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Fornecedor guardado", "Supplier saved"));
+    }
+  }
+
+  async function addManagedEventExpense(input: Omit<EventExpense, "id" | "eventId" | "createdByUserId" | "createdAt" | "updatedAt">) {
+    if (!managedEvent || !canManageReservations) return;
+    if (await persist("addEventExpense", { id: Date.now(), eventId: managedEvent.id, ...input })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Custo adicionado ao evento", "Event cost added"));
+    }
+  }
+
+  async function updateManagedEventExpense(expense: EventExpense, changes: Partial<EventExpense>) {
+    if (!canManageReservations) return;
+    if (await persist("updateEventExpense", { ...expense, ...changes })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Custo actualizado", "Cost updated"));
+    }
+  }
+
+  async function deleteManagedEventExpense(expense: EventExpense) {
+    if (!canManageReservations) return;
+    if (!window.confirm(t(`Remover o custo “${expense.description}”?`, `Remove cost “${expense.description}”?`))) return;
+    if (await persist("deleteEventExpense", { id: expense.id })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Custo removido", "Cost removed"));
+    }
+  }
+
+  async function uploadManagedEventDocument(file: File, category: string, notes: string) {
+    if (!managedEvent || !canManageReservations) return;
+    const form = new FormData();
+    form.set("file", file);
+    form.set("eventId", String(managedEvent.id));
+    form.set("category", category);
+    form.set("notes", notes);
+    const response = await fetch("/api/event-document", {
+      method: "POST",
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+      body: form,
+    });
+    const result = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      showToast(result.error || t("Não foi possível carregar o documento.", "Unable to upload document."));
+      return;
+    }
+    setReloadToken((value) => value + 1);
+    showToast(t("Documento protegido carregado", "Protected document uploaded"));
+  }
+
+  async function deleteManagedEventDocument(document: EventDocument) {
+    if (!canManageReservations) return;
+    if (!window.confirm(t(`Remover o documento “${document.name}”?`, `Remove document “${document.name}”?`))) return;
+    const response = await fetch(`/api/event-document?id=${encodeURIComponent(document.id)}`, {
+      method: "DELETE",
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+    });
+    const result = await response.json().catch(() => ({})) as { error?: string };
+    if (!response.ok) {
+      showToast(result.error || t("Não foi possível remover o documento.", "Unable to remove document."));
+      return;
+    }
+    setReloadToken((value) => value + 1);
+    showToast(t("Documento removido", "Document removed"));
+  }
+
+  async function downloadManagedEventDocument(document: EventDocument) {
+    const response = await fetch(`/api/event-document?id=${encodeURIComponent(document.id)}`, {
+      headers: activeBusinessId ? { "x-trove-business-id": String(activeBusinessId) } : {},
+    });
+    if (!response.ok) {
+      showToast(t("Não foi possível descarregar o documento.", "Unable to download document."));
+      return;
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const anchor = window.document.createElement("a");
+    anchor.href = url;
+    anchor.download = document.name;
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   async function addCategory(name: string) {
@@ -304,6 +1570,139 @@ export default function DecorApp() {
     showToast(t(`${ids.length} itens removidos`, `${ids.length} items removed`));
   }
 
+  async function updateItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!managedItem) return;
+    const form = new FormData(event.currentTarget);
+    const quantity = Number(form.get("quantity"));
+    const available = Math.min(quantity, Number(form.get("available")));
+    const updated: Item = {
+      ...managedItem,
+      name: String(form.get("name") || "").trim(),
+      category: String(form.get("category") || ""),
+      quantity,
+      available,
+      status: String(form.get("status") || "Available") as ItemStatus,
+      price: Number(form.get("price") || 0),
+      currency: String(form.get("currency") || "MZN"),
+      storageLocation: String(form.get("storageLocation") || ""),
+      condition: String(form.get("condition") || ""),
+      description: String(form.get("description") || ""),
+      sku: String(form.get("sku") || ""),
+      replacementValue: Number(form.get("replacementValue") || 0),
+      minStock: Number(form.get("minStock") || 0),
+    };
+    if (await persist("updateItem", updated)) {
+      setItems((current) => current.map((item) => item.id === updated.id ? updated : item));
+      setManagedItem(updated);
+      setReloadToken((value) => value + 1);
+      showToast(t("Ficha do artigo actualizada", "Item record updated"));
+    }
+  }
+
+  async function addPhotosToItem(files: File[]) {
+    if (!managedItem || !files.length) return;
+    const currentCount = photos.filter((photo) => photo.itemId === managedItem.id).length;
+    if (currentCount + files.length > 8) {
+      showToast(t("Cada artigo pode ter até 8 fotografias.", "Each item can have up to 8 photos."));
+      return;
+    }
+    const urls = await uploadItemPhotos(files);
+    if (urls.length && await persist("addItemPhotos", { itemId: managedItem.id, urls })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Galeria actualizada", "Gallery updated"));
+    }
+  }
+
+  async function removePhoto(photo: ItemPhoto) {
+    if (await persist("removeItemPhoto", { id: photo.id })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Fotografia removida", "Photo removed"));
+    }
+  }
+
+  async function adjustItemStock(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!managedItem) return;
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const delta = Number(form.get("delta"));
+    if (await persist("adjustStock", {
+      id: Date.now(),
+      itemId: managedItem.id,
+      delta,
+      type: String(form.get("type") || "adjustment"),
+      note: String(form.get("note") || ""),
+    })) {
+      setManagedItem({ ...managedItem, quantity: managedItem.quantity + delta, available: managedItem.available + delta });
+      setReloadToken((value) => value + 1);
+      formElement.reset();
+      showToast(t("Movimento de stock registado", "Stock movement recorded"));
+    }
+  }
+
+  async function addMaintenanceRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!managedItem) return;
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    if (await persist("addMaintenance", {
+      id: Date.now(),
+      itemId: managedItem.id,
+      type: String(form.get("type")),
+      status: "Open",
+      notes: String(form.get("notes") || ""),
+      cost: Number(form.get("cost") || 0),
+      scheduledDate: String(form.get("scheduledDate") || ""),
+      condition: t("Em manutenção", "In maintenance"),
+    })) {
+      setReloadToken((value) => value + 1);
+      formElement.reset();
+      showToast(t("Intervenção registada", "Maintenance record added"));
+    }
+  }
+
+  async function completeMaintenance(record: MaintenanceRecord) {
+    if (await persist("updateMaintenance", { id: record.id, status: "Completed" })) {
+      setReloadToken((value) => value + 1);
+      showToast(t("Intervenção concluída", "Maintenance completed"));
+    }
+  }
+
+  async function createKit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const entries = items.flatMap((item) => {
+      const selected = form.get(`kit-item-${item.id}`);
+      const quantity = Number(form.get(`kit-quantity-${item.id}`) || 1);
+      return selected ? [{ itemId: item.id, quantity }] : [];
+    });
+    if (!entries.length) {
+      showToast(t("Seleccione pelo menos um artigo para o kit.", "Select at least one item for the kit."));
+      return;
+    }
+    if (await persist("createKit", {
+      id: Date.now(),
+      name: String(form.get("name")),
+      description: String(form.get("description") || ""),
+      price: Number(form.get("price") || 0),
+      currency: "MZN",
+      items: entries,
+    })) {
+      setReloadToken((value) => value + 1);
+      formElement.reset();
+      showToast(t("Kit criado", "Kit created"));
+    }
+  }
+
+  async function deleteKit(kit: Kit) {
+    if (await persist("deleteKit", { id: kit.id })) {
+      setKits((current) => current.filter((entry) => entry.id !== kit.id));
+      showToast(t("Kit removido", "Kit removed"));
+    }
+  }
+
   function exportInventory() {
     const header = ["name", "category", "quantity", "available", "status", "price", "currency", "location", "condition"];
     const rows = items.map((item) => [item.name, item.category, item.quantity, item.available, item.status, item.price, item.currency, item.storageLocation, item.condition]);
@@ -314,29 +1713,88 @@ export default function DecorApp() {
   async function importInventory(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    const text = await file.text();
-    const rows = text.split(/\r?\n/).filter(Boolean).slice(1);
-    const imported: Item[] = rows.map((row, index) => {
-      const [name, category, quantity, available, status, price, currency, storageLocation, condition] = parseCsvRow(row);
-      return {
-        id: Date.now() + index,
-        name: name || `${t("Item importado", "Imported item")} ${index + 1}`,
-        category: category || t("Sem categoria", "Uncategorized"),
-        quantity: Number(quantity) || 1,
-        available: Number(available) || Number(quantity) || 1,
-        status: (["Available", "Reserved", "Rented"].includes(status) ? status : "Available") as ItemStatus,
-        price: Number(price) || 0,
-        currency: currency || "MZN",
-        storageLocation: storageLocation || "",
-        condition: condition || t("Bom", "Good"),
-        tone: "sand",
-        symbol: (name || "IT").split(/\s+/).slice(0, 2).map((word) => word[0]).join("").toUpperCase(),
-      };
-    });
-    setItems((current) => [...imported, ...current]);
-    for (const item of imported) await persist("addItem", item);
-    showToast(t(`${imported.length} itens importados`, `${imported.length} items imported`));
-    event.target.value = "";
+    try {
+      let matrix: unknown[][];
+      if (file.name.toLowerCase().endsWith(".xlsx")) {
+        const { default: readXlsxFile } = await import("read-excel-file");
+        matrix = await readXlsxFile(file);
+      } else {
+        const content = await file.text();
+        matrix = content.split(/\r?\n/).filter(Boolean).map(parseCsvRow);
+      }
+      const headers = (matrix[0] || []).map((value) => String(value || "").trim().toLowerCase());
+      const required = ["name", "category", "quantity"];
+      const missing = required.filter((header) => !headers.includes(header));
+      if (missing.length) {
+        setImportReport({
+          title: t("Ficheiro não importado", "File not imported"),
+          detail: t(`Faltam colunas obrigatórias: ${missing.join(", ")}.`, `Missing required columns: ${missing.join(", ")}.`),
+          errors: [],
+        });
+        return;
+      }
+      const valueAt = (row: unknown[], name: string) => row[headers.indexOf(name)];
+      const errors: string[] = [];
+      const imported: Item[] = matrix.slice(1).filter((row) => row.some((value) => String(value ?? "").trim())).flatMap((row, index) => {
+        const line = index + 2;
+        const name = String(valueAt(row, "name") || "").trim();
+        const category = String(valueAt(row, "category") || "").trim();
+        const quantity = Number(valueAt(row, "quantity"));
+        const availableValue = valueAt(row, "available");
+        const available = availableValue === undefined || availableValue === "" ? quantity : Number(availableValue);
+        const price = Number(valueAt(row, "price") || 0);
+        if (!name) errors.push(t(`Linha ${line}: nome em falta.`, `Row ${line}: missing name.`));
+        if (!category) errors.push(t(`Linha ${line}: categoria em falta.`, `Row ${line}: missing category.`));
+        if (!Number.isSafeInteger(quantity) || quantity < 1) errors.push(t(`Linha ${line}: quantidade inválida.`, `Row ${line}: invalid quantity.`));
+        if (!Number.isSafeInteger(available) || available < 0 || available > quantity) errors.push(t(`Linha ${line}: disponibilidade inválida.`, `Row ${line}: invalid availability.`));
+        if (!Number.isSafeInteger(price) || price < 0) errors.push(t(`Linha ${line}: preço inválido.`, `Row ${line}: invalid price.`));
+        if (!name || !category || !Number.isSafeInteger(quantity) || quantity < 1 || !Number.isSafeInteger(available) || available < 0 || available > quantity || !Number.isSafeInteger(price) || price < 0) return [];
+        const statusValue = String(valueAt(row, "status") || "Available");
+        return [{
+          id: Date.now() + index,
+          name,
+          category,
+          quantity,
+          available,
+          status: (["Available", "Reserved", "Rented"].includes(statusValue) ? statusValue : "Available") as ItemStatus,
+          price,
+          currency: String(valueAt(row, "currency") || "MZN").toUpperCase(),
+          storageLocation: String(valueAt(row, "location") || ""),
+          condition: String(valueAt(row, "condition") || t("Bom", "Good")),
+          description: String(valueAt(row, "description") || ""),
+          sku: String(valueAt(row, "sku") || ""),
+          replacementValue: Number(valueAt(row, "replacementvalue") || 0),
+          minStock: Number(valueAt(row, "minstock") || 0),
+          tone: "sand",
+          symbol: initials(name),
+        }];
+      });
+      if (errors.length) {
+        setImportReport({
+          title: t("Validação encontrou erros", "Validation found errors"),
+          detail: t("Nenhum artigo foi gravado. Corrija o ficheiro e tente novamente.", "No items were saved. Fix the file and try again."),
+          errors: errors.slice(0, 30),
+        });
+        return;
+      }
+      if (!imported.length) throw new Error(t("O ficheiro não contém artigos.", "The file contains no items."));
+      if (await persist("importItems", { items: imported })) {
+        setImportReport({
+          title: t("Importação concluída", "Import complete"),
+          detail: t(`${imported.length} artigos foram validados e importados.`, `${imported.length} items were validated and imported.`),
+          errors: [],
+        });
+        setReloadToken((value) => value + 1);
+      }
+    } catch (error) {
+      setImportReport({
+        title: t("Não foi possível ler o ficheiro", "Could not read the file"),
+        detail: error instanceof Error ? error.message : t("Use um ficheiro CSV ou XLSX válido.", "Use a valid CSV or XLSX file."),
+        errors: [],
+      });
+    } finally {
+      event.target.value = "";
+    }
   }
 
   return (
@@ -347,9 +1805,14 @@ export default function DecorApp() {
           <span>Trove</span>
         </button>
         <div className="workspace-chip">
-          <span className="workspace-avatar">T</span>
-          <span><strong>Terra & Table</strong><small>{plan} plan</small></span>
-          <b>⌄</b>
+          <span className="workspace-avatar">{initials(workspace?.name || profile.businessName).slice(0, 1)}</span>
+          <span>
+            {workspaces.length > 1
+              ? <select aria-label={t("Empresa activa", "Active business")} value={workspace?.id || ""} onChange={(event) => switchWorkspace(Number(event.target.value))}>{workspaces.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>
+              : <strong>{workspace?.name || profile.businessName}</strong>}
+            <small>{plan} plan</small>
+          </span>
+          <b title={roleLabel(role, t)}>●</b>
         </div>
         <nav aria-label={t("Navegação principal", "Primary navigation")}>
           {navigation.map((item) => (
@@ -365,11 +1828,11 @@ export default function DecorApp() {
             <span><strong>{t("Plano", "Plan")} {plan}</strong><small>{plan === "Network" ? t("Equipa ilimitada · Aluguer local", "Unlimited team · Local rentals") : t("Gestão essencial", "Inventory essentials")}</small></span>
             <span>›</span>
           </button>
-          <button className="user-row" onClick={() => setView("profile")}>
-            <span className="user-avatar">AM</span>
-            <span><strong>Amelia Moss</strong><small>{t("Proprietária", "Owner")}</small></span>
-            <span>•••</span>
-          </button>
+          <div className="user-row">
+            <span className="user-avatar">{initials(initialUser.displayName)}</span>
+            <button onClick={() => setView("profile")}><strong>{initialUser.displayName}</strong><small>{roleLabel(role, t)}</small></button>
+            <a href="/signout-with-chatgpt?return_to=%2F" aria-label={t("Terminar sessão", "Sign out")} title={t("Terminar sessão", "Sign out")}>↗</a>
+          </div>
         </div>
       </aside>
 
@@ -377,25 +1840,38 @@ export default function DecorApp() {
         <header className="topbar">
           <button className="mobile-logo" onClick={() => setView("home")}><span className="brand-mark"><i /><i /><i /></span>Trove</button>
           <div className="topbar-actions">
+            {!isOnline && <span className="connection-status" role="status">{t("Sem ligação · consulta", "Offline · read only")}</span>}
+            {installPrompt && <button className="install-action" onClick={installApplication}>{t("Instalar", "Install")}</button>}
+            {workspaces.length > 1 && <select className="mobile-workspace-picker" aria-label={t("Empresa activa", "Active business")} value={workspace?.id || ""} onChange={(event) => switchWorkspace(Number(event.target.value))}>{workspaces.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select>}
             <label className="language-picker" aria-label={t("Idioma", "Language")}><span>文</span><select value={language} onChange={(event) => changeLanguage(event.target.value as Language)}><option value="pt">PT</option><option value="en">EN</option></select></label>
             <button className="icon-button" aria-label={t("Pesquisar", "Search")} onClick={() => setView("storage")}>⌕</button>
-            <button className="icon-button notification" aria-label={t("Notificações", "Notifications")}>♢<i /></button>
-            <div className="team-faces" aria-label={t("3 membros da equipa", "3 team members")}>
-              <span>AM</span><span>JR</span><span>SK</span>
-              <button onClick={() => setTeamOpen(true)} aria-label={t("Convidar colaborador", "Invite teammate")}>+</button>
+            <button className="icon-button notification" aria-label={t("Notificações", "Notifications")} onClick={() => setNotificationOpen(true)}>♢{unreadCount > 0 && <i />} {unreadCount > 0 && <em>{unreadCount > 9 ? "9+" : unreadCount}</em>}</button>
+            <div className="team-faces" aria-label={t(`${activeMembers.length} membros da equipa`, `${activeMembers.length} team members`)}>
+              {activeMembers.slice(0, 3).map((member) => <span key={`${member.id}-${member.email}`}>{initials(member.displayName || member.email)}</span>)}
+              {canManageTeam && <button onClick={() => setTeamOpen(true)} aria-label={t("Convidar colaborador", "Invite teammate")}>+</button>}
             </div>
           </div>
         </header>
 
         <div className="page-content">
+          {invitations.length > 0 && <section className="invitation-banner">
+            <span>✦</span>
+            <div><strong>{t("Convite para colaborar", "Invitation to collaborate")}</strong><small>{t(`${invitations[0].businessName} convidou-o como ${roleLabel(invitations[0].role, t)}.`, `${invitations[0].businessName} invited you as ${roleLabel(invitations[0].role, t)}.`)}</small></div>
+            <button className="button-secondary" onClick={() => declineInvitation(invitations[0])}>{t("Recusar", "Decline")}</button>
+            <button className="button-primary" onClick={() => acceptInvitation(invitations[0])}>{t("Aceitar", "Accept")}</button>
+          </section>}
           {view === "home" && (
             <Overview
               language={language}
               t={t}
               items={items}
               reservations={reservations}
+              profile={profile}
+              memberCount={activeMembers.length}
+              pushState={pushState}
+              userName={initialUser.fullName || initialUser.displayName.split("@")[0]}
               setView={setView}
-              openAdd={() => setAddOpen(true)}
+              openAdd={() => canManageInventory ? setAddOpen(true) : showToast(t("A sua função não permite alterar o inventário.", "Your role cannot change inventory."))}
               openReserve={openReserve}
             />
           )}
@@ -414,11 +1890,13 @@ export default function DecorApp() {
               setCategoryFilter={setCategoryFilter}
               sort={sort}
               setSort={setSort}
-              openAdd={() => setAddOpen(true)}
-              openCategories={() => setCategoryOpen(true)}
+              openAdd={() => canManageInventory ? setAddOpen(true) : showToast(t("A sua função não permite alterar o inventário.", "Your role cannot change inventory."))}
+              openCategories={() => canManageInventory ? setCategoryOpen(true) : showToast(t("A sua função não permite gerir categorias.", "Your role cannot manage categories."))}
               openReserve={openReserve}
               exportInventory={exportInventory}
               importInventory={() => importRef.current?.click()}
+              openKits={() => canManageInventory ? setKitsOpen(true) : showToast(t("A sua função não permite gerir kits.", "Your role cannot manage kits."))}
+              manageItem={(item) => canManageInventory ? setManagedItem(item) : showToast(t("A sua função permite apenas consultar.", "Your role is view-only."))}
               bulkStatus={bulkStatus}
               bulkRemove={bulkRemove}
               removeItem={(item) => {
@@ -428,50 +1906,192 @@ export default function DecorApp() {
               }}
             />
           )}
-          {view === "calendar" && <Calendar language={language} t={t} reservations={reservations} openAdd={() => { setSelectedItem(null); setReserveOpen(true); }} />}
+          {view === "events" && <Events
+            language={language}
+            t={t}
+            events={events}
+            tasks={eventTasks}
+            clients={clients}
+            reservations={reservations}
+            canManage={canManageReservations}
+            openCreate={() => canManageReservations
+              ? setDirectoryOpen(true)
+              : showToast(t("A sua função não permite criar eventos.", "Your role cannot create events."))}
+            openCalendar={() => setView("calendar")}
+            openEvent={setManagedEvent}
+          />}
+          {view === "calendar" && <Calendar
+            language={language}
+            t={t}
+            events={events}
+            clients={clients}
+            reservations={reservations}
+            openAdd={() => {
+              if (canManageReservations) {
+                setSelectedItem(null);
+                setManagedReservation(null);
+                setReserveOpen(true);
+              } else showToast(t("A sua função não permite criar reservas.", "Your role cannot create reservations."));
+            }}
+            openDirectory={() => setDirectoryOpen(true)}
+            openEvent={setManagedEvent}
+            onEdit={editReservation}
+            onTransition={transitionReservation}
+          />}
           {view === "network" && (
             <Network
-              plan={plan}
+              plan={networkEnabled ? "Network" : "Basic"}
               t={t}
+              language={language}
               query={networkQuery}
               setQuery={setNetworkQuery}
-              items={filteredNetwork}
-              requested={requested}
-              onRequest={(name) => {
-                setRequested((current) => [...current, name]);
-                showToast(t(`Pedido enviado para ${name}`, `Request sent for ${name}`));
-              }}
+              listings={networkListings}
+              ownListings={ownNetworkListings}
+              requests={networkRequests}
+              reviews={networkReviews}
+              businessId={workspace?.id || 0}
+              tab={networkTab}
+              setTab={setNetworkTab}
+              startDate={networkStart}
+              setStartDate={setNetworkStart}
+              endDate={networkEnd}
+              setEndDate={setNetworkEnd}
+              quantity={networkQuantity}
+              setQuantity={setNetworkQuantity}
+              distance={networkDistance}
+              setDistance={setNetworkDistance}
+              maxPrice={networkMaxPrice}
+              setMaxPrice={setNetworkMaxPrice}
+              locationEnabled={Boolean(networkCoordinates)}
+              locate={locateForNetwork}
+              loading={networkLoading}
+              onRequest={setRequestedListing}
+              onPublish={(listing) => setManagedNetworkListing(listing || null)}
+              onToggle={(listing) => runNetworkAction(
+                "setListingActive",
+                { id: listing.id, active: !listing.active },
+                listing.active ? "Publicação pausada" : "Publicação reactivada",
+                listing.active ? "Listing paused" : "Listing reactivated",
+              )}
+              onManageRequest={setManagedNetworkRequest}
               openPlans={() => setView("plans")}
             />
           )}
-          {view === "profile" && <ProfileEditor t={t} profile={profile} setProfile={setProfile} save={saveProfile} saving={saving} />}
-          {view === "plans" && <Plans t={t} plan={plan} choose={(next) => { setPlan(next); showToast(t(`Plano ${next} seleccionado`, `${next} plan selected`)); }} />}
+          {view === "profile" && <>
+            <ProfileEditor t={t} profile={profile} itemCount={items.reduce((sum, item) => sum + item.quantity, 0)} setProfile={setProfile} save={canManageProfile ? saveProfile : () => showToast(t("A sua função não permite editar o perfil.", "Your role cannot edit the profile."))} saving={saving} />
+            <LaunchTools
+              t={t}
+              online={isOnline}
+              pushState={pushState}
+              canMonitor={canManageTeam}
+              canBackup={canManageBilling}
+              enquiryCount={publicEnquiries.filter((entry) => entry.status === "New").length}
+              emailConfigured={Boolean(communication?.configured)}
+              install={installApplication}
+              enablePush={enableBrowserAlerts}
+              feedback={() => setFeedbackOpen(true)}
+              monitoring={loadOperations}
+              enquiries={() => setEnquiriesOpen(true)}
+              backup={exportWorkspaceBackup}
+            />
+          </>}
+          {view === "plans" && <Plans
+            t={t}
+            language={language}
+            plan={plan}
+            subscription={subscription}
+            payments={payments}
+            billing={billing}
+            canManageBilling={canManageBilling}
+            choose={startSubscriptionCheckout}
+            changeCancellation={changeCancellation}
+            openReceipt={setSelectedReceipt}
+          />}
         </div>
       </section>
 
       <nav className="mobile-nav" aria-label={t("Navegação móvel", "Mobile navigation")}>
-        {navigation.slice(0, 4).map((item) => (
+        {navigation.map((item) => (
           <button key={item.id} className={cls(view === item.id && "active")} onClick={() => setView(item.id)}>
-            <span>{item.icon}</span><small>{item.id === "network" ? t("Rede", "Network") : item.label}</small>
+            <span>{item.icon}</span><small>{item.id === "network" ? t("Rede", "Network") : item.id === "profile" ? t("Perfil", "Profile") : item.label}</small>
           </button>
         ))}
-        <button className={cls(view === "profile" && "active")} onClick={() => setView("profile")}><span>◇</span><small>{t("Perfil", "Profile")}</small></button>
       </nav>
-      <input className="visually-hidden" ref={importRef} type="file" accept=".csv,text/csv" onChange={importInventory} />
+      <input className="visually-hidden" ref={importRef} type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={importInventory} />
+
+      {managedNetworkListing !== undefined && (
+        <Modal
+          wide
+          title={managedNetworkListing ? t("Editar publicação", "Edit listing") : t("Publicar artigo", "Publish item")}
+          subtitle={t("Defina preço, caução, quantidade, entrega e localização para a rede.", "Set price, deposit, quantity, delivery, and location for the network.")}
+          onClose={() => setManagedNetworkListing(undefined)}
+        >
+          <NetworkListingForm
+            t={t}
+            items={items}
+            listing={managedNetworkListing}
+            profileLocation={profile.location}
+            coordinates={networkCoordinates}
+            submit={publishNetworkListing}
+            close={() => setManagedNetworkListing(undefined)}
+          />
+        </Modal>
+      )}
+
+      {requestedListing && (
+        <Modal
+          title={t("Pedir aluguer", "Request rental")}
+          subtitle={`${requestedListing.name} · ${requestedListing.ownerName}`}
+          onClose={() => setRequestedListing(null)}
+        >
+          <NetworkRentalForm
+            t={t}
+            listing={requestedListing}
+            startDate={networkStart}
+            endDate={networkEnd}
+            quantity={networkQuantity}
+            submit={createNetworkRequest}
+            close={() => setRequestedListing(null)}
+          />
+        </Modal>
+      )}
+
+      {managedNetworkRequest && (
+        <Modal
+          wide
+          title={`${t("Pedido", "Request")} #${managedNetworkRequest.id}`}
+          subtitle={`${managedNetworkRequest.itemName} · ${managedNetworkRequest.ownerName} ↔ ${managedNetworkRequest.requesterName}`}
+          onClose={() => setManagedNetworkRequest(null)}
+        >
+          <NetworkRequestManager
+            t={t}
+            language={language}
+            request={networkRequests.find((entry) => entry.id === managedNetworkRequest.id) || managedNetworkRequest}
+            businessId={workspace?.id || 0}
+            action={runNetworkAction}
+          />
+        </Modal>
+      )}
 
       {addOpen && (
         <Modal title={t("Adicionar ao inventário", "Add to Inventory")} subtitle={t("Crie uma ficha completa que toda a equipa consegue consultar.", "Create a complete record your whole team can see.")} onClose={() => setAddOpen(false)}>
           <form onSubmit={handleAddItem} className="modal-form">
-            <label>{t("Fotografia do item", "Item photo")}<span className="photo-upload-field"><span>▧</span><span><strong>{t("Carregar fotografia", "Upload photo")}</strong><small>JPG ou PNG · máx. 5 MB</small></span><input name="photo" type="file" accept="image/png,image/jpeg" /></span></label>
+            <label>{t("Fotografias do item", "Item photos")}<span className="photo-upload-field"><span>▧</span><span><strong>{t("Carregar até 8 fotografias", "Upload up to 8 photos")}</strong><small>JPG ou PNG · máx. 5 MB cada</small></span><input name="photo" type="file" multiple accept="image/png,image/jpeg" /></span></label>
             <label>{t("Nome do item", "Item name")}<input name="name" placeholder={t("ex.: Plinto de travertino", "e.g. Travertine plinth")} autoFocus required /></label>
+            <label>{t("Descrição", "Description")}<textarea name="description" rows={3} placeholder={t("Dimensões, materiais e cuidados especiais…", "Dimensions, materials, and special care…")} /></label>
             <div className="form-grid">
               <label>{t("Categoria", "Category")}<select name="category">{categories.map((category) => <option key={category}>{category}</option>)}</select></label>
+              <label>SKU<input name="sku" placeholder="CAD-001" /></label>
+            </div>
+            <div className="form-grid">
               <label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min="1" defaultValue="1" required /></label>
+              <label>{t("Stock mínimo", "Minimum stock")}<input name="minStock" type="number" min="0" defaultValue="0" /></label>
             </div>
             <div className="form-grid">
               <label>{t("Preço de aluguer / dia", "Rental price / day")}<input name="price" type="number" min="0" defaultValue="500" required /></label>
               <label>{t("Moeda", "Currency")}<select name="currency" defaultValue="MZN"><option value="MZN">MZN · Metical</option><option value="ZAR">ZAR · Rand</option><option value="USD">USD · Dollar</option><option value="EUR">EUR · Euro</option></select></label>
             </div>
+            <label>{t("Valor de reposição (MZN)", "Replacement value (MZN)")}<input name="replacementValue" type="number" min="0" defaultValue="0" /></label>
             <div className="form-grid">
               <label>{t("Localização no armazém", "Storage location")}<input name="location" placeholder={t("Corredor B · Prateleira 04", "Aisle B · Shelf 04")} /></label>
               <label>{t("Condição", "Condition")}<select name="condition"><option>{t("Excelente", "Excellent")}</option><option>{t("Bom", "Good")}</option><option>{t("Requer inspecção", "Needs inspection")}</option><option>{t("Em manutenção", "In maintenance")}</option></select></label>
@@ -482,23 +2102,58 @@ export default function DecorApp() {
       )}
 
       {reserveOpen && (
-        <Modal title={t("Nova reserva", "New reservation")} subtitle={selectedItem?.name || t("Escolha o item e registe os detalhes do evento.", "Choose the item and record the event details.")} onClose={() => setReserveOpen(false)}>
-          <form onSubmit={handleReservation} className="modal-form">
-            <label>{t("Item", "Item")}<select name="itemId" defaultValue={selectedItem?.id || items[0]?.id}>{categories.map((category) => <optgroup label={category} key={category}>{items.filter((item) => item.category === category).map((item) => <option value={item.id} key={item.id}>{item.name} · {item.available} {t("disponíveis", "available")}</option>)}</optgroup>)}</select></label>
-            <div className="form-grid">
-              <label>{t("Evento", "Event")}<input name="eventName" placeholder={t("ex.: Casamento Rivera", "e.g. Rivera wedding")} required /></label>
-              <label>{t("Cliente", "Client")}<input name="client" placeholder={t("Nome do cliente", "Client name")} required /></label>
-            </div>
-            <label>{t("Contacto do cliente", "Client contact")}<input name="contact" placeholder="+258 84 000 0000" /></label>
-            <div className="form-grid">
-              <label>{t("Data de início", "Start date")}<input name="start" type="date" defaultValue="2026-08-08" required /></label>
-              <label>{t("Data de fim", "End date")}<input name="end" type="date" defaultValue="2026-08-09" required /></label>
-            </div>
-            <label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min="1" max={selectedItem?.available || 999} defaultValue="1" required /></label>
-            <label>{t("Notas de logística", "Logistics notes")}<textarea name="notes" rows={3} placeholder={t("Horário de recolha, endereço, responsável, cuidados especiais…", "Pickup time, address, owner, special handling…")} /></label>
-            <div className="availability-note"><span>✓</span> {selectedItem?.available || items[0]?.available || 0} {t("unidades disponíveis neste momento", "units currently available")}</div>
-            <div className="modal-actions"><button type="button" className="button-secondary" onClick={() => setReserveOpen(false)}>{t("Cancelar", "Cancel")}</button><button className="button-primary">{t("Confirmar reserva", "Confirm reservation")}</button></div>
-          </form>
+        <Modal wide title={managedReservation ? t("Editar reserva", "Edit reservation") : t("Nova reserva", "New reservation")} subtitle={t("Cliente, evento, artigos, valores e logística numa única reserva.", "Client, event, items, pricing, and logistics in one reservation.")} onClose={() => { setReserveOpen(false); setManagedReservation(null); }}>
+          <ReservationComposer
+            items={items}
+            clients={clients}
+            events={events}
+            selectedItem={selectedItem}
+            initial={managedReservation}
+            language={language}
+            t={t}
+            onSubmit={handleReservation}
+            onCancel={() => { setReserveOpen(false); setManagedReservation(null); }}
+          />
+        </Modal>
+      )}
+
+      {directoryOpen && (
+        <Modal wide title={t("Clientes e eventos", "Clients & events")} subtitle={t("Mantenha os contactos e próximos trabalhos organizados.", "Keep contacts and upcoming jobs organized.")} onClose={() => setDirectoryOpen(false)}>
+          <RelationshipManager clients={clients} events={events} t={t} onAddClient={saveDirectoryClient} onAddEvent={saveDirectoryEvent} />
+        </Modal>
+      )}
+
+      {managedEvent && (
+        <Modal wide title={managedEvent.name} subtitle={t("Ficha operacional completa do evento.", "Complete operational event record.")} onClose={() => setManagedEvent(null)}>
+          <EventManager
+            event={managedEvent}
+            clients={clients}
+            members={activeMembers}
+            reservations={reservations.filter((reservation) => reservation.eventId === managedEvent.id)}
+            tasks={eventTasks.filter((task) => task.eventId === managedEvent.id)}
+            expenses={eventExpenses.filter((expense) => expense.eventId === managedEvent.id)}
+            suppliers={suppliers}
+            documents={eventDocuments.filter((document) => document.eventId === managedEvent.id)}
+            language={language}
+            t={t}
+            canManage={canManageReservations}
+            onSubmit={saveManagedEvent}
+            onTransitionEvent={transitionManagedEvent}
+            onDuplicate={duplicateManagedEvent}
+            onArchive={archiveManagedEvent}
+            onAddTask={addManagedEventTask}
+            onUpdateTask={updateManagedEventTask}
+            onTransitionTask={transitionManagedEventTask}
+            onDeleteTask={deleteManagedEventTask}
+            onAddSupplier={addManagedSupplier}
+            onAddExpense={addManagedEventExpense}
+            onUpdateExpense={updateManagedEventExpense}
+            onDeleteExpense={deleteManagedEventExpense}
+            onUploadDocument={uploadManagedEventDocument}
+            onDownloadDocument={downloadManagedEventDocument}
+            onDeleteDocument={deleteManagedEventDocument}
+            onCancel={() => setManagedEvent(null)}
+          />
         </Modal>
       )}
 
@@ -509,8 +2164,147 @@ export default function DecorApp() {
       )}
 
       {teamOpen && (
-        <Modal title={t("Equipa e permissões", "Team & permissions")} subtitle={t("Convide colaboradores e defina quem pode editar, reservar ou apenas consultar.", "Invite collaborators and choose who can edit, reserve, or only view.")} onClose={() => setTeamOpen(false)}>
-          <TeamManager t={t} onInvite={(email, role) => { persist("inviteMember", { id: Date.now(), email, role }); showToast(t("Convite registado como pendente", "Invitation recorded as pending")); }} />
+        <Modal wide title={t("Equipa e permissões", "Team & permissions")} subtitle={t("Convide colaboradores, acompanhe a validade e controle os acessos.", "Invite collaborators, track expiry, and control access.")} onClose={() => setTeamOpen(false)}>
+          <TeamManager
+            t={t}
+            members={members}
+            canInvite={canManageTeam}
+            onInvite={async (email, role) => {
+              const id = Date.now();
+              const result = await persist("inviteMember", { id, email, role });
+              if (!result) return "";
+              setReloadToken((value) => value + 1);
+              showToast(result.emailSent
+                ? t("Convite enviado por email e válido por 7 dias", "Invitation emailed and valid for 7 days")
+                : t("Convite criado; copie o link para partilhar", "Invitation created; copy the link to share"));
+              return result.inviteUrl || "";
+            }}
+            onResend={async (member) => {
+              const result = await persist("resendInvitation", { id: member.id });
+              if (result) {
+                setReloadToken((value) => value + 1);
+                showToast(result.emailSent
+                  ? t("Convite renovado e enviado por email", "Invitation renewed and emailed")
+                  : t("Convite renovado; copie o link", "Invitation renewed; copy the link"));
+                return result.inviteUrl || "";
+              }
+              return "";
+            }}
+            onRevoke={async (member) => {
+              if (await persist("revokeInvitation", { id: member.id })) {
+                setReloadToken((value) => value + 1);
+                showToast(t("Convite revogado", "Invitation revoked"));
+              }
+            }}
+            onRole={async (member, nextRole) => {
+              if (await persist("updateMemberRole", { memberId: member.id, role: nextRole })) {
+                setReloadToken((value) => value + 1);
+                showToast(t("Permissão actualizada", "Permission updated"));
+              }
+            }}
+            onRemove={async (member) => {
+              if (await persist("removeMember", { memberId: member.id })) {
+                setReloadToken((value) => value + 1);
+                showToast(t("Membro removido", "Member removed"));
+              }
+            }}
+            onActivity={() => { setTeamOpen(false); setActivityOpen(true); }}
+          />
+        </Modal>
+      )}
+
+      {notificationOpen && (
+        <Modal title={t("Notificações", "Notifications")} subtitle={t("Reservas, inventário e actividade da equipa num só lugar.", "Reservations, inventory, and team activity in one place.")} onClose={() => setNotificationOpen(false)}>
+          <NotificationCenter
+            notifications={notifications}
+            language={language}
+            t={t}
+            onRead={markNotification}
+            onReadAll={markAllNotifications}
+            onEnableBrowser={enableBrowserAlerts}
+          />
+        </Modal>
+      )}
+
+      {activityOpen && (
+        <Modal wide title={t("Histórico de actividade", "Activity history")} subtitle={t("Registo cronológico das alterações importantes da empresa.", "Chronological record of important business changes.")} onClose={() => setActivityOpen(false)}>
+          <ActivityLog entries={auditLogs} language={language} t={t} />
+        </Modal>
+      )}
+
+      {feedbackOpen && (
+        <Modal title={t("Feedback da fase beta", "Beta feedback")} subtitle={t("Conte-nos o que ajuda e o que deve melhorar antes do lançamento.", "Tell us what helps and what should improve before launch.")} onClose={() => setFeedbackOpen(false)}>
+          <form className="modal-form beta-feedback-form" onSubmit={submitFeedback}>
+            <div className="form-grid">
+              <label>{t("Área", "Area")}<select name="category" defaultValue="experience"><option value="experience">{t("Experiência geral", "Overall experience")}</option><option value="inventory">{t("Inventário", "Inventory")}</option><option value="reservations">{t("Reservas", "Reservations")}</option><option value="network">Trove Network</option><option value="other">{t("Outra", "Other")}</option></select></label>
+              <label>{t("Avaliação", "Rating")}<select name="rating" defaultValue="5"><option value="5">5 · {t("Excelente", "Excellent")}</option><option value="4">4 · {t("Boa", "Good")}</option><option value="3">3 · {t("Razoável", "Fair")}</option><option value="2">2 · {t("Fraca", "Poor")}</option><option value="1">1 · {t("Muito fraca", "Very poor")}</option></select></label>
+            </div>
+            <label>{t("Comentário", "Comment")}<textarea name="message" rows={6} minLength={10} maxLength={1200} placeholder={t("Descreva o fluxo, problema ou sugestão…", "Describe the workflow, issue, or suggestion…")} required /></label>
+            <div className="modal-actions"><button type="button" className="button-secondary" onClick={() => setFeedbackOpen(false)}>{t("Cancelar", "Cancel")}</button><button className="button-primary">{t("Enviar feedback", "Send feedback")}</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {enquiriesOpen && (
+        <Modal wide title={t("Pedidos do perfil público", "Public profile enquiries")} subtitle={t("Contactos recebidos através da página da empresa.", "Contacts received through the business page.")} onClose={() => setEnquiriesOpen(false)}>
+          <EnquiryManager
+            enquiries={publicEnquiries}
+            emailDeliveries={emailDeliveries}
+            language={language}
+            t={t}
+            onStatus={updateEnquiryStatus}
+          />
+        </Modal>
+      )}
+
+      {operationsOpen && (
+        <Modal title={t("Estado operacional", "Operational status")} subtitle={t("Sinais técnicos das últimas 24 horas para esta empresa.", "Technical signals from the last 24 hours for this business.")} onClose={() => setOperationsOpen(false)}>
+          {operationsStatus ? <div className="operations-status">
+            <header><i /><span><strong>{t("Serviço operacional", "Service operational")}</strong><small>{new Date(operationsStatus.checkedAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ")}</small></span></header>
+            <div><article><strong>{operationsStatus.clientErrors24h}</strong><small>{t("erros de interface / 24 h", "interface errors / 24 h")}</small></article><article><strong>{operationsStatus.pushDevices}</strong><small>{t("dispositivos com push", "push-enabled devices")}</small></article><article><strong>{operationsStatus.feedbackEntries}</strong><small>{t("respostas beta", "beta responses")}</small></article></div>
+            <p>{operationsStatus.pushConfigured ? t("O serviço de notificações está configurado.", "The notification service is configured.") : t("As chaves de notificações ainda não estão configuradas.", "Notification keys are not configured yet.")}</p>
+          </div> : <div className="manager-empty">◇<strong>{t("A verificar o serviço…", "Checking the service…")}</strong></div>}
+        </Modal>
+      )}
+
+      {selectedReceipt && (
+        <Modal title={t("Recibo de pagamento", "Payment receipt")} subtitle={selectedReceipt.receiptNumber || selectedReceipt.reference} onClose={() => setSelectedReceipt(null)}>
+          <Receipt payment={selectedReceipt} businessName={workspace?.name || profile.businessName} language={language} t={t} />
+        </Modal>
+      )}
+
+      {managedItem && (
+        <Modal wide title={managedItem.name} subtitle={t("Ficha operacional, galeria, stock e manutenção.", "Operational record, gallery, stock, and maintenance.")} onClose={() => setManagedItem(null)}>
+          <ItemManager
+            item={managedItem}
+            categories={categories}
+            photos={photos.filter((photo) => photo.itemId === managedItem.id)}
+            movements={movements.filter((movement) => movement.itemId === managedItem.id)}
+            maintenance={maintenance.filter((record) => record.itemId === managedItem.id)}
+            language={language}
+            t={t}
+            onUpdate={updateItem}
+            onAddPhotos={addPhotosToItem}
+            onRemovePhoto={removePhoto}
+            onAdjustStock={adjustItemStock}
+            onAddMaintenance={addMaintenanceRecord}
+            onCompleteMaintenance={completeMaintenance}
+          />
+        </Modal>
+      )}
+
+      {kitsOpen && (
+        <Modal wide title={t("Kits e conjuntos", "Kits & sets")} subtitle={t("Agrupe artigos alugados em conjunto e defina um preço único.", "Group items rented together and set one price.")} onClose={() => setKitsOpen(false)}>
+          <KitManager items={items} kits={kits} language={language} t={t} onCreate={createKit} onDelete={deleteKit} />
+        </Modal>
+      )}
+
+      {importReport && (
+        <Modal title={importReport.title} subtitle={importReport.detail} onClose={() => setImportReport(null)}>
+          <div className="import-report">
+            {importReport.errors.length > 0 ? <ul>{importReport.errors.map((error, index) => <li key={`${error}-${index}`}>{error}</li>)}</ul> : <div className="import-success">✓</div>}
+            <div className="modal-actions"><button className="button-primary" onClick={() => setImportReport(null)}>{t("Fechar", "Close")}</button></div>
+          </div>
         </Modal>
       )}
 
@@ -523,14 +2317,24 @@ function PageHeading({ eyebrow, title, detail, action }: { eyebrow?: string; tit
   return <div className="page-heading"><div>{eyebrow && <span className="eyebrow">{eyebrow}</span>}<h1>{title}</h1><p>{detail}</p></div>{action}</div>;
 }
 
-function Overview({ language, t, items, reservations, setView, openAdd, openReserve }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[]; setView: (view: View) => void; openAdd: () => void; openReserve: (item: Item) => void }) {
+function Overview({ language, t, items, reservations, profile, memberCount, pushState, userName, setView, openAdd, openReserve }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[]; profile: Profile; memberCount: number; pushState: "idle" | "active" | "unsupported" | "unconfigured"; userName: string; setView: (view: View) => void; openAdd: () => void; openReserve: (item: Item) => void }) {
   const total = items.reduce((sum, item) => sum + item.quantity, 0);
   const available = items.reduce((sum, item) => sum + item.available, 0);
   const utilization = total ? Math.round(((total - available) / total) * 100) : 0;
-  const estimatedRevenue = items.reduce((sum, item) => sum + (item.quantity - item.available) * (item.price || 0), 0);
+  const estimatedRevenue = reservations.filter((reservation) => reservation.status !== "Cancelled").reduce((sum, reservation) => sum + (reservation.total || 0), 0);
   return (
     <>
-      <PageHeading eyebrow={t("SEGUNDA-FEIRA, 27 DE JULHO", "MONDAY, 27 JULY")} title={t("Bom dia, Amelia.", "Good morning, Amelia.")} detail={t("Veja a operação, as reservas e o desempenho do seu inventário.", "See your operations, reservations, and inventory performance.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
+      <PageHeading eyebrow={t("O SEU ESPAÇO DE TRABALHO", "YOUR WORKSPACE")} title={t(`Olá, ${userName}.`, `Hello, ${userName}.`)} detail={t("Veja a operação, as reservas e o desempenho do seu inventário.", "See your operations, reservations, and inventory performance.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
+      <OnboardingChecklist
+        t={t}
+        items={items}
+        reservations={reservations}
+        profile={profile}
+        memberCount={memberCount}
+        pushState={pushState}
+        setView={setView}
+        openAdd={openAdd}
+      />
       <section className="stat-grid">
         <article><div className="stat-icon terracotta">▦</div><div><span>{t("Total de peças", "Total pieces")}</span><strong>{total}</strong><small><b>+12</b> {t("este mês", "this month")}</small></div></article>
         <article><div className="stat-icon olive">✓</div><div><span>{t("Disponíveis agora", "Available now")}</span><strong>{available}</strong><small>{Math.round((available / Math.max(total, 1)) * 100)}% {t("da colecção", "of collection")}</small></div></article>
@@ -569,7 +2373,33 @@ function Overview({ language, t, items, reservations, setView, openAdd, openRese
   );
 }
 
-function Storage({ items, allItems, language, t, categories, query, setQuery, filter, setFilter, categoryFilter, setCategoryFilter, sort, setSort, openAdd, openCategories, openReserve, removeItem, exportInventory, importInventory, bulkStatus, bulkRemove }: { items: Item[]; allItems: Item[]; language: Language; t: Translator; categories: string[]; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; categoryFilter: string; setCategoryFilter: (value: string) => void; sort: string; setSort: (value: string) => void; openAdd: () => void; openCategories: () => void; openReserve: (item: Item) => void; removeItem: (item: Item) => void; exportInventory: () => void; importInventory: () => void; bulkStatus: (ids: number[], status: ItemStatus) => void; bulkRemove: (ids: number[]) => void }) {
+function OnboardingChecklist({ t, items, reservations, profile, memberCount, pushState, setView, openAdd }: {
+  t: Translator;
+  items: Item[];
+  reservations: Reservation[];
+  profile: Profile;
+  memberCount: number;
+  pushState: "idle" | "active" | "unsupported" | "unconfigured";
+  setView: (view: View) => void;
+  openAdd: () => void;
+}) {
+  const steps = [
+    { done: Boolean(profile.bio && profile.location && profile.email), label: t("Completar perfil público", "Complete public profile"), action: () => setView("profile") },
+    { done: items.length > 0, label: t("Adicionar primeiro artigo", "Add first item"), action: openAdd },
+    { done: reservations.length > 0, label: t("Criar primeira reserva", "Create first reservation"), action: () => setView("calendar") },
+    { done: memberCount > 1, label: t("Convidar a equipa", "Invite your team"), action: () => setView("profile") },
+    { done: pushState === "active", label: t("Activar alertas no dispositivo", "Enable device alerts"), action: () => setView("profile") },
+  ];
+  const complete = steps.filter((step) => step.done).length;
+  if (complete === steps.length) return null;
+  return <section className="onboarding-card card">
+    <header><div><span className="eyebrow">{t("PRIMEIROS PASSOS", "GETTING STARTED")}</span><h2>{t("Prepare a Trove para a sua equipa", "Prepare Trove for your team")}</h2></div><strong>{complete}/{steps.length}</strong></header>
+    <div className="onboarding-progress"><i style={{ width: `${complete / steps.length * 100}%` }} /></div>
+    <div>{steps.map((step) => <button key={step.label} className={cls(step.done && "done")} onClick={step.action}><span>{step.done ? "✓" : "○"}</span>{step.label}<i>→</i></button>)}</div>
+  </section>;
+}
+
+function Storage({ items, allItems, language, t, categories, query, setQuery, filter, setFilter, categoryFilter, setCategoryFilter, sort, setSort, openAdd, openCategories, openKits, manageItem, openReserve, removeItem, exportInventory, importInventory, bulkStatus, bulkRemove }: { items: Item[]; allItems: Item[]; language: Language; t: Translator; categories: string[]; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; categoryFilter: string; setCategoryFilter: (value: string) => void; sort: string; setSort: (value: string) => void; openAdd: () => void; openCategories: () => void; openKits: () => void; manageItem: (item: Item) => void; openReserve: (item: Item) => void; removeItem: (item: Item) => void; exportInventory: () => void; importInventory: () => void; bulkStatus: (ids: number[], status: ItemStatus) => void; bulkRemove: (ids: number[]) => void }) {
   const [selected, setSelected] = useState<number[]>([]);
   const toggle = (id: number) => setSelected((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
   return (
@@ -577,7 +2407,8 @@ function Storage({ items, allItems, language, t, categories, query, setQuery, fi
       <PageHeading eyebrow={t("ARMAZÉM", "STORAGE")} title={t("Inventário", "Inventory")} detail={t("Fotografias, quantidades, localização, preço e disponibilidade num só lugar.", "Photos, quantities, location, price, and availability in one place.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Adicionar item", "Add item")}</button>} />
       <div className="inventory-actions">
         <button className="button-secondary" onClick={openCategories}>＋ {t("Gerir categorias", "Manage categories")}</button>
-        <button className="button-secondary" onClick={importInventory}>↑ {t("Importar CSV", "Import CSV")}</button>
+        <button className="button-secondary" onClick={openKits}>◇ {t("Kits e conjuntos", "Kits & sets")}</button>
+        <button className="button-secondary" onClick={importInventory}>↑ {t("Importar Excel / CSV", "Import Excel / CSV")}</button>
         <button className="button-secondary" onClick={exportInventory}>↓ {t("Exportar CSV", "Export CSV")}</button>
       </div>
       <div className="toolbar">
@@ -590,12 +2421,12 @@ function Storage({ items, allItems, language, t, categories, query, setQuery, fi
       </div>
       {selected.length > 0 && <div className="bulk-bar"><strong>{selected.length} {t("seleccionados", "selected")}</strong><button onClick={() => { bulkStatus(selected, "Rented"); setSelected([]); }}>{t("Marcar como alugado", "Mark as rented")}</button><button onClick={() => { bulkStatus(selected, "Available"); setSelected([]); }}>{t("Marcar disponível", "Mark available")}</button><button className="danger" onClick={() => { bulkRemove(selected); setSelected([]); }}>{t("Eliminar", "Delete")}</button><button onClick={() => setSelected([])}>×</button></div>}
       <div className="collection-summary"><span><b>{items.length}</b> {t("tipos de item", "item types")}</span><span><b>{allItems.reduce((sum, item) => sum + item.quantity, 0)}</b> {t("peças individuais", "individual pieces")}</span><span><i />{t("Sincronizado agora", "Synced just now")}</span></div>
-      {items.length ? <div className="storage-grid">{items.map((item) => <ItemCard key={item.id} language={language} t={t} item={item} selected={selected.includes(item.id)} onSelect={() => toggle(item.id)} onReserve={() => openReserve(item)} onRemove={() => removeItem(item)} />)}</div> : <div className="empty-state"><span>⌕</span><h3>{t("Nenhum item encontrado", "No items found")}</h3><p>{t("Ajuste os filtros ou adicione um novo item.", "Adjust the filters or add something new.")}</p></div>}
+      {items.length ? <div className="storage-grid">{items.map((item) => <ItemCard key={item.id} language={language} t={t} item={item} selected={selected.includes(item.id)} onSelect={() => toggle(item.id)} onReserve={() => openReserve(item)} onManage={() => manageItem(item)} onRemove={() => removeItem(item)} />)}</div> : <div className="empty-state"><span>⌕</span><h3>{t("Nenhum item encontrado", "No items found")}</h3><p>{t("Ajuste os filtros ou adicione um novo item.", "Adjust the filters or add something new.")}</p></div>}
     </>
   );
 }
 
-function ItemCard({ item, language, t, compact, selected, onSelect, onReserve, onRemove }: { item: Item; language: Language; t: Translator; compact?: boolean; selected?: boolean; onSelect?: () => void; onReserve: () => void; onRemove?: () => void }) {
+function ItemCard({ item, language, t, compact, selected, onSelect, onReserve, onManage, onRemove }: { item: Item; language: Language; t: Translator; compact?: boolean; selected?: boolean; onSelect?: () => void; onReserve: () => void; onManage?: () => void; onRemove?: () => void }) {
   const statusLabel = item.status === "Available" ? t("Disponível", "Available") : item.status === "Reserved" ? t("Reservado", "Reserved") : t("Alugado", "Rented");
   return (
     <article className={cls("item-card", compact && "compact", selected && "selected")}>
@@ -605,16 +2436,570 @@ function ItemCard({ item, language, t, compact, selected, onSelect, onReserve, o
         <h3>{item.name}</h3>
         <strong className="item-price">{formatMoney(item.price || 0, item.currency || "MZN", language)} <small>/ {t("dia", "day")}</small></strong>
         <div className="item-meta"><span><b>{item.available}</b> / {item.quantity} {t("disponíveis", "available")}</span><span className={cls("status-dot", item.status.toLowerCase())}>{statusLabel}</span></div>
-        {!compact && <><div className="item-extra"><span>⌖ {item.storageLocation || t("Local por definir", "Location not set")}</span><span>◇ {item.condition || t("Bom", "Good")}</span></div><div className="item-card-actions"><button onClick={onReserve}>{t("Reservar datas", "Reserve dates")}</button>{onRemove && <button onClick={onRemove} aria-label={t(`Remover ${item.name}`, `Remove ${item.name}`)}>•••</button>}</div></>}
+        {!compact && <><div className="item-extra"><span>⌖ {item.storageLocation || t("Local por definir", "Location not set")}</span><span>◇ {item.condition || t("Bom", "Good")}</span>{item.minStock > 0 && item.available <= item.minStock && <span className="low-stock">! {t("Stock baixo", "Low stock")}</span>}</div><div className="item-card-actions"><button onClick={onReserve}>{t("Reservar", "Reserve")}</button>{onManage && <button className="manage-item" onClick={onManage}>{t("Gerir", "Manage")}</button>}{onRemove && <button onClick={onRemove} aria-label={t(`Remover ${item.name}`, `Remove ${item.name}`)}>×</button>}</div></>}
       </div>
     </article>
   );
 }
 
-function Calendar({ language, t, reservations, openAdd }: { language: Language; t: Translator; reservations: Reservation[]; openAdd: () => void }) {
+function ReservationComposer({ items, clients, events, selectedItem, initial, language, t, onSubmit, onCancel }: {
+  items: Item[];
+  clients: Client[];
+  events: EventRecord[];
+  selectedItem: Item | null;
+  initial: Reservation | null;
+  language: Language;
+  t: Translator;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onCancel: () => void;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const initialLines = Object.fromEntries(
+    (initial?.items || []).map((line) => [line.itemId, line.quantity]),
+  ) as Record<number, number>;
+  if (!initial && selectedItem) initialLines[selectedItem.id] = 1;
+  const [quantities, setQuantities] = useState<Record<number, number>>(initialLines);
+  const [clientChoice, setClientChoice] = useState(String(initial?.clientId || clients[0]?.id || "new"));
+  const [eventChoice, setEventChoice] = useState(String(initial?.eventId || "new"));
+  const initialEvent = events.find((entry) => entry.id === initial?.eventId);
+  const [eventName, setEventName] = useState(initial?.eventName || initialEvent?.name || "");
+  const [venue, setVenue] = useState(initialEvent?.venue || "");
+  const [start, setStart] = useState(initial?.date || initialEvent?.startDate || today);
+  const [end, setEnd] = useState(initial?.endDate || initialEvent?.endDate || today);
+  const [setupTime, setSetupTime] = useState(initialEvent?.setupTime || "");
+  const [pickupTime, setPickupTime] = useState(initialEvent?.pickupTime || "");
+  const [discount, setDiscount] = useState(initial?.discount || 0);
+  const [deliveryFee, setDeliveryFee] = useState(initial?.deliveryFee || 0);
+  const selectedLines = items.filter((item) => quantities[item.id] > 0);
+  const subtotal = selectedLines.reduce((sum, item) => sum + item.price * quantities[item.id], 0);
+  const currency = selectedLines[0]?.currency || initial?.currency || "MZN";
+  const currencies = new Set(selectedLines.map((item) => item.currency || "MZN"));
+  const chooseEvent = (value: string) => {
+    setEventChoice(value);
+    const chosen = events.find((entry) => entry.id === Number(value));
+    if (chosen) {
+      setClientChoice(String(chosen.clientId));
+      setEventName(chosen.name);
+      setVenue(chosen.venue);
+      setStart(chosen.startDate);
+      setEnd(chosen.endDate);
+      setSetupTime(chosen.setupTime);
+      setPickupTime(chosen.pickupTime);
+    }
+  };
+  return <form className="reservation-composer" onSubmit={onSubmit}>
+    <section className="composer-section"><header><span>01</span><div><h3>{t("Cliente e evento", "Client & event")}</h3><p>{t("Escolha registos existentes ou crie-os nesta reserva.", "Choose existing records or create them in this reservation.")}</p></div></header>
+      <div className="form-grid"><label>{t("Cliente", "Client")}<select name="clientChoice" value={clientChoice} onChange={(event) => setClientChoice(event.target.value)}><option value="new">{t("＋ Novo cliente", "＋ New client")}</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>{t("Evento", "Event")}<select name="eventChoice" value={eventChoice} onChange={(event) => chooseEvent(event.target.value)}><option value="new">{t("＋ Novo evento", "＋ New event")}</option>{events.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {entry.startDate}</option>)}</select></label></div>
+      {clientChoice === "new" && <div className="form-grid three"><label>{t("Nome do cliente", "Client name")}<input name="clientName" defaultValue={initial?.client || ""} required /></label><label>{t("Telefone", "Phone")}<input name="clientPhone" defaultValue={initial?.contact || ""} /></label><label>Email<input name="clientEmail" type="email" /></label></div>}
+      <div className="form-grid"><label>{t("Nome do evento", "Event name")}<input name="eventName" value={eventName} onChange={(event) => setEventName(event.target.value)} required /></label><label>{t("Local", "Venue")}<input name="venue" value={venue} onChange={(event) => setVenue(event.target.value)} placeholder={t("Salão, hotel ou morada", "Venue, hotel, or address")} /></label></div>
+      <div className="form-grid"><label>{t("Início", "Start")}<input name="start" type="date" value={start} onChange={(event) => setStart(event.target.value)} required /></label><label>{t("Fim", "End")}<input name="end" type="date" value={end} onChange={(event) => setEnd(event.target.value)} min={start} required /></label></div>
+      <div className="form-grid"><label>{t("Hora de montagem", "Setup time")}<input name="setupTime" type="time" value={setupTime} onChange={(event) => setSetupTime(event.target.value)} /></label><label>{t("Hora de recolha", "Pickup time")}<input name="pickupTime" type="time" value={pickupTime} onChange={(event) => setPickupTime(event.target.value)} /></label></div>
+      <label>{t("Notas do evento", "Event notes")}<textarea name="eventNotes" rows={2} defaultValue={initialEvent?.notes || ""} /></label>
+    </section>
+    <section className="composer-section"><header><span>02</span><div><h3>{t("Artigos", "Items")}</h3><p>{t("A disponibilidade final é confirmada de forma transaccional.", "Final availability is confirmed transactionally.")}</p></div></header>
+      <div className="reservation-item-picker">{items.map((item) => {
+        const checked = quantities[item.id] > 0;
+        return <label key={item.id} className={cls(checked && "selected")}><input name={`reservation-item-${item.id}`} type="checkbox" checked={checked} onChange={(event) => setQuantities((current) => ({ ...current, [item.id]: event.target.checked ? Math.max(1, current[item.id] || 1) : 0 }))} /><span className={cls("reservation-item-thumb", item.tone)}>{item.photoUrl ? <img src={item.photoUrl} alt="" /> : item.symbol}</span><span><strong>{item.name}</strong><small>{item.category} · {item.quantity} {t("em stock", "in stock")} · {formatMoney(item.price, item.currency, language)}/{t("dia", "day")}</small></span><input name={`reservation-quantity-${item.id}`} type="number" min="1" max={item.quantity} value={checked ? quantities[item.id] : 1} disabled={!checked} onChange={(event) => setQuantities((current) => ({ ...current, [item.id]: Number(event.target.value) }))} aria-label={t(`Quantidade de ${item.name}`, `${item.name} quantity`)} /></label>;
+      })}</div>
+      {!items.length && <div className="availability-note">{t("Adicione artigos ao inventário antes de criar uma reserva.", "Add inventory items before creating a reservation.")}</div>}
+      {currencies.size > 1 && <div className="form-warning">! {t("Seleccione artigos com a mesma moeda.", "Select items using the same currency.")}</div>}
+    </section>
+    <section className="composer-section composer-finance"><header><span>03</span><div><h3>{t("Valores e logística", "Pricing & logistics")}</h3><p>{t("Defina desconto, entrega, caução e instruções operacionais.", "Set discount, delivery, deposit, and operating instructions.")}</p></div></header>
+      <div className="form-grid three"><label>{t("Desconto", "Discount")}<input name="discount" type="number" min="0" max={subtotal} value={discount} onChange={(event) => setDiscount(Number(event.target.value))} /></label><label>{t("Entrega", "Delivery")}<input name="deliveryFee" type="number" min="0" value={deliveryFee} onChange={(event) => setDeliveryFee(Number(event.target.value))} /></label><label>{t("Caução", "Deposit")}<input name="deposit" type="number" min="0" defaultValue={initial?.deposit || 0} /></label></div>
+      <div className="form-grid"><label>{t("Pagamento", "Payment")}<select name="paymentStatus" defaultValue={initial?.paymentStatus || "Pending"}><option value="Pending">{t("Pendente", "Pending")}</option><option value="Partial">{t("Parcial", "Partial")}</option><option value="Paid">{t("Pago", "Paid")}</option></select></label><label>{t("Notas internas", "Internal notes")}<input name="notes" defaultValue={initial?.notes || ""} /></label></div>
+      <label>{t("Plano logístico", "Logistics plan")}<textarea name="logistics" rows={3} defaultValue={initial?.logistics || ""} placeholder={t("Responsável, viatura, entrega, montagem, recolha e cuidados…", "Owner, vehicle, delivery, setup, pickup, and special handling…")} /></label>
+      <div className="reservation-totals"><span><small>{t("Subtotal", "Subtotal")}</small><b>{formatMoney(subtotal, currency, language)}</b></span><span><small>{t("Desconto", "Discount")}</small><b>− {formatMoney(Math.min(discount, subtotal), currency, language)}</b></span><span><small>{t("Entrega", "Delivery")}</small><b>+ {formatMoney(deliveryFee, currency, language)}</b></span><span className="grand-total"><small>Total</small><b>{formatMoney(Math.max(0, subtotal - discount + deliveryFee), currency, language)}</b></span></div>
+    </section>
+    <div className="modal-actions"><button type="button" className="button-secondary" onClick={onCancel}>{t("Cancelar", "Cancel")}</button><button className="button-primary" disabled={!selectedLines.length || currencies.size > 1}>{initial ? t("Guardar alterações", "Save changes") : t("Confirmar reserva", "Confirm reservation")}</button></div>
+  </form>;
+}
+
+function RelationshipManager({ clients, events, t, onAddClient, onAddEvent }: { clients: Client[]; events: EventRecord[]; t: Translator; onAddClient: (event: FormEvent<HTMLFormElement>) => void; onAddEvent: (event: FormEvent<HTMLFormElement>) => void }) {
+  const today = new Date().toISOString().slice(0, 10);
+  return <div className="relationship-manager">
+    <section><form className="operation-form" onSubmit={onAddClient}><h3>{t("Novo cliente", "New client")}</h3><label>{t("Nome", "Name")}<input name="name" required /></label><div className="form-grid"><label>Email<input name="email" type="email" /></label><label>{t("Telefone", "Phone")}<input name="phone" /></label></div><label>{t("Notas", "Notes")}<textarea name="notes" rows={2} /></label><button className="button-primary">{t("Adicionar cliente", "Add client")}</button></form><div className="directory-list"><h3>{t("Clientes", "Clients")} <span>{clients.length}</span></h3>{clients.map((client) => <article key={client.id}><i>{initials(client.name)}</i><span><strong>{client.name}</strong><small>{client.phone || client.email || t("Sem contacto", "No contact")}</small></span></article>)}</div></section>
+    <section><form className="operation-form" onSubmit={onAddEvent}><h3>{t("Novo evento", "New event")}</h3><label>{t("Cliente", "Client")}<select name="clientId" required disabled={!clients.length}><option value="">{t("Seleccione…", "Select…")}</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><div className="form-grid"><label>{t("Nome do evento", "Event name")}<input name="name" required /></label><label>{t("Tipo", "Type")}<select name="eventType" defaultValue="Wedding"><option value="Wedding">{t("Casamento", "Wedding")}</option><option value="Corporate">{t("Corporativo", "Corporate")}</option><option value="Birthday">{t("Aniversário", "Birthday")}</option><option value="Other">{t("Outro", "Other")}</option></select></label></div><label>{t("Local", "Venue")}<input name="venue" /></label><div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={today} required /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={today} required /></label></div><div className="form-grid"><label>{t("Montagem", "Setup")}<input name="setupTime" type="time" /></label><label>{t("Recolha", "Pickup")}<input name="pickupTime" type="time" /></label></div><label>{t("Convidados estimados", "Estimated guests")}<input name="guestCount" type="number" min="0" defaultValue="0" /></label><label>{t("Notas", "Notes")}<textarea name="notes" rows={2} /></label><button className="button-primary" disabled={!clients.length}>{t("Adicionar evento", "Add event")}</button></form><div className="directory-list"><h3>{t("Eventos", "Events")} <span>{events.length}</span></h3>{events.filter((entry) => entry.status !== "Archived").map((entry) => <article key={entry.id}><i>□</i><span><strong>{entry.name}</strong><small>{entry.startDate} · {entry.venue || t("Local por definir", "Venue not set")}</small></span><em>{eventStatusLabel(entry.status, t)}</em></article>)}</div></section>
+  </div>;
+}
+
+function EventChecklist({ event, tasks, members, t, canManage, onAdd, onUpdate, onTransition, onDelete }: {
+  event: EventRecord;
+  tasks: EventTask[];
+  members: Member[];
+  t: Translator;
+  canManage: boolean;
+  onAdd: (input: {
+    title: string;
+    description: string;
+    category: string;
+    priority: string;
+    assigneeUserId: number | null;
+    dueDate: string;
+    dueTime: string;
+  }) => void;
+  onUpdate: (task: EventTask, changes: Partial<EventTask>) => void;
+  onTransition: (task: EventTask) => void;
+  onDelete: (task: EventTask) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("Planning");
+  const [priority, setPriority] = useState("Normal");
+  const [assigneeUserId, setAssigneeUserId] = useState("");
+  const [dueDate, setDueDate] = useState(event.startDate);
+  const [dueTime, setDueTime] = useState("");
+  const completed = tasks.filter((task) => task.status === "Completed").length;
+  const progress = tasks.length ? Math.round((completed / tasks.length) * 100) : 0;
+  const categoryLabels: Record<string, [string, string]> = {
+    Planning: ["Planeamento", "Planning"],
+    Logistics: ["Logística", "Logistics"],
+    Setup: ["Montagem", "Setup"],
+    Styling: ["Decoração", "Styling"],
+    Pickup: ["Recolha", "Pickup"],
+    General: ["Geral", "General"],
+  };
+  const priorityLabels: Record<string, [string, string]> = {
+    Low: ["Baixa", "Low"],
+    Normal: ["Normal", "Normal"],
+    High: ["Alta", "High"],
+    Urgent: ["Urgente", "Urgent"],
+  };
+  const add = () => {
+    if (!title.trim()) return;
+    onAdd({
+      title: title.trim(),
+      description: description.trim(),
+      category,
+      priority,
+      assigneeUserId: Number(assigneeUserId) || null,
+      dueDate,
+      dueTime,
+    });
+    setTitle("");
+    setDescription("");
+  };
+  return <section className="event-checklist">
+    <header>
+      <span><small>{t("CHECKLIST OPERACIONAL", "OPERATIONAL CHECKLIST")}</small><h3>{t("Tarefas da equipa", "Team tasks")}</h3></span>
+      <strong>{completed}/{tasks.length} · {progress}%</strong>
+    </header>
+    <div className="checklist-progress" aria-label={t(`${progress}% concluído`, `${progress}% complete`)}><i style={{ width: `${progress}%` }} /></div>
+    {canManage && event.status !== "Archived" && <div className="task-composer">
+      <input value={title} onChange={(input) => setTitle(input.target.value)} placeholder={t("Nova tarefa…", "New task…")} maxLength={180} />
+      <select value={category} onChange={(input) => setCategory(input.target.value)} aria-label={t("Categoria da tarefa", "Task category")}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select>
+      <select value={assigneeUserId} onChange={(input) => setAssigneeUserId(input.target.value)} aria-label={t("Responsável pela tarefa", "Task assignee")}><option value="">{t("Sem responsável", "Unassigned")}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.displayName || member.email}</option>)}</select>
+      <select value={priority} onChange={(input) => setPriority(input.target.value)} aria-label={t("Prioridade da tarefa", "Task priority")}>{Object.entries(priorityLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select>
+      <input type="date" value={dueDate} onChange={(input) => setDueDate(input.target.value)} aria-label={t("Prazo da tarefa", "Task due date")} />
+      <input type="time" value={dueTime} onChange={(input) => setDueTime(input.target.value)} aria-label={t("Hora da tarefa", "Task due time")} />
+      <input className="task-description" value={description} onChange={(input) => setDescription(input.target.value)} placeholder={t("Instruções opcionais", "Optional instructions")} maxLength={1000} />
+      <button type="button" className="button-primary" onClick={add} disabled={!title.trim()}>{t("Adicionar", "Add")}</button>
+    </div>}
+    {tasks.length ? <div className="event-task-list">{tasks.map((task) => {
+      const assignee = members.find((member) => member.id === task.assigneeUserId);
+      const completedBy = members.find((member) => member.id === task.completedByUserId);
+      const done = task.status === "Completed";
+      const overdue = !done && task.dueDate && task.dueDate < new Date().toISOString().slice(0, 10);
+      return <article key={task.id} className={cls(done && "completed", overdue && "overdue")}>
+        <button type="button" className="task-toggle" onClick={() => onTransition(task)} disabled={!canManage || event.status === "Archived"} aria-label={done ? t("Reabrir tarefa", "Reopen task") : t("Concluir tarefa", "Complete task")}>{done ? "✓" : ""}</button>
+        <span className="task-copy"><strong>{task.title}</strong><small>{t(categoryLabels[task.category]?.[0] || task.category, categoryLabels[task.category]?.[1] || task.category)}{task.description ? ` · ${task.description}` : ""}{done && task.completedAt ? ` · ${t("Concluída por", "Completed by")} ${completedBy?.displayName || completedBy?.email || t("membro da equipa", "team member")} · ${task.completedAt.slice(0, 10)}` : ""}</small></span>
+        {canManage && !done && event.status !== "Archived"
+          ? <select value={task.assigneeUserId || ""} onChange={(input) => onUpdate(task, { assigneeUserId: Number(input.target.value) || undefined })} aria-label={t(`Responsável por ${task.title}`, `${task.title} assignee`)}><option value="">{t("Sem responsável", "Unassigned")}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.displayName || member.email}</option>)}</select>
+          : <span className="task-assignee">{assignee ? initials(assignee.displayName || assignee.email) : "—"}<small>{assignee?.displayName || assignee?.email || t("Sem responsável", "Unassigned")}</small></span>}
+        <span className={cls("task-priority", task.priority.toLowerCase())}>{t(priorityLabels[task.priority]?.[0] || task.priority, priorityLabels[task.priority]?.[1] || task.priority)}</span>
+        <time className={cls(overdue && "late")} dateTime={task.dueDate}>{task.dueDate || t("Sem prazo", "No due date")}{task.dueTime ? ` · ${task.dueTime}` : ""}</time>
+        {canManage && !done && event.status !== "Archived" && <button type="button" className="task-delete" onClick={() => onDelete(task)} aria-label={t(`Remover ${task.title}`, `Remove ${task.title}`)}>×</button>}
+      </article>;
+    })}</div> : <div className="checklist-empty"><span>✓</span><p>{t("Adicione as tarefas de planeamento, logística, montagem, decoração e recolha.", "Add planning, logistics, setup, styling, and pickup tasks.")}</p></div>}
+  </section>;
+}
+
+function EventFinance({ event, reservations, expenses, suppliers, documents, language, t, canManage, onAddSupplier, onAddExpense, onUpdateExpense, onDeleteExpense, onUploadDocument, onDownloadDocument, onDeleteDocument }: {
+  event: EventRecord;
+  reservations: Reservation[];
+  expenses: EventExpense[];
+  suppliers: Supplier[];
+  documents: EventDocument[];
+  language: Language;
+  t: Translator;
+  canManage: boolean;
+  onAddSupplier: (input: Omit<Supplier, "id" | "active" | "createdAt" | "updatedAt">) => void;
+  onAddExpense: (input: Omit<EventExpense, "id" | "eventId" | "createdByUserId" | "createdAt" | "updatedAt">) => void;
+  onUpdateExpense: (expense: EventExpense, changes: Partial<EventExpense>) => void;
+  onDeleteExpense: (expense: EventExpense) => void;
+  onUploadDocument: (file: File, category: string, notes: string) => void;
+  onDownloadDocument: (document: EventDocument) => void;
+  onDeleteDocument: (document: EventDocument) => void;
+}) {
+  const [expenseDescription, setExpenseDescription] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState("Rental");
+  const [expenseSupplierId, setExpenseSupplierId] = useState("");
+  const [expenseAmount, setExpenseAmount] = useState("");
+  const [expenseStatus, setExpenseStatus] = useState<EventExpense["paymentStatus"]>("Planned");
+  const [expenseDate, setExpenseDate] = useState(event.startDate);
+  const [supplierName, setSupplierName] = useState("");
+  const [supplierService, setSupplierService] = useState("Rental");
+  const [supplierContact, setSupplierContact] = useState("");
+  const [supplierPhone, setSupplierPhone] = useState("");
+  const [documentCategory, setDocumentCategory] = useState("Contract");
+  const [documentNotes, setDocumentNotes] = useState("");
+  const [documentFile, setDocumentFile] = useState<File | null>(null);
+  const revenue = reservations
+    .filter((entry) => entry.status !== "Cancelled")
+    .reduce((sum, entry) => sum + (entry.total || 0), 0);
+  const costs = expenses.reduce((sum, entry) => sum + entry.amount, 0);
+  const paid = expenses
+    .filter((entry) => entry.paymentStatus === "Paid")
+    .reduce((sum, entry) => sum + entry.amount, 0);
+  const result = revenue - costs;
+  const margin = revenue > 0 ? Math.round((result / revenue) * 100) : 0;
+  const currency = event.currency || "MZN";
+  const categoryLabels: Record<string, [string, string]> = {
+    Rental: ["Aluguer", "Rental"],
+    Transport: ["Transporte", "Transport"],
+    Labour: ["Mão de obra", "Labour"],
+    Flowers: ["Flores", "Flowers"],
+    Catering: ["Catering", "Catering"],
+    Printing: ["Impressão", "Printing"],
+    Other: ["Outro", "Other"],
+  };
+  const statusLabels: Record<string, [string, string]> = {
+    Planned: ["Planeado", "Planned"],
+    Pending: ["Por pagar", "Pending"],
+    Paid: ["Pago", "Paid"],
+  };
+  const documentLabels: Record<string, [string, string]> = {
+    Contract: ["Contrato", "Contract"],
+    Quote: ["Cotação", "Quote"],
+    FloorPlan: ["Planta", "Floor plan"],
+    Invoice: ["Factura", "Invoice"],
+    Inspiration: ["Inspiração", "Inspiration"],
+    Other: ["Outro", "Other"],
+  };
+  const addExpense = () => {
+    const amount = Number(expenseAmount);
+    if (!expenseDescription.trim() || !Number.isSafeInteger(amount) || amount < 0) return;
+    onAddExpense({
+      supplierId: Number(expenseSupplierId) || undefined,
+      category: expenseCategory,
+      description: expenseDescription.trim(),
+      amount,
+      currency,
+      paymentStatus: expenseStatus,
+      incurredDate: expenseDate,
+      notes: "",
+    });
+    setExpenseDescription("");
+    setExpenseAmount("");
+  };
+  const addSupplier = () => {
+    if (!supplierName.trim()) return;
+    onAddSupplier({
+      name: supplierName.trim(),
+      serviceType: supplierService,
+      contactName: supplierContact.trim(),
+      email: "",
+      phone: supplierPhone.trim(),
+      notes: "",
+    });
+    setSupplierName("");
+    setSupplierContact("");
+    setSupplierPhone("");
+  };
+  const upload = () => {
+    if (!documentFile) return;
+    onUploadDocument(documentFile, documentCategory, documentNotes.trim());
+    setDocumentFile(null);
+    setDocumentNotes("");
+  };
+  return <section className="event-finance">
+    <header><span><small>{t("FINANÇAS E FICHEIROS", "FINANCE & FILES")}</small><h3>{t("Rentabilidade do evento", "Event profitability")}</h3></span><em>{t("Receita reservada, não recebida", "Booked, not recognized revenue")}</em></header>
+    <div className="event-finance-summary">
+      <span><small>{t("Orçamento", "Budget")}</small><strong>{formatMoney(event.budget || 0, currency, language)}</strong></span>
+      <span><small>{t("Receita reservada", "Booked revenue")}</small><strong>{formatMoney(revenue, currency, language)}</strong></span>
+      <span><small>{t("Custos", "Costs")}</small><strong>{formatMoney(costs, currency, language)}</strong><em>{formatMoney(paid, currency, language)} {t("pagos", "paid")}</em></span>
+      <span className={result < 0 ? "negative" : "positive"}><small>{t("Resultado estimado", "Estimated result")}</small><strong>{formatMoney(result, currency, language)}</strong><em>{margin}% {t("margem", "margin")}</em></span>
+    </div>
+    <div className="event-finance-columns">
+      <div className="event-expenses">
+        <h4>{t("Custos do evento", "Event costs")} <span>{expenses.length}</span></h4>
+        {canManage && event.status !== "Archived" && <div className="expense-composer">
+          <input value={expenseDescription} onChange={(input) => setExpenseDescription(input.target.value)} placeholder={t("Descrição do custo", "Cost description")} maxLength={240} />
+          <select value={expenseCategory} onChange={(input) => setExpenseCategory(input.target.value)}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select>
+          <select value={expenseSupplierId} onChange={(input) => setExpenseSupplierId(input.target.value)}><option value="">{t("Sem fornecedor", "No supplier")}</option>{suppliers.filter((entry) => entry.active).map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select>
+          <input type="number" min="0" value={expenseAmount} onChange={(input) => setExpenseAmount(input.target.value)} placeholder="MZN" />
+          <select value={expenseStatus} onChange={(input) => setExpenseStatus(input.target.value as EventExpense["paymentStatus"])}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select>
+          <input type="date" value={expenseDate} onChange={(input) => setExpenseDate(input.target.value)} />
+          <button type="button" className="button-primary" onClick={addExpense} disabled={!expenseDescription.trim() || expenseAmount === ""}>{t("Adicionar custo", "Add cost")}</button>
+        </div>}
+        <div className="expense-list">{expenses.length ? expenses.map((expense) => {
+          const supplier = suppliers.find((entry) => entry.id === expense.supplierId);
+          return <article key={expense.id}>
+            <span><strong>{expense.description}</strong><small>{t(categoryLabels[expense.category]?.[0] || expense.category, categoryLabels[expense.category]?.[1] || expense.category)}{supplier ? ` · ${supplier.name}` : ""}{expense.incurredDate ? ` · ${expense.incurredDate}` : ""}</small></span>
+            <b>{formatMoney(expense.amount, expense.currency, language)}</b>
+            {canManage && event.status !== "Archived" ? <select value={expense.paymentStatus} onChange={(input) => onUpdateExpense(expense, { paymentStatus: input.target.value as EventExpense["paymentStatus"] })}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select> : <em>{t(statusLabels[expense.paymentStatus]?.[0] || expense.paymentStatus, statusLabels[expense.paymentStatus]?.[1] || expense.paymentStatus)}</em>}
+            {canManage && event.status !== "Archived" && <button type="button" onClick={() => onDeleteExpense(expense)} aria-label={t(`Remover ${expense.description}`, `Remove ${expense.description}`)}>×</button>}
+          </article>;
+        }) : <p>{t("Ainda não há custos registados.", "No costs recorded yet.")}</p>}</div>
+      </div>
+      <div className="event-resources">
+        <div className="supplier-panel">
+          <h4>{t("Fornecedores", "Suppliers")} <span>{suppliers.filter((entry) => entry.active).length}</span></h4>
+          {canManage && event.status !== "Archived" && <div className="supplier-composer"><input value={supplierName} onChange={(input) => setSupplierName(input.target.value)} placeholder={t("Nome do fornecedor", "Supplier name")} /><select value={supplierService} onChange={(input) => setSupplierService(input.target.value)}>{Object.entries(categoryLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select><input value={supplierContact} onChange={(input) => setSupplierContact(input.target.value)} placeholder={t("Pessoa de contacto", "Contact person")} /><input value={supplierPhone} onChange={(input) => setSupplierPhone(input.target.value)} placeholder={t("Telefone", "Phone")} /><button type="button" className="button-secondary" onClick={addSupplier} disabled={!supplierName.trim()}>{t("Guardar fornecedor", "Save supplier")}</button></div>}
+          <div className="supplier-list">{suppliers.filter((entry) => entry.active).slice(0, 6).map((supplier) => <span key={supplier.id}><b>{supplier.name}</b><small>{t(categoryLabels[supplier.serviceType]?.[0] || supplier.serviceType, categoryLabels[supplier.serviceType]?.[1] || supplier.serviceType)}{supplier.phone ? ` · ${supplier.phone}` : ""}</small></span>)}</div>
+        </div>
+        <div className="document-panel">
+          <h4>{t("Documentos protegidos", "Protected documents")} <span>{documents.length}</span></h4>
+          {canManage && event.status !== "Archived" && <div className="document-composer"><input type="file" accept=".pdf,.jpg,.jpeg,.png,.docx,.xlsx" onChange={(input) => setDocumentFile(input.target.files?.[0] || null)} /><select value={documentCategory} onChange={(input) => setDocumentCategory(input.target.value)}>{Object.entries(documentLabels).map(([value, label]) => <option key={value} value={value}>{t(label[0], label[1])}</option>)}</select><input value={documentNotes} onChange={(input) => setDocumentNotes(input.target.value)} placeholder={t("Nota opcional", "Optional note")} /><button type="button" className="button-secondary" onClick={upload} disabled={!documentFile}>{t("Carregar", "Upload")}</button></div>}
+          <div className="document-list">{documents.length ? documents.map((document) => <article key={document.id}><button type="button" className="document-download" onClick={() => onDownloadDocument(document)}><span>▤</span><span><strong>{document.name}</strong><small>{t(documentLabels[document.category]?.[0] || document.category, documentLabels[document.category]?.[1] || document.category)} · {(document.size / 1_000_000).toFixed(1)} MB</small></span></button>{canManage && event.status !== "Archived" && <button type="button" onClick={() => onDeleteDocument(document)} aria-label={t(`Remover ${document.name}`, `Remove ${document.name}`)}>×</button>}</article>) : <p>{t("Contratos, cotações e plantas ficam acessíveis à equipa.", "Contracts, quotes, and floor plans stay accessible to the team.")}</p>}</div>
+        </div>
+      </div>
+    </div>
+  </section>;
+}
+
+function EventLifecycle({ event, reservations, tasks, t, canManage, onTransition }: {
+  event: EventRecord;
+  reservations: Reservation[];
+  tasks: EventTask[];
+  t: Translator;
+  canManage: boolean;
+  onTransition: (status: string) => void;
+}) {
+  const stages = ["Lead", "Planned", "Confirmed", "Preparing", "InProgress", "Completed"];
+  const nextByStatus: Record<string, string | undefined> = {
+    Lead: "Planned",
+    Planned: "Confirmed",
+    Confirmed: "Preparing",
+    Preparing: "InProgress",
+    InProgress: "Completed",
+    Cancelled: "Planned",
+  };
+  const actionLabels: Record<string, [string, string]> = {
+    Planned: ["Iniciar planeamento", "Start planning"],
+    Confirmed: ["Confirmar evento", "Confirm event"],
+    Preparing: ["Iniciar preparação", "Start preparation"],
+    InProgress: ["Iniciar execução", "Start event"],
+    Completed: ["Concluir evento", "Complete event"],
+  };
+  const next = nextByStatus[event.status];
+  const confirmed = reservations.filter((entry) => entry.status === "Confirmed").length;
+  const checkedOut = reservations.filter((entry) => entry.status === "CheckedOut").length;
+  const pendingTasks = tasks.filter((task) => task.status !== "Completed").length;
+  const blockers: string[] = [];
+  if (next === "InProgress" && confirmed > 0) {
+    blockers.push(t(
+      `${confirmed} reserva${confirmed === 1 ? "" : "s"} ainda sem saída registada`,
+      `${confirmed} booking${confirmed === 1 ? "" : "s"} still awaiting checkout`,
+    ));
+  }
+  if (next === "Completed" && confirmed + checkedOut > 0) {
+    blockers.push(t(
+      `${confirmed + checkedOut} reserva${confirmed + checkedOut === 1 ? "" : "s"} ainda activa${confirmed + checkedOut === 1 ? "" : "s"}`,
+      `${confirmed + checkedOut} booking${confirmed + checkedOut === 1 ? "" : "s"} still active`,
+    ));
+  }
+  if (next === "Completed" && pendingTasks > 0) {
+    blockers.push(t(
+      `${pendingTasks} tarefa${pendingTasks === 1 ? "" : "s"} por concluir`,
+      `${pendingTasks} task${pendingTasks === 1 ? "" : "s"} remaining`,
+    ));
+  }
+  const canCancel = canManage && !["Completed", "Cancelled", "Archived"].includes(event.status) && checkedOut === 0;
+  return <section className="event-lifecycle">
+    <header><span><small>{t("CICLO DO EVENTO", "EVENT LIFECYCLE")}</small><h3>{eventStatusLabel(event.status, t)}</h3></span><em>{t("Reservas e checklist controlam o avanço", "Bookings and checklist control progress")}</em></header>
+    <div className="event-lifecycle-track">{stages.map((stage, index) => {
+      const activeIndex = stages.indexOf(event.status);
+      const complete = event.status !== "Cancelled" && activeIndex > index;
+      const active = event.status === stage;
+      return <span key={stage} className={cls(complete && "complete", active && "active")}><i>{complete ? "✓" : index + 1}</i><small>{eventStatusLabel(stage, t)}</small></span>;
+    })}</div>
+    {event.status === "Cancelled" && <div className="event-lifecycle-cancelled">× {t("Evento cancelado. Pode reabrir em planeamento.", "Event cancelled. It can be reopened in planning.")}</div>}
+    <footer>
+      <span>{blockers.length ? <><b>{t("Antes de avançar:", "Before moving on:")}</b> {blockers.join(" · ")}</> : next ? t("Tudo pronto para a próxima etapa.", "Ready for the next stage.") : t("Ciclo operacional concluído.", "Operational lifecycle complete.")}</span>
+      <div>{canCancel && <button type="button" className="button-secondary danger-outline" onClick={() => onTransition("Cancelled")}>{t("Cancelar evento", "Cancel event")}</button>}{canManage && next && <button type="button" className="button-primary" disabled={blockers.length > 0} onClick={() => onTransition(next)}>{event.status === "Cancelled" ? t("Reabrir planeamento", "Reopen planning") : t(actionLabels[next]?.[0] || next, actionLabels[next]?.[1] || next)}</button>}</div>
+    </footer>
+  </section>;
+}
+
+function EventManager({ event, clients, members, reservations, tasks, expenses, suppliers, documents, language, t, canManage, onSubmit, onTransitionEvent, onDuplicate, onArchive, onAddTask, onUpdateTask, onTransitionTask, onDeleteTask, onAddSupplier, onAddExpense, onUpdateExpense, onDeleteExpense, onUploadDocument, onDownloadDocument, onDeleteDocument, onCancel }: {
+  event: EventRecord;
+  clients: Client[];
+  members: Member[];
+  reservations: Reservation[];
+  tasks: EventTask[];
+  expenses: EventExpense[];
+  suppliers: Supplier[];
+  documents: EventDocument[];
+  language: Language;
+  t: Translator;
+  canManage: boolean;
+  onSubmit: (formEvent: FormEvent<HTMLFormElement>) => void;
+  onTransitionEvent: (status: string) => void;
+  onDuplicate: () => void;
+  onArchive: () => void;
+  onAddTask: (input: { title: string; description: string; category: string; priority: string; assigneeUserId: number | null; dueDate: string; dueTime: string }) => void;
+  onUpdateTask: (task: EventTask, changes: Partial<EventTask>) => void;
+  onTransitionTask: (task: EventTask) => void;
+  onDeleteTask: (task: EventTask) => void;
+  onAddSupplier: (input: Omit<Supplier, "id" | "active" | "createdAt" | "updatedAt">) => void;
+  onAddExpense: (input: Omit<EventExpense, "id" | "eventId" | "createdByUserId" | "createdAt" | "updatedAt">) => void;
+  onUpdateExpense: (expense: EventExpense, changes: Partial<EventExpense>) => void;
+  onDeleteExpense: (expense: EventExpense) => void;
+  onUploadDocument: (file: File, category: string, notes: string) => void;
+  onDownloadDocument: (document: EventDocument) => void;
+  onDeleteDocument: (document: EventDocument) => void;
+  onCancel: () => void;
+}) {
+  const activeReservations = reservations.filter((entry) => !["Cancelled", "Returned"].includes(entry.status));
+  const total = reservations.filter((entry) => entry.status !== "Cancelled").reduce((sum, entry) => sum + (entry.total || 0), 0);
+  const pendingTasks = tasks.filter((task) => task.status !== "Completed").length;
+  const canArchive = ["Completed", "Cancelled"].includes(event.status) && !activeReservations.length && !pendingTasks;
+  return <form className="modal-form event-manager" onSubmit={onSubmit}>
+    <section className="event-record-summary" style={{ "--event": event.color || "#b75d3f" } as React.CSSProperties}>
+      <span><small>{t("Reservas ligadas", "Linked bookings")}</small><strong>{reservations.length}</strong></span>
+      <span><small>{t("Reservas activas", "Active bookings")}</small><strong>{activeReservations.length}</strong></span>
+      <span><small>{t("Tarefas concluídas", "Tasks completed")}</small><strong>{tasks.filter((task) => task.status === "Completed").length}/{tasks.length}</strong></span>
+      <span><small>{t("Total reservado", "Booked total")}</small><strong>{formatMoney(total, reservations[0]?.currency || event.currency || "MZN", language)}</strong></span>
+    </section>
+    <EventLifecycle event={event} reservations={reservations} tasks={tasks} t={t} canManage={canManage} onTransition={onTransitionEvent} />
+    <div className="form-grid"><label>{t("Cliente", "Client")}<select name="clientId" defaultValue={event.clientId} required disabled={!canManage}>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label><label>{t("Responsável", "Owner")}<select name="ownerUserId" defaultValue={event.ownerUserId || ""} disabled={!canManage}><option value="">{t("Por atribuir", "Unassigned")}</option>{members.map((member) => <option key={member.id} value={member.id}>{member.displayName || member.email}</option>)}</select></label></div>
+    <div className="form-grid"><label>{t("Nome do evento", "Event name")}<input name="name" defaultValue={event.name} required disabled={!canManage} /></label><label>{t("Tipo", "Type")}<select name="eventType" defaultValue={event.eventType || "Other"} disabled={!canManage}><option value="Wedding">{t("Casamento", "Wedding")}</option><option value="Corporate">{t("Corporativo", "Corporate")}</option><option value="Birthday">{t("Aniversário", "Birthday")}</option><option value="Social">{t("Social", "Social")}</option><option value="Other">{t("Outro", "Other")}</option></select></label></div>
+    <div className="form-grid"><label>{t("Local", "Venue")}<input name="venue" defaultValue={event.venue} disabled={!canManage} /></label><label>{t("Contacto no local", "On-site contact")}<input name="onSiteContact" defaultValue={event.onSiteContact || ""} disabled={!canManage} /></label></div>
+    <label>{t("Endereço", "Address")}<input name="address" defaultValue={event.address || ""} disabled={!canManage} /></label>
+    <div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={event.startDate} required disabled={!canManage} /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={event.endDate} required disabled={!canManage} /></label></div>
+    <div className="form-grid"><label>{t("Hora de montagem", "Setup time")}<input name="setupTime" type="time" defaultValue={event.setupTime} disabled={!canManage} /></label><label>{t("Hora de recolha", "Pickup time")}<input name="pickupTime" type="time" defaultValue={event.pickupTime} disabled={!canManage} /></label></div>
+    <div className="form-grid three"><label>{t("Convidados", "Guests")}<input name="guestCount" type="number" min="0" defaultValue={event.guestCount || 0} disabled={!canManage} /></label><label>{t("Orçamento", "Budget")}<input name="budget" type="number" min="0" defaultValue={event.budget || 0} disabled={!canManage} /></label><label>{t("Moeda", "Currency")}<select name="currency" defaultValue={event.currency || "MZN"} disabled={!canManage}><option value="MZN">MZN</option><option value="ZAR">ZAR</option><option value="USD">USD</option><option value="EUR">EUR</option></select></label></div>
+    <div className="form-grid"><label>{t("Estado actual", "Current status")}<span className={cls("event-current-status", event.status.toLowerCase())}>{eventStatusLabel(event.status, t)}</span></label><label>{t("Cor no calendário", "Calendar color")}<input name="color" type="color" defaultValue={event.color || "#b75d3f"} disabled={!canManage} /></label></div>
+    <label>{t("Notas operacionais", "Operational notes")}<textarea name="notes" rows={4} defaultValue={event.notes} disabled={!canManage} /></label>
+    <EventChecklist event={event} tasks={tasks} members={members} t={t} canManage={canManage} onAdd={onAddTask} onUpdate={onUpdateTask} onTransition={onTransitionTask} onDelete={onDeleteTask} />
+    <EventFinance event={event} reservations={reservations} expenses={expenses} suppliers={suppliers} documents={documents} language={language} t={t} canManage={canManage} onAddSupplier={onAddSupplier} onAddExpense={onAddExpense} onUpdateExpense={onUpdateExpense} onDeleteExpense={onDeleteExpense} onUploadDocument={onUploadDocument} onDownloadDocument={onDownloadDocument} onDeleteDocument={onDeleteDocument} />
+    {reservations.length > 0 && <section className="event-linked-bookings"><h3>{t("Reservas associadas", "Linked bookings")}</h3>{reservations.map((reservation) => <article key={reservation.id}><span><strong>{reservation.item}</strong><small>{reservation.date} — {reservation.endDate}</small></span><em>{reservationStatusLabel(reservation.status, t)}</em></article>)}</section>}
+    <div className="modal-actions event-manager-actions"><button type="button" className="button-secondary" onClick={onCancel}>{t("Fechar", "Close")}</button>{canManage && <button type="button" className="button-secondary" onClick={onDuplicate}>{t("Duplicar evento", "Duplicate event")}</button>}{canManage && <button type="button" className="button-secondary danger-outline" onClick={onArchive} disabled={!canArchive} title={!canArchive ? t("Conclua ou cancele o evento, feche as reservas e conclua a checklist.", "Complete or cancel the event, close bookings, and finish the checklist.") : ""}>{t("Arquivar", "Archive")}</button>}{canManage && event.status !== "Archived" && <button className="button-primary">{t("Guardar alterações", "Save changes")}</button>}</div>
+  </form>;
+}
+
+function Events({ language, t, events, tasks, clients, reservations, canManage, openCreate, openCalendar, openEvent }: {
+  language: Language;
+  t: Translator;
+  events: EventRecord[];
+  tasks: EventTask[];
+  clients: Client[];
+  reservations: Reservation[];
+  canManage: boolean;
+  openCreate: () => void;
+  openCalendar: () => void;
+  openEvent: (event: EventRecord) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("All");
+  const [period, setPeriod] = useState<"upcoming" | "past" | "all">("upcoming");
+  const [sort, setSort] = useState<"soonest" | "newest" | "name">("soonest");
+  const today = new Date().toISOString().slice(0, 10);
+  const activeStatuses = ["Lead", "Planned", "Confirmed", "Preparing"];
+  const normalizedQuery = query.trim().toLowerCase();
+  const eventSummary = (entry: EventRecord) => {
+    const client = clients.find((candidate) => candidate.id === entry.clientId);
+    const linked = reservations.filter((reservation) => reservation.eventId === entry.id);
+    const linkedTasks = tasks.filter((task) => task.eventId === entry.id);
+    return {
+      event: entry,
+      client,
+      reservations: linked,
+      tasks: linkedTasks,
+      total: linked
+        .filter((reservation) => reservation.status !== "Cancelled")
+        .reduce((sum, reservation) => sum + (reservation.total || 0), 0),
+    };
+  };
+  const visible = events
+    .map(eventSummary)
+    .filter(({ event, client }) => {
+      const matchesQuery = !normalizedQuery || `${event.name} ${event.venue} ${client?.name || ""}`.toLowerCase().includes(normalizedQuery);
+      const matchesStatus = status === "All" ? event.status !== "Archived" : event.status === status;
+      const matchesPeriod = period === "all" ||
+        (period === "upcoming" ? event.endDate >= today : event.endDate < today);
+      return matchesQuery && matchesStatus && matchesPeriod;
+    })
+    .sort((a, b) => {
+      if (sort === "name") return a.event.name.localeCompare(b.event.name);
+      if (sort === "newest") return b.event.createdAt.localeCompare(a.event.createdAt);
+      return a.event.startDate.localeCompare(b.event.startDate);
+    });
+  const upcoming = events.filter((entry) => entry.endDate >= today && !["Completed", "Cancelled", "Archived"].includes(entry.status)).length;
+  const preparing = events.filter((entry) => entry.endDate >= today && activeStatuses.includes(entry.status)).length;
+  const inProgress = events.filter((entry) => entry.status === "InProgress").length;
+  const completed = events.filter((entry) => entry.status === "Completed").length;
+  const availableStatuses = Array.from(new Set(events.map((entry) => entry.status)));
+
+  return <>
+    <PageHeading
+      eyebrow={t("PRODUÇÃO E OPERAÇÃO", "PRODUCTION & OPERATIONS")}
+      title={t("Eventos", "Events")}
+      detail={t("Acompanhe cada trabalho por cliente, data, local e estado operacional.", "Track every job by client, date, venue, and operational status.")}
+      action={<button className="button-primary" onClick={openCreate} disabled={!canManage}><span>＋</span>{t("Novo evento", "New event")}</button>}
+    />
+    <section className="event-stat-grid">
+      <article><i className="upcoming">◫</i><span><small>{t("Próximos", "Upcoming")}</small><strong>{upcoming}</strong></span></article>
+      <article><i className="preparing">◇</i><span><small>{t("Em preparação", "Preparing")}</small><strong>{preparing}</strong></span></article>
+      <article><i className="progress">↗</i><span><small>{t("Em execução", "In progress")}</small><strong>{inProgress}</strong></span></article>
+      <article><i className="complete">✓</i><span><small>{t("Concluídos", "Completed")}</small><strong>{completed}</strong></span></article>
+    </section>
+    <section className="events-panel card">
+      <div className="events-toolbar">
+        <label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Pesquisar evento, cliente ou local…", "Search event, client, or venue…")} /></label>
+        <select className="toolbar-select" value={status} onChange={(event) => setStatus(event.target.value)} aria-label={t("Filtrar por estado", "Filter by status")}><option value="All">{t("Todos os estados", "All statuses")}</option>{availableStatuses.map((value) => <option key={value} value={value}>{eventStatusLabel(value, t)}</option>)}</select>
+        <select className="toolbar-select" value={period} onChange={(event) => setPeriod(event.target.value as "upcoming" | "past" | "all")} aria-label={t("Filtrar por período", "Filter by period")}><option value="upcoming">{t("Próximos", "Upcoming")}</option><option value="past">{t("Passados", "Past")}</option><option value="all">{t("Todas as datas", "All dates")}</option></select>
+        <select className="toolbar-select" value={sort} onChange={(event) => setSort(event.target.value as "soonest" | "newest" | "name")} aria-label={t("Ordenar eventos", "Sort events")}><option value="soonest">{t("Data mais próxima", "Soonest date")}</option><option value="newest">{t("Criados recentemente", "Recently created")}</option><option value="name">{t("Nome A–Z", "Name A–Z")}</option></select>
+      </div>
+      <header className="events-list-header"><span>{t(`${visible.length} eventos`, `${visible.length} events`)}</span><button onClick={openCalendar}>{t("Ver no calendário", "View calendar")} →</button></header>
+      {visible.length ? <div className="events-list">{visible.map(({ event, client, reservations: linked, tasks: linkedTasks, total }) => {
+        const start = new Date(`${event.startDate}T00:00:00`);
+        const end = new Date(`${event.endDate}T00:00:00`);
+        return <article key={event.id}>
+          <time dateTime={event.startDate}><small>{start.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { month: "short" }).replace(".", "").toUpperCase()}</small><strong>{start.getDate()}</strong></time>
+          <span className="event-main"><small>{client?.name || t("Cliente por definir", "Client not set")}</small><strong>{event.name}</strong><em>⌖ {event.venue || t("Local por definir", "Venue not set")}</em></span>
+          <span className="event-dates"><small>{t("Período", "Schedule")}</small><strong>{start.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { day: "numeric", month: "short" })} — {end.toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ", { day: "numeric", month: "short" })}</strong><em>{event.setupTime ? `${t("Montagem", "Setup")} ${event.setupTime}` : t("Horário por definir", "Time not set")}</em></span>
+          <span className="event-bookings"><small>{t("Reservas · tarefas", "Bookings · tasks")}</small><strong>{linked.length} · {linkedTasks.filter((task) => task.status === "Completed").length}/{linkedTasks.length}</strong><em>{linked.length ? formatMoney(total, linked[0].currency || "MZN", language) : t("Sem material associado", "No inventory linked")}</em></span>
+          <span className={cls("event-status", event.status.toLowerCase())}>{eventStatusLabel(event.status, t)}</span>
+          <button className="event-calendar-button" onClick={() => openEvent(event)} aria-label={t(`Abrir ficha de ${event.name}`, `Open ${event.name} record`)}>›</button>
+        </article>;
+      })}</div> : <div className="events-empty"><span>◫</span><h3>{events.length ? t("Nenhum evento corresponde aos filtros", "No events match the filters") : t("Comece pelo primeiro evento", "Start with your first event")}</h3><p>{events.length ? t("Altere a pesquisa, o estado ou o período.", "Change the search, status, or period.") : t("Crie o evento e depois associe clientes, reservas e artigos.", "Create the event, then connect clients, bookings, and inventory.")}</p>{!events.length && canManage && <button className="button-primary" onClick={openCreate}>{t("Criar evento", "Create event")}</button>}</div>}
+    </section>
+  </>;
+}
+
+function Calendar({ language, t, events, clients, reservations, openAdd, openDirectory, openEvent, onEdit, onTransition }: {
+  language: Language;
+  t: Translator;
+  events: EventRecord[];
+  clients: Client[];
+  reservations: Reservation[];
+  openAdd: () => void;
+  openDirectory: () => void;
+  openEvent: (event: EventRecord) => void;
+  onEdit: (reservation: Reservation) => void;
+  onTransition: (reservation: Reservation, status: string) => void;
+}) {
   const [calendarView, setCalendarView] = useState<"month" | "week">("month");
-  const [cursor, setCursor] = useState(new Date(2026, 6, 27));
-  const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(reservations[0] || null);
+  const [cursor, setCursor] = useState(new Date());
+  const activeReservations = reservations.filter((reservation) => reservation.status !== "Cancelled");
+  const representedEventIds = new Set(activeReservations.map((reservation) => reservation.eventId).filter((id): id is number => Boolean(id)));
+  const standaloneEvents = events.filter((event) => !["Archived", "Cancelled"].includes(event.status) && !representedEventIds.has(event.id));
+  const [selection, setSelection] = useState("");
+  const selectionExists = selection.startsWith("reservation:")
+    ? activeReservations.some((reservation) => `reservation:${reservation.id}` === selection)
+    : standaloneEvents.some((event) => `event:${event.id}` === selection);
+  const effectiveSelection = selectionExists
+    ? selection
+    : activeReservations[0]
+      ? `reservation:${activeReservations[0].id}`
+      : standaloneEvents[0]
+        ? `event:${standaloneEvents[0].id}`
+        : "";
+  const selectedReservationId = effectiveSelection.startsWith("reservation:") ? Number(effectiveSelection.split(":")[1]) : null;
+  const selectedEventId = effectiveSelection.startsWith("event:") ? Number(effectiveSelection.split(":")[1]) : null;
+  const selectedReservation = activeReservations.find((reservation) => reservation.id === selectedReservationId) || null;
+  const selectedEvent = standaloneEvents.find((event) => event.id === selectedEventId) || null;
   const days = calendarView === "month" ? getMonthCells(cursor) : getWeekDays(cursor);
   const title = calendarView === "month"
     ? cursor.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { month: "long", year: "numeric" })
@@ -625,59 +3010,365 @@ function Calendar({ language, t, reservations, openAdd }: { language: Language; 
     else next.setDate(next.getDate() + direction * 7);
     setCursor(next);
   };
-  const reservationsFor = (date: Date) => reservations.filter((reservation) => dateKey(date) >= reservation.date && dateKey(date) <= reservation.endDate);
+  const reservationsFor = (date: Date) => activeReservations.filter((reservation) => dateKey(date) >= reservation.date && dateKey(date) <= reservation.endDate);
+  const eventsFor = (date: Date) => standaloneEvents.filter((event) => dateKey(date) >= event.startDate && dateKey(date) <= event.endDate);
+  const clientFor = (event: EventRecord) => clients.find((client) => client.id === event.clientId);
+  const scheduleRows = [
+    ...activeReservations.map((reservation) => ({
+      key: `reservation:${reservation.id}`,
+      kind: "reservation" as const,
+      name: reservation.eventName || reservation.item,
+      client: reservation.client,
+      detail: reservation.item,
+      startDate: reservation.date,
+      endDate: reservation.endDate,
+      color: reservation.color,
+      status: reservationStatusLabel(reservation.status, t),
+      reservation,
+    })),
+    ...standaloneEvents.map((event) => ({
+      key: `event:${event.id}`,
+      kind: "event" as const,
+      name: event.name,
+      client: clientFor(event)?.name || t("Cliente por definir", "Client not set"),
+      detail: t("Sem material associado", "No inventory linked"),
+      startDate: event.startDate,
+      endDate: event.endDate,
+      color: event.color || "#b75d3f",
+      status: eventStatusLabel(event.status, t),
+      reservation: undefined,
+      event,
+    })),
+  ].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.name.localeCompare(b.name));
   return (
     <>
-      <PageHeading eyebrow={t("AGENDA PARTILHADA", "SHARED SCHEDULE")} title={t("Calendário", "Calendar")} detail={t("Veja eventos e reservas por semana ou mês — sem procurar item por item.", "See events and reservations by week or month—without browsing item by item.")} action={<button className="button-primary" onClick={openAdd}><span>＋</span>{t("Nova reserva", "New reservation")}</button>} />
+      <PageHeading eyebrow={t("AGENDA PARTILHADA", "SHARED SCHEDULE")} title={t("Calendário", "Calendar")} detail={t("Veja eventos e reservas por semana ou mês — sem procurar item por item.", "See events and reservations by week or month—without browsing item by item.")} action={<div className="heading-actions"><button className="button-secondary" onClick={openDirectory}>◎ {t("Clientes e eventos", "Clients & events")}</button><button className="button-primary" onClick={openAdd}><span>＋</span>{t("Nova reserva", "New reservation")}</button></div>} />
       <section className="calendar-layout">
         <article className="card calendar-card">
-          <div className="calendar-toolbar"><button onClick={() => move(-1)}>‹</button><h2>{title}</h2><button onClick={() => move(1)}>›</button><button className="today-button" onClick={() => setCursor(new Date(2026, 6, 27))}>{t("Hoje", "Today")}</button><div className="calendar-view-toggle"><button className={cls(calendarView === "week" && "active")} onClick={() => setCalendarView("week")}>{t("Semana", "Week")}</button><button className={cls(calendarView === "month" && "active")} onClick={() => setCalendarView("month")}>{t("Mês", "Month")}</button></div></div>
+          <div className="calendar-toolbar"><button onClick={() => move(-1)}>‹</button><h2>{title}</h2><button onClick={() => move(1)}>›</button><button className="today-button" onClick={() => setCursor(new Date())}>{t("Hoje", "Today")}</button><div className="calendar-view-toggle"><button className={cls(calendarView === "week" && "active")} onClick={() => setCalendarView("week")}>{t("Semana", "Week")}</button><button className={cls(calendarView === "month" && "active")} onClick={() => setCalendarView("month")}>{t("Mês", "Month")}</button></div></div>
           {calendarView === "month" ? <div className="calendar-grid">
             {(language === "pt" ? ["SEG", "TER", "QUA", "QUI", "SEX", "SÁB", "DOM"] : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]).map((day) => <div className="weekday" key={day}>{day}</div>)}
             {days.map((day) => {
               const dayReservations = reservationsFor(day);
+              const dayEvents = eventsFor(day);
+              const dayEntries = [
+                ...dayReservations.map((reservation) => ({ key: `reservation:${reservation.id}`, name: reservation.eventName || reservation.client, detail: reservation.item, color: reservation.color, kind: "reservation" as const, id: reservation.id })),
+                ...dayEvents.map((event) => ({ key: `event:${event.id}`, name: event.name, detail: t("Evento · sem material", "Event · no inventory"), color: event.color || "#b75d3f", kind: "event" as const, id: event.id })),
+              ];
               const muted = day.getMonth() !== cursor.getMonth();
-              return <div className={cls("calendar-day", muted && "muted", dateKey(day) === "2026-07-27" && "today")} key={dateKey(day)}><span>{day.getDate()}</span>{dayReservations.slice(0, 3).map((reservation) => <button key={reservation.id} onClick={() => setSelectedReservation(reservation)} style={{ "--event": reservation.color } as React.CSSProperties}><b>{reservation.eventName || reservation.client}</b><small>{reservation.item}</small></button>)}{dayReservations.length > 3 && <em>+{dayReservations.length - 3}</em>}</div>;
+              return <div className={cls("calendar-day", muted && "muted", dateKey(day) === dateKey(new Date()) && "today")} key={dateKey(day)}><span>{day.getDate()}</span>{dayEntries.slice(0, 3).map((entry) => <button className={cls(entry.kind === "event" && "standalone-event")} key={entry.key} onClick={() => setSelection(entry.key)} style={{ "--event": entry.color } as React.CSSProperties}><b>{entry.name}</b><small>{entry.detail}</small></button>)}{dayEntries.length > 3 && <em>+{dayEntries.length - 3}</em>}</div>;
             })}
           </div> : <div className="week-calendar">
-            {days.map((day) => <div className={cls("week-day", dateKey(day) === "2026-07-27" && "today")} key={dateKey(day)}><header><span>{day.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { weekday: "short" })}</span><strong>{day.getDate()}</strong></header><div className="week-day-body">{reservationsFor(day).map((reservation) => <button key={reservation.id} style={{ "--event": reservation.color } as React.CSSProperties} onClick={() => setSelectedReservation(reservation)}><small>09:30</small><strong>{reservation.eventName || reservation.client}</strong><span>{reservation.item}</span></button>)}{!reservationsFor(day).length && <span className="week-empty">—</span>}</div></div>)}
+            {days.map((day) => {
+              const dayReservations = reservationsFor(day);
+              const dayEvents = eventsFor(day);
+              return <div className={cls("week-day", dateKey(day) === dateKey(new Date()) && "today")} key={dateKey(day)}><header><span>{day.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { weekday: "short" })}</span><strong>{day.getDate()}</strong></header><div className="week-day-body">{dayReservations.map((reservation) => <button key={`reservation:${reservation.id}`} style={{ "--event": reservation.color } as React.CSSProperties} onClick={() => setSelection(`reservation:${reservation.id}`)}><small>{t("RESERVA", "BOOKING")} · {reservation.status === "CheckedOut" ? t("Em aluguer", "Checked out") : "09:30"}</small><strong>{reservation.eventName || reservation.client}</strong><span>{reservation.item}</span></button>)}{dayEvents.map((event) => <button className="standalone-event" key={`event:${event.id}`} style={{ "--event": event.color || "#b75d3f" } as React.CSSProperties} onClick={() => setSelection(`event:${event.id}`)}><small>{t("EVENTO", "EVENT")} · {event.setupTime || t("Sem horário", "No time")}</small><strong>{event.name}</strong><span>{t("Sem material associado", "No inventory linked")}</span></button>)}{!dayReservations.length && !dayEvents.length && <span className="week-empty">—</span>}</div></div>;
+            })}
           </div>}
         </article>
-        <ReservationInspector language={language} t={t} reservation={selectedReservation} />
+        {selectedEvent
+          ? <EventCalendarInspector language={language} t={t} event={selectedEvent} client={clientFor(selectedEvent)} openEvent={openEvent} />
+          : <ReservationInspector language={language} t={t} reservation={selectedReservation} onEdit={onEdit} onTransition={onTransition} />}
       </section>
-      <section className="card reservation-list">
-        <div className="card-heading"><div><span className="eyebrow">{t("RESERVAS", "RESERVATIONS")}</span><h2>{t("Próximos eventos", "Upcoming events")}</h2></div><button onClick={() => downloadCsv("trove-reservas.csv", [["event", "client", "item", "start", "end", "contact", "notes"], ...reservations.map((r) => [r.eventName, r.client, r.item, r.date, r.endDate, r.contact, r.notes])])}>{t("Exportar agenda", "Export schedule")} ↓</button></div>
-        {reservations.map((reservation) => <button className="reservation-row" key={reservation.id} onClick={() => setSelectedReservation(reservation)}><i style={{ background: reservation.color }} /><span><strong>{reservation.eventName || reservation.item}</strong><small>{reservation.item} · {reservation.client}</small></span><span><strong>{new Date(`${reservation.date}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${reservation.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</strong><small>{reservation.contact || t("Sem contacto", "No contact")}</small></span><span className="status-pill pickup">{t("Confirmada", "Confirmed")}</span><span>›</span></button>)}
+      <section className="card reservation-list calendar-agenda-list">
+        <div className="card-heading"><div><span className="eyebrow">{t("AGENDA COMPLETA", "FULL SCHEDULE")}</span><h2>{t("Reservas e eventos", "Bookings and events")}</h2></div><button onClick={() => downloadCsv("trove-agenda.csv", [["type", "event", "client", "item", "start", "end", "status"], ...scheduleRows.map((row) => [row.kind, row.name, row.client, row.detail, row.startDate, row.endDate, row.status])])}>{t("Exportar agenda", "Export schedule")} ↓</button></div>
+        <div className="calendar-legend"><span><i className="booking" />{t("Reserva com material", "Booking with inventory")}</span><span><i className="event" />{t("Evento sem material", "Event without inventory")}</span></div>
+        {scheduleRows.map((row) => <button className={cls("reservation-row", row.kind === "event" && "standalone-event-row")} key={row.key} onClick={() => setSelection(row.key)}><i style={{ background: row.color }} /><span><strong>{row.name}</strong><small>{row.detail} · {row.client}</small></span><span><strong>{new Date(`${row.startDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${row.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</strong><small>{row.kind === "event" ? t("Ficha operacional", "Operational record") : formatMoney(row.reservation?.total || 0, row.reservation?.currency || "MZN", language)}</small></span><span className={cls("status-pill", row.kind === "event" ? "event-only" : row.reservation?.status === "Returned" ? "return" : row.reservation?.status === "CheckedOut" ? "delivery" : "pickup")}>{row.status}</span><span>›</span></button>)}
+        {!scheduleRows.length && <div className="calendar-agenda-empty">{t("Ainda não existem reservas ou eventos para apresentar.", "There are no bookings or events to show yet.")}</div>}
       </section>
     </>
   );
 }
 
-function Network({ plan, t, query, setQuery, items, requested, onRequest, openPlans }: { plan: string; t: Translator; query: string; setQuery: (value: string) => void; items: typeof networkItems; requested: string[]; onRequest: (name: string) => void; openPlans: () => void }) {
-  if (plan !== "Network") return <section className="locked-network"><div className="network-orbit">◎</div><span className="eyebrow">TROVE NETWORK</span><h1>{t("Mais inventário, sem mais armazém.", "More inventory, without more storage.")}</h1><p>{t("Pesquise decoradores verificados, veja disponibilidade e reserve o que precisa.", "Search trusted decorators, see availability, and reserve what you need.")}</p><button className="button-primary" onClick={openPlans}>{t("Explorar plano Network", "Explore Network plan")}</button></section>;
+function EventCalendarInspector({ language, t, event, client, openEvent }: { language: Language; t: Translator; event: EventRecord; client?: Client; openEvent: (event: EventRecord) => void }) {
+  const start = new Date(`${event.startDate}T00:00:00`);
+  const end = new Date(`${event.endDate}T00:00:00`);
+  return <aside className="card agenda-card reservation-inspector event-calendar-inspector">
+    <span className="eyebrow">{t("DETALHES DO EVENTO", "EVENT DETAILS")}</span>
+    <h2>{event.name}</h2>
+    <span className={cls("event-status", event.status.toLowerCase())}>{eventStatusLabel(event.status, t)}</span>
+    <div className="event-without-booking">{t("Evento sem reserva de material", "Event without an inventory booking")}</div>
+    <dl>
+      <div><dt>{t("Cliente", "Client")}</dt><dd>{client?.name || t("Por definir", "Not set")}</dd></div>
+      <div><dt>{t("Tipo", "Type")}</dt><dd>{event.eventType || t("Outro", "Other")}</dd></div>
+      <div><dt>{t("Datas", "Dates")}</dt><dd>{start.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {end.toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</dd></div>
+      <div><dt>{t("Operação", "Operations")}</dt><dd>{event.setupTime ? `${t("Montagem", "Setup")} ${event.setupTime}` : t("Montagem por definir", "Setup not set")} · {event.pickupTime ? `${t("Recolha", "Pickup")} ${event.pickupTime}` : t("Recolha por definir", "Pickup not set")}</dd></div>
+      <div><dt>{t("Local", "Venue")}</dt><dd>{event.venue || event.address || t("Por definir", "Not set")}</dd></div>
+      <div><dt>{t("Contacto", "Contact")}</dt><dd>{event.onSiteContact || client?.phone || "—"}</dd></div>
+    </dl>
+    <div className="inspector-actions"><button className="button-primary" onClick={() => openEvent(event)}>{t("Abrir ficha do evento", "Open event record")}</button></div>
+  </aside>;
+}
+
+function Network({
+  plan,
+  t,
+  language,
+  query,
+  setQuery,
+  listings,
+  ownListings,
+  requests,
+  reviews,
+  businessId,
+  tab,
+  setTab,
+  startDate,
+  setStartDate,
+  endDate,
+  setEndDate,
+  quantity,
+  setQuantity,
+  distance,
+  setDistance,
+  maxPrice,
+  setMaxPrice,
+  locationEnabled,
+  locate,
+  loading,
+  onRequest,
+  onPublish,
+  onToggle,
+  onManageRequest,
+  openPlans,
+}: {
+  plan: string;
+  t: Translator;
+  language: Language;
+  query: string;
+  setQuery: (value: string) => void;
+  listings: NetworkListing[];
+  ownListings: OwnNetworkListing[];
+  requests: NetworkRequest[];
+  reviews: NetworkReview[];
+  businessId: number;
+  tab: "explore" | "listings" | "requests";
+  setTab: (tab: "explore" | "listings" | "requests") => void;
+  startDate: string;
+  setStartDate: (value: string) => void;
+  endDate: string;
+  setEndDate: (value: string) => void;
+  quantity: number;
+  setQuantity: (value: number) => void;
+  distance: number;
+  setDistance: (value: number) => void;
+  maxPrice: number;
+  setMaxPrice: (value: number) => void;
+  locationEnabled: boolean;
+  locate: () => void;
+  loading: boolean;
+  onRequest: (listing: NetworkListing) => void;
+  onPublish: (listing?: OwnNetworkListing) => void;
+  onToggle: (listing: OwnNetworkListing) => void;
+  onManageRequest: (request: NetworkRequest) => void;
+  openPlans: () => void;
+}) {
+  if (plan !== "Network") return <section className="locked-network"><div className="network-orbit">◎</div><span className="eyebrow">TROVE NETWORK</span><h1>{t("Mais inventário, sem mais armazém.", "More inventory, without more storage.")}</h1><p>{t("Pesquise decoradores verificados, veja disponibilidade real e reserve o que precisa.", "Search trusted decorators, see real availability, and reserve what you need.")}</p><button className="button-primary" onClick={openPlans}>{t("Explorar plano Network", "Explore Network plan")}</button></section>;
+  const incoming = requests.filter((entry) => entry.ownerBusinessId === businessId);
+  const outgoing = requests.filter((entry) => entry.requesterBusinessId === businessId);
+  const activeRequests = requests.filter((entry) => !["Rejected", "Cancelled", "Completed"].includes(entry.status)).length;
   return (
     <>
-      <PageHeading eyebrow="TROVE NETWORK" title={t("Encontre perto de si.", "Find it nearby.")} detail={t("Alugue a decoradores da região e transforme stock parado em receita.", "Borrow locally and turn idle stock into income.")} action={<button className="button-secondary">{t("Meus pedidos", "My requests")} <span>3</span></button>} />
-      <section className="network-hero">
-        <div><span className="eyebrow">{t("PESQUISE 24.000+ PEÇAS LOCAIS", "SEARCH 24,000+ LOCAL PIECES")}</span><h2>{t("O que precisa o seu próximo evento?", "What does your next event need?")}</h2><label className="network-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Ex.: cadeiras ghost ou guardanapos de linho…", "Try ghost chairs or linen napkins…")} /><button>{t("Pesquisar", "Search")}</button></label><div className="popular-searches"><small>{t("Popular:", "Popular:")}</small>{[t("Plintos", "Plinths"), t("Cadeiras", "Chairs"), t("Jarras", "Bud vases"), t("Castiçais", "Candle holders")].map((term) => <button key={term} onClick={() => setQuery(term)}>{term}</button>)}</div></div>
-        <div className="network-map"><span className="map-road one" /><span className="map-road two" /><span className="map-road three" /><i className="map-pin p1">12</i><i className="map-pin p2">8</i><i className="map-pin p3">4</i><i className="map-you">YOU</i></div>
-      </section>
-      <div className="network-heading"><div><h2>{t("Disponível perto de Maputo", "Available near Maputo")}</h2><p>{t("Negócios verificados · Próximos 30 dias", "Verified businesses · Next 30 days")}</p></div><button className="button-secondary">{t("Até 25 km", "Within 25 km")}⌄</button></div>
-      <div className="network-grid">
-        {items.map((item) => (
-          <article className="network-card" key={item.name}>
-            <div className={cls("network-visual", item.tone)}><span>{item.symbol}</span><em>{item.available} {t("disponíveis", "available")}</em></div>
-            <div className="network-info"><div className="network-owner"><i>{item.owner.split(" ").map((word) => word[0]).join("").slice(0, 2)}</i><span><strong>{item.owner} <b>✓</b></strong><small>★ {item.rating} · {item.distance}</small></span></div><h3>{item.name}</h3><div className="network-price"><strong>{item.price}</strong><button disabled={requested.includes(item.name)} onClick={() => onRequest(item.name)}>{requested.includes(item.name) ? t("Pedido enviado ✓", "Requested ✓") : t("Ver datas", "Check dates")}</button></div></div>
-          </article>
-        ))}
+      <PageHeading
+        eyebrow="TROVE NETWORK"
+        title={t("Encontre perto de si.", "Find it nearby.")}
+        detail={t("Alugue a decoradores da região e transforme stock parado em receita.", "Rent from nearby decorators and turn idle stock into income.")}
+        action={<button className="button-primary" onClick={() => onPublish()}>{t("Publicar artigo", "Publish item")}</button>}
+      />
+      <div className="network-tabs" role="tablist">
+        <button className={cls(tab === "explore" && "active")} onClick={() => setTab("explore")}>{t("Explorar", "Explore")} <span>{listings.length}</span></button>
+        <button className={cls(tab === "listings" && "active")} onClick={() => setTab("listings")}>{t("Minhas publicações", "My listings")} <span>{ownListings.length}</span></button>
+        <button className={cls(tab === "requests" && "active")} onClick={() => setTab("requests")}>{t("Pedidos", "Requests")} <span>{activeRequests}</span></button>
       </div>
+
+      {tab === "explore" && <>
+        <section className="network-hero operational-network">
+          <div>
+            <span className="eyebrow">{t("INVENTÁRIO PARTILHADO ENTRE EMPRESAS", "INVENTORY SHARED BETWEEN BUSINESSES")}</span>
+            <h2>{t("O que precisa para o próximo evento?", "What do you need for the next event?")}</h2>
+            <label className="network-search"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("Artigo, categoria, empresa ou localidade…", "Item, category, business, or location…")} /><button>{loading ? "…" : t("Pesquisar", "Search")}</button></label>
+            <div className="network-date-search">
+              <label>{t("Início", "Start")}<input type="date" value={startDate} min={offsetDate(0)} onChange={(event) => { setStartDate(event.target.value); if (event.target.value > endDate) setEndDate(event.target.value); }} /></label>
+              <label>{t("Fim", "End")}<input type="date" value={endDate} min={startDate} onChange={(event) => setEndDate(event.target.value)} /></label>
+              <label>{t("Quantidade", "Quantity")}<input type="number" min="1" max="100000" value={quantity} onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))} /></label>
+              <label>{t("Preço máximo", "Max price")}<select value={maxPrice} onChange={(event) => setMaxPrice(Number(event.target.value))}><option value="0">{t("Qualquer", "Any")}</option><option value="1000">1 000 MZN</option><option value="5000">5 000 MZN</option><option value="20000">20 000 MZN</option><option value="50000">50 000 MZN</option></select></label>
+              <label>{t("Raio", "Radius")}<select value={distance} onChange={(event) => setDistance(Number(event.target.value))}><option value="10">10 km</option><option value="25">25 km</option><option value="50">50 km</option><option value="100">100 km</option><option value="500">500 km</option></select></label>
+              <button className={cls("location-button", locationEnabled && "active")} onClick={locate}>{locationEnabled ? t("Localização activa ✓", "Location active ✓") : t("Usar minha localização", "Use my location")}</button>
+            </div>
+          </div>
+          <div className="network-map"><span className="map-road one" /><span className="map-road two" /><span className="map-road three" /><i className="map-pin p1">{listings.length}</i><i className="map-pin p2">{incoming.length}</i><i className="map-pin p3">{outgoing.length}</i><i className="map-you">{locationEnabled ? "YOU" : "⌖"}</i></div>
+        </section>
+        <div className="network-heading"><div><h2>{t("Disponível para as datas escolhidas", "Available for the selected dates")}</h2><p>{t("A quantidade já desconta reservas internas e alugueres aceites.", "Quantity already excludes internal bookings and accepted rentals.")}</p></div><small>{loading ? t("A actualizar…", "Updating…") : `${listings.length} ${t("resultado(s)", "result(s)")}`}</small></div>
+        {listings.length ? <div className="network-grid">
+          {listings.map((item) => (
+            <article className="network-card" key={item.id}>
+              <div className={cls("network-visual", item.tone)}>{item.imageUrl ? <img src={item.imageUrl} alt={item.name} /> : <span>{item.symbol}</span>}<em>{item.available} {t("disponíveis", "available")}</em></div>
+              <div className="network-info">
+                <div className="network-owner"><i>{initials(item.ownerName)}</i><span><strong>{item.ownerName}</strong><small>{item.ratingCount ? `★ ${item.rating} · ${item.ratingCount} ${t("avaliações", "reviews")}` : t("Sem avaliações", "No reviews yet")}</small></span></div>
+                <h3>{item.name}</h3>
+                <p>{item.location}{item.distanceKm !== null ? ` · ${item.distanceKm.toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ")} km` : ""}</p>
+                <div className="network-terms"><span>{t("Caução", "Deposit")}: {formatMoney(item.deposit, item.currency, language)}</span><span>{item.deliveryOptions}</span></div>
+                <div className="network-price"><strong>{formatMoney(item.dailyPrice, item.currency, language)} <small>/ {t("dia", "day")}</small></strong><button onClick={() => onRequest(item)}>{t("Pedir datas", "Request dates")}</button></div>
+              </div>
+            </article>
+          ))}
+        </div> : <div className="network-empty"><span>◎</span><h3>{t("Nenhum artigo disponível", "No items available")}</h3><p>{t("Altere as datas, quantidade ou distância, ou convide outra empresa Network a publicar artigos.", "Change the dates, quantity, or distance, or invite another Network business to publish items.")}</p></div>}
+      </>}
+
+      {tab === "listings" && <section className="network-workspace">
+        <header><div><h2>{t("Artigos publicados", "Published items")}</h2><p>{t("Apenas os artigos activos aparecem às outras empresas.", "Only active items appear to other businesses.")}</p></div><button className="button-primary" onClick={() => onPublish()}>{t("Nova publicação", "New listing")}</button></header>
+        {ownListings.length ? <div className="network-listing-table">{ownListings.map((listing) => <article key={listing.id} className={cls(!listing.active && "paused")}>
+          <div><i>{listing.name.split(/\s+/).slice(0, 2).map((word) => word[0]).join("")}</i><span><strong>{listing.name}</strong><small>{listing.category} · {listing.location}</small></span></div>
+          <span><strong>{formatMoney(listing.dailyPrice, listing.currency, language)}</strong><small>/ {t("dia", "day")}</small></span>
+          <span><strong>{listing.minimumQuantity}–{listing.maximumQuantity}</strong><small>{t("unidades", "units")}</small></span>
+          <em className={listing.active ? "active" : ""}>{listing.active ? t("Publicada", "Live") : t("Pausada", "Paused")}</em>
+          <div><button onClick={() => onPublish(listing)}>{t("Editar", "Edit")}</button><button onClick={() => onToggle(listing)}>{listing.active ? t("Pausar", "Pause") : t("Reactivar", "Reactivate")}</button></div>
+        </article>)}</div> : <div className="network-empty"><span>▦</span><h3>{t("Ainda não publicou artigos", "No published items yet")}</h3><p>{t("Escolha artigos do inventário e defina as condições de aluguer.", "Choose inventory items and set their rental terms.")}</p><button className="button-primary" onClick={() => onPublish()}>{t("Publicar primeiro artigo", "Publish first item")}</button></div>}
+      </section>}
+
+      {tab === "requests" && <section className="network-requests">
+        <div className="request-column"><header><h2>{t("Recebidos", "Incoming")}</h2><span>{incoming.length}</span></header>{incoming.length ? incoming.map((request) => <NetworkRequestCard key={request.id} request={request} t={t} language={language} counterparty={request.requesterName} onOpen={() => onManageRequest(request)} />) : <div className="network-empty compact"><span>◇</span><p>{t("Ainda sem pedidos recebidos.", "No incoming requests yet.")}</p></div>}</div>
+        <div className="request-column"><header><h2>{t("Enviados", "Outgoing")}</h2><span>{outgoing.length}</span></header>{outgoing.length ? outgoing.map((request) => <NetworkRequestCard key={request.id} request={request} t={t} language={language} counterparty={request.ownerName} onOpen={() => onManageRequest(request)} />) : <div className="network-empty compact"><span>◇</span><p>{t("Ainda não enviou pedidos.", "No outgoing requests yet.")}</p></div>}</div>
+        {reviews.length > 0 && <aside className="network-reviews"><h3>{t("Avaliações recentes", "Recent reviews")}</h3>{reviews.slice(0, 4).map((review) => <blockquote key={review.id}><span>{"★".repeat(review.rating)}</span><p>{review.comment || t("Aluguer concluído sem comentário.", "Rental completed without a comment.")}</p><cite>{review.reviewerName}</cite></blockquote>)}</aside>}
+      </section>}
     </>
   );
 }
 
-function ProfileEditor({ t, profile, setProfile, save, saving }: { t: Translator; profile: Profile; setProfile: (profile: Profile) => void; save: () => void; saving: boolean }) {
+function NetworkRequestCard({ request, t, language, counterparty, onOpen }: { request: NetworkRequest; t: Translator; language: Language; counterparty: string; onOpen: () => void }) {
+  return <button className="network-request-card" onClick={onOpen}>
+    <div><span className={cls("network-status", request.status.toLowerCase())}>{networkStatusLabel(request.status, t)}</span><time>{new Date(request.updatedAt).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")}</time></div>
+    <h3>{request.itemName}</h3>
+    <p>{counterparty} · {request.quantity} {t("un.", "units")}</p>
+    <small>{request.startDate} → {request.endDate}</small>
+    <strong>{formatMoney(request.total + request.deposit, request.currency, language)}</strong>
+  </button>;
+}
+
+function NetworkListingForm({ t, items, listing, profileLocation, coordinates, submit, close }: {
+  t: Translator;
+  items: Item[];
+  listing: OwnNetworkListing | null;
+  profileLocation: string;
+  coordinates: { latitude: number; longitude: number } | null;
+  submit: (event: FormEvent<HTMLFormElement>) => void;
+  close: () => void;
+}) {
+  const selected = items.find((item) => item.id === listing?.itemId) || items[0];
+  return <form onSubmit={submit} className="modal-form network-listing-form">
+    <label>{t("Artigo do inventário", "Inventory item")}<select name="itemId" defaultValue={listing?.itemId || selected?.id} disabled={Boolean(listing)} required>{items.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.quantity} {t("un.", "units")}</option>)}</select></label>
+    <div className="form-grid"><label>{t("Preço por dia (MZN)", "Daily price (MZN)")}<input name="dailyPrice" type="number" min="1" defaultValue={listing?.dailyPrice || selected?.price || 500} required /></label><label>{t("Caução (MZN)", "Deposit (MZN)")}<input name="deposit" type="number" min="0" defaultValue={listing?.deposit || selected?.replacementValue || 0} /></label></div>
+    <div className="form-grid"><label>{t("Quantidade mínima", "Minimum quantity")}<input name="minimumQuantity" type="number" min="1" max={selected?.quantity || 1} defaultValue={listing?.minimumQuantity || 1} required /></label><label>{t("Quantidade máxima", "Maximum quantity")}<input name="maximumQuantity" type="number" min="1" max={selected?.quantity || 1} defaultValue={listing?.maximumQuantity || selected?.quantity || 1} required /></label></div>
+    <label>{t("Local de recolha", "Pickup location")}<input name="location" defaultValue={listing?.location || profileLocation} required /></label>
+    <div className="form-grid coordinate-fields"><label>{t("Latitude opcional", "Optional latitude")}<input name="latitude" inputMode="decimal" defaultValue={listing?.latitude || coordinates?.latitude || ""} /></label><label>{t("Longitude opcional", "Optional longitude")}<input name="longitude" inputMode="decimal" defaultValue={listing?.longitude || coordinates?.longitude || ""} /></label></div>
+    <label>{t("Entrega", "Delivery")}<select name="deliveryOptions" defaultValue={listing?.deliveryOptions || "Pickup"}><option value="Pickup">{t("Recolha pelo cliente", "Customer pickup")}</option><option value="Delivery available">{t("Entrega disponível", "Delivery available")}</option><option value="Pickup or delivery">{t("Recolha ou entrega", "Pickup or delivery")}</option></select></label>
+    <label>{t("Condições", "Terms")}<textarea name="terms" rows={4} defaultValue={listing?.terms || ""} placeholder={t("Prazo de cancelamento, cuidados, transporte e devolução…", "Cancellation, care, transport, and return terms…")} /></label>
+    <p className="network-form-note">{t("A localização exacta só é usada para calcular distância entre empresas Network.", "Exact coordinates are only used to calculate distance between Network businesses.")}</p>
+    <div className="modal-actions"><button type="button" className="button-secondary" onClick={close}>{t("Cancelar", "Cancel")}</button><button className="button-primary" disabled={!items.length}>{t("Publicar na rede", "Publish to network")}</button></div>
+  </form>;
+}
+
+function NetworkRentalForm({ t, listing, startDate, endDate, quantity, submit, close }: {
+  t: Translator;
+  listing: NetworkListing;
+  startDate: string;
+  endDate: string;
+  quantity: number;
+  submit: (event: FormEvent<HTMLFormElement>) => void;
+  close: () => void;
+}) {
+  return <form onSubmit={submit} className="modal-form">
+    <div className="network-request-summary"><span><strong>{listing.available}</strong><small>{t("disponíveis", "available")}</small></span><span><strong>{formatMoney(listing.dailyPrice)}</strong><small>/ {t("dia", "day")}</small></span><span><strong>{formatMoney(listing.deposit)}</strong><small>{t("caução", "deposit")}</small></span></div>
+    <div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" min={offsetDate(0)} defaultValue={startDate} required /></label><label>{t("Fim", "End")}<input name="endDate" type="date" min={startDate} defaultValue={endDate} required /></label></div>
+    <label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min={listing.minimumQuantity} max={Math.min(listing.maximumQuantity, listing.available)} defaultValue={Math.min(Math.max(quantity, listing.minimumQuantity), listing.maximumQuantity, listing.available)} required /></label>
+    <label>{t("Entrega", "Delivery")}<select name="deliveryMethod" defaultValue={listing.deliveryOptions.includes("delivery") || listing.deliveryOptions.includes("Delivery") ? "Delivery" : "Pickup"}><option value="Pickup">{t("Recolha", "Pickup")}</option>{listing.deliveryOptions !== "Pickup" && <option value="Delivery">{t("Solicitar entrega", "Request delivery")}</option>}</select></label>
+    <label>{t("Mensagem à empresa", "Message to business")}<textarea name="note" rows={4} placeholder={t("Evento, horário e qualquer cuidado especial…", "Event, schedule, and any special requirements…")} /></label>
+    <p className="network-form-note">{t("O envio cria um pedido. O valor só é considerado confirmado depois da empresa proprietária aceitar e registar o pagamento.", "Submitting creates a request. The amount is only confirmed after the owner accepts and records payment.")}</p>
+    <div className="modal-actions"><button type="button" className="button-secondary" onClick={close}>{t("Cancelar", "Cancel")}</button><button className="button-primary">{t("Enviar pedido", "Send request")}</button></div>
+  </form>;
+}
+
+function NetworkRequestManager({ t, language, request, businessId, action }: {
+  t: Translator;
+  language: Language;
+  request: NetworkRequest;
+  businessId: number;
+  action: (action: string, payload: Record<string, unknown>, messagePt: string, messageEn: string) => Promise<void>;
+}) {
+  const isOwner = request.ownerBusinessId === businessId;
+  const isRequester = request.requesterBusinessId === businessId;
+  const canAccept = request.status === "Pending" && isOwner || request.status === "Countered" && request.proposedByBusinessId !== businessId;
+  const canCancel = isRequester && ["Pending", "Countered", "Accepted"].includes(request.status);
+  return <div className="network-request-manager">
+    <section className="request-overview">
+      <div><span>{t("Estado", "Status")}</span><strong className={cls("network-status", request.status.toLowerCase())}>{networkStatusLabel(request.status, t)}</strong></div>
+      <div><span>{t("Datas", "Dates")}</span><strong>{request.startDate} → {request.endDate}</strong></div>
+      <div><span>{t("Quantidade", "Quantity")}</span><strong>{request.quantity}</strong></div>
+      <div><span>{t("Aluguer", "Rental")}</span><strong>{formatMoney(request.total, request.currency, language)}</strong></div>
+      <div><span>{t("Caução", "Deposit")}</span><strong>{formatMoney(request.deposit, request.currency, language)}</strong></div>
+      <div><span>{t("Entrega", "Delivery")}</span><strong>{request.deliveryMethod}</strong></div>
+    </section>
+    {(request.requesterNote || request.ownerNote) && <div className="request-notes">{request.requesterNote && <p><strong>{request.requesterName}</strong>{request.requesterNote}</p>}{request.ownerNote && <p><strong>{request.ownerName}</strong>{request.ownerNote}</p>}</div>}
+    <div className="request-actions-primary">
+      {canAccept && <button className="button-primary" onClick={() => action("acceptRentalRequest", { id: request.id }, "Pedido aceite", "Request accepted")}>{t("Aceitar condições", "Accept terms")}</button>}
+      {isOwner && ["Pending", "Countered"].includes(request.status) && <button className="button-secondary" onClick={() => action("rejectRentalRequest", { id: request.id }, "Pedido rejeitado", "Request rejected")}>{t("Rejeitar", "Reject")}</button>}
+      {canCancel && <button className="button-secondary" onClick={() => action("cancelRentalRequest", { id: request.id }, "Pedido cancelado", "Request cancelled")}>{t("Cancelar pedido", "Cancel request")}</button>}
+      {isOwner && request.status === "Accepted" && <button className="button-primary" onClick={() => action("transitionRentalRequest", { id: request.id, status: "CheckedOut" }, "Recolha registada", "Collection recorded")}>{t("Registar recolha", "Record collection")}</button>}
+      {isOwner && ["CheckedOut", "Disputed"].includes(request.status) && request.checkedOutAt && !request.returnedAt && <button className="button-primary" onClick={() => action("transitionRentalRequest", { id: request.id, status: "Returned" }, "Devolução registada", "Return recorded")}>{t("Registar devolução", "Record return")}</button>}
+      {isOwner && request.status === "Returned" && <button className="button-primary" onClick={() => action("transitionRentalRequest", { id: request.id, status: "Completed" }, "Aluguer concluído", "Rental completed")}>{t("Concluir aluguer", "Complete rental")}</button>}
+    </div>
+    {isOwner && ["Pending", "Countered"].includes(request.status) && <details className="request-panel"><summary>{t("Fazer contraproposta", "Make a counteroffer")}</summary><form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("counterRentalRequest", { id: request.id, quantity: Number(form.get("quantity")), startDate: String(form.get("startDate")), endDate: String(form.get("endDate")), unitPrice: Number(form.get("unitPrice")), deposit: Number(form.get("deposit")), note: String(form.get("note")) }, "Contraproposta enviada", "Counteroffer sent"); }}>
+      <div className="form-grid"><label>{t("Início", "Start")}<input name="startDate" type="date" defaultValue={request.startDate} required /></label><label>{t("Fim", "End")}<input name="endDate" type="date" defaultValue={request.endDate} required /></label></div>
+      <div className="form-grid"><label>{t("Quantidade", "Quantity")}<input name="quantity" type="number" min="1" defaultValue={request.quantity} required /></label><label>{t("Preço diário", "Daily price")}<input name="unitPrice" type="number" min="1" defaultValue={request.unitPrice} required /></label></div>
+      <label>{t("Caução", "Deposit")}<input name="deposit" type="number" min="0" defaultValue={request.deposit} /></label><label>{t("Nota", "Note")}<textarea name="note" rows={3} defaultValue={request.ownerNote} /></label><button className="button-primary">{t("Enviar contraproposta", "Send counteroffer")}</button>
+    </form></details>}
+    {isOwner && ["Accepted", "CheckedOut", "Returned", "Disputed", "Completed"].includes(request.status) && <details className="request-panel" open={request.status === "Accepted"}><summary>{t("Pagamento e caução", "Payment & deposit")}</summary><form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("updateRentalFinancials", { id: request.id, paymentStatus: String(form.get("paymentStatus")), depositStatus: String(form.get("depositStatus")) }, "Estado financeiro actualizado", "Financial status updated"); }}>
+      <div className="form-grid"><label>{t("Pagamento", "Payment")}<select name="paymentStatus" defaultValue={request.paymentStatus}><option value="Pending">{t("Pendente", "Pending")}</option><option value="Confirmed">{t("Confirmado manualmente", "Manually confirmed")}</option><option value="Refunded">{t("Reembolsado", "Refunded")}</option></select></label><label>{t("Caução", "Deposit")}<select name="depositStatus" defaultValue={request.depositStatus}><option value="Pending">{t("Pendente", "Pending")}</option><option value="Held">{t("Recebida", "Held")}</option><option value="Returned">{t("Devolvida", "Returned")}</option><option value="Retained">{t("Retida por acordo", "Retained by agreement")}</option></select></label></div><button className="button-primary">{t("Guardar confirmação", "Save confirmation")}</button><p>{t("Este registo confirma um pagamento feito fora da Trove; não movimenta dinheiro.", "This records an off-platform payment; it does not move money.")}</p>
+    </form></details>}
+    {!request.disputeId && ["Accepted", "CheckedOut", "Returned"].includes(request.status) && <details className="request-panel dispute"><summary>{t("Reportar problema", "Report a problem")}</summary><form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("openRentalDispute", { id: request.id, disputeId: Date.now(), reason: String(form.get("reason")) }, "Disputa registada", "Dispute opened"); }}><label>{t("Descreva o problema", "Describe the issue")}<textarea name="reason" rows={4} required /></label><button className="button-secondary">{t("Abrir disputa", "Open dispute")}</button></form></details>}
+    {request.disputeId && <section className="dispute-box"><span className="eyebrow">{t("RESOLUÇÃO DE DISPUTA", "DISPUTE RESOLUTION")}</span><p><strong>{t("Motivo:", "Reason:")}</strong> {request.disputeReason}</p><em>{request.disputeStatus}</em>
+      {request.disputeStatus !== "Resolved" && request.disputeOpenedByBusinessId !== businessId && <form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("proposeDisputeResolution", { id: request.id, resolution: String(form.get("resolution")) }, "Resolução proposta", "Resolution proposed"); }}><label>{t("Proposta de resolução", "Resolution proposal")}<textarea name="resolution" rows={3} defaultValue={request.proposedResolution || ""} required /></label><button className="button-primary">{t("Propor resolução", "Propose resolution")}</button></form>}
+      {request.disputeStatus === "Proposed" && request.disputeOpenedByBusinessId === businessId && <div className="resolution-proposal"><p><strong>{t("Proposta:", "Proposal:")}</strong> {request.proposedResolution}</p><button className="button-primary" onClick={() => action("acceptDisputeResolution", { id: request.id }, "Disputa resolvida", "Dispute resolved")}>{t("Aceitar resolução", "Accept resolution")}</button></div>}
+    </section>}
+    {["Returned", "Completed"].includes(request.status) && !request.reviewId && <details className="request-panel"><summary>{t("Avaliar a outra empresa", "Review the other business")}</summary><form onSubmit={(event) => { event.preventDefault(); const form = new FormData(event.currentTarget); action("reviewRental", { id: request.id, reviewId: Date.now(), rating: Number(form.get("rating")), comment: String(form.get("comment")) }, "Avaliação publicada", "Review published"); }}><label>{t("Avaliação", "Rating")}<select name="rating" defaultValue="5"><option value="5">★★★★★</option><option value="4">★★★★</option><option value="3">★★★</option><option value="2">★★</option><option value="1">★</option></select></label><label>{t("Comentário", "Comment")}<textarea name="comment" rows={3} /></label><button className="button-primary">{t("Publicar avaliação", "Publish review")}</button></form></details>}
+  </div>;
+}
+
+function LaunchTools({ t, online, pushState, canMonitor, canBackup, enquiryCount, emailConfigured, install, enablePush, feedback, monitoring, enquiries, backup }: {
+  t: Translator;
+  online: boolean;
+  pushState: "idle" | "active" | "unsupported" | "unconfigured";
+  canMonitor: boolean;
+  canBackup: boolean;
+  enquiryCount: number;
+  emailConfigured: boolean;
+  install: () => void;
+  enablePush: () => void;
+  feedback: () => void;
+  monitoring: () => void;
+  enquiries: () => void;
+  backup: () => void;
+}) {
+  return <section className="launch-tools card">
+    <header><div><span className="eyebrow">{t("MOBILE E LANÇAMENTO", "MOBILE & LAUNCH")}</span><h2>{t("Trove no seu dispositivo", "Trove on your device")}</h2><p>{t("Instale a aplicação, receba alertas em segundo plano e ajude a preparar o beta.", "Install the app, receive background alerts, and help prepare the beta.")}</p></div><span className={cls("connection-badge", online ? "online" : "offline")}>{online ? t("Ligado", "Online") : t("Só consulta", "Read only")}</span></header>
+    <div>
+      <article><i>▣</i><span><strong>{t("Aplicação instalável", "Installable app")}</strong><small>{t("Abra a Trove a partir do ecrã principal.", "Open Trove from your home screen.")}</small></span><button className="button-secondary" onClick={install}>{t("Instalar", "Install")}</button></article>
+      <article><i>♢</i><span><strong>{t("Notificações push", "Push notifications")}</strong><small>{pushState === "active" ? t("Este dispositivo está activo.", "This device is active.") : t("Alertas de reservas e actividade, mesmo em segundo plano.", "Reservation and activity alerts, even in the background.")}</small></span><button className="button-secondary" onClick={enablePush}>{pushState === "active" ? t("Activo", "Active") : t("Activar", "Enable")}</button></article>
+      <article><i>✦</i><span><strong>{t("Pedidos do perfil", "Profile enquiries")}</strong><small>{enquiryCount ? t(`${enquiryCount} pedido(s) novo(s)`, `${enquiryCount} new enquiry/enquiries`) : t("Nenhum pedido novo.", "No new enquiries.")}</small></span><button className="button-secondary" onClick={enquiries}>{t("Abrir", "Open")}</button></article>
+      <article><i>✉</i><span><strong>{t("Email transaccional", "Transactional email")}</strong><small>{emailConfigured ? t("Resend está configurado.", "Resend is configured.") : t("Preparado; falta ligar domínio e credencial.", "Ready; domain and credential still required.")}</small></span><span className={cls("connection-badge", emailConfigured ? "online" : "offline")}>{emailConfigured ? t("Activo", "Active") : t("Pendente", "Pending")}</span></article>
+      <article><i>◎</i><span><strong>{t("Programa beta", "Beta programme")}</strong><small>{t("Partilhe uma dificuldade ou sugestão com a equipa.", "Share an issue or suggestion with the team.")}</small></span><button className="button-secondary" onClick={feedback}>{t("Dar feedback", "Give feedback")}</button></article>
+      {canBackup && <article><i>↓</i><span><strong>{t("Cópia integral", "Full backup")}</strong><small>{t("Descarregue dados operacionais em JSON.", "Download operational data as JSON.")}</small></span><button className="button-secondary" onClick={backup}>{t("Exportar", "Export")}</button></article>}
+      {canMonitor && <article><i>↗</i><span><strong>{t("Estado operacional", "Operational status")}</strong><small>{t("Erros recentes, dispositivos push e respostas beta.", "Recent errors, push devices, and beta responses.")}</small></span><button className="button-secondary" onClick={monitoring}>{t("Consultar", "View")}</button></article>}
+    </div>
+    <footer className="launch-legal"><a href="/legal/terms">{t("Termos beta", "Beta terms")}</a><a href="/legal/privacy">{t("Privacidade", "Privacy")}</a></footer>
+  </section>;
+}
+
+function ProfileEditor({ t, profile, itemCount, setProfile, save, saving }: { t: Translator; profile: Profile; itemCount: number; setProfile: (profile: Profile) => void; save: () => void; saving: boolean }) {
   const colors = ["#b75d3f", "#78836a", "#ba914d", "#3f5f68", "#755f72", "#303634"];
-  const update = (key: keyof Profile, value: string) => setProfile({ ...profile, [key]: value });
+  function update<K extends keyof Profile>(key: K, value: Profile[K]) {
+    setProfile({ ...profile, [key]: value });
+  }
   return (
     <>
       <PageHeading eyebrow={t("O SEU NEGÓCIO", "YOUR BUSINESS")} title={t("Perfil público", "Public profile")} detail={t("Crie uma presença profissional que representa a sua marca.", "Create a polished presence that represents your brand.")} action={<button className="button-primary" onClick={save}>{saving ? t("A guardar…", "Saving…") : t("Guardar alterações", "Save changes")}</button>} />
@@ -692,39 +3383,106 @@ function ProfileEditor({ t, profile, setProfile, save, saving }: { t: Translator
             try {
               const response = await fetch("/api/profile-image", { method: "POST", body });
               if (response.ok) {
-                const data = await response.json();
+                const data = await response.json() as { url: string };
                 update("avatarUrl", data.url);
               }
             } catch { /* Preview stays usable without upload binding. */ }
           }} /></label></span></div>
-          <div className="form-grid"><label>{t("Nome do negócio", "Business name")}<input value={profile.businessName} onChange={(event) => update("businessName", event.target.value)} /></label><label>{t("Endereço do perfil", "Profile address")}<span className="input-prefix">trove.co/<input value={profile.handle} onChange={(event) => update("handle", event.target.value)} /></span></label></div>
+          <div className="form-grid"><label>{t("Nome do negócio", "Business name")}<input value={profile.businessName} onChange={(event) => update("businessName", event.target.value)} /></label><label>{t("Endereço do perfil", "Profile address")}<span className="input-prefix">/p/<input value={profile.handle} onChange={(event) => update("handle", event.target.value)} /></span></label></div>
           <label>{t("Biografia", "Bio")}<textarea rows={4} maxLength={220} value={profile.bio} onChange={(event) => update("bio", event.target.value)} /><small className="char-count">{profile.bio.length}/220</small></label>
+          <label>{t("Serviços (separados por vírgulas)", "Services (comma separated)")}<input maxLength={500} value={profile.services} onChange={(event) => update("services", event.target.value)} placeholder={t("Decoração, aluguer, montagem", "Styling, rentals, setup")} /></label>
           <div className="divider" />
           <div className="section-title"><span>02</span><div><h2>{t("Cor da marca", "Brand colour")}</h2><p>{t("Escolha uma cor inspirada em marcas de decoração.", "Choose a tone inspired by décor brands.")}</p></div></div>
           <div className="color-picker">{colors.map((color) => <button aria-label={`Choose ${color}`} key={color} style={{ background: color }} className={cls(profile.color === color && "active")} onClick={() => update("color", color)}><span>✓</span></button>)}</div>
           <div className="divider" />
           <div className="section-title"><span>03</span><div><h2>{t("Contactos", "Contact details")}</h2><p>{t("Ajude visitantes a entrar em contacto.", "Help visitors get in touch.")}</p></div></div>
           <div className="form-grid"><label>{t("Localização", "Location")}<input value={profile.location} onChange={(event) => update("location", event.target.value)} /></label><label>{t("Telefone", "Phone")}<input value={profile.phone} onChange={(event) => update("phone", event.target.value)} /></label></div>
-          <label>{t("Email", "Email address")}<input value={profile.email} onChange={(event) => update("email", event.target.value)} /></label>
+          <div className="form-grid"><label>{t("Email", "Email address")}<input type="email" value={profile.email} onChange={(event) => update("email", event.target.value)} /></label><label>Instagram<input value={profile.instagram} onChange={(event) => update("instagram", event.target.value)} placeholder="@marca" /></label></div>
+          <label>{t("Website", "Website")}<input type="url" value={profile.website} onChange={(event) => update("website", event.target.value)} placeholder="https://…" /></label>
+          <div className="profile-visibility">
+            <label><input type="checkbox" checked={profile.isPublic} onChange={(event) => update("isPublic", event.target.checked)} /><span><strong>{t("Perfil visível", "Profile visible")}</strong><small>{t("Permite abrir a página pelo endereço público.", "Allows the page to open at its public address.")}</small></span></label>
+            <label><input type="checkbox" checked={profile.acceptsEnquiries} onChange={(event) => update("acceptsEnquiries", event.target.checked)} /><span><strong>{t("Aceitar pedidos", "Accept enquiries")}</strong><small>{t("Mostra o formulário de pedido de orçamento.", "Shows the enquiry form.")}</small></span></label>
+          </div>
         </div>
-        <aside className="profile-preview-wrap"><div className="preview-label"><span className="eyebrow">{t("PRÉ-VISUALIZAÇÃO", "LIVE PREVIEW")}</span><button>↗ {t("Abrir página pública", "Open public page")}</button></div><div className="public-profile-card"><div className="profile-cover" style={{ background: profile.color }}><span /><span /></div><div className="public-content"><div className="public-avatar" style={{ background: profile.color }}>{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : profile.businessName.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><span className="verified">{t("DECORADOR VERIFICADO", "VERIFIED DECORATOR")} · <b>✓</b></span><h2>{profile.businessName}</h2><p>{profile.bio}</p><small>⌖ {profile.location}</small><div className="public-actions"><button style={{ background: profile.color }}>{t("Enviar pedido", "Send an enquiry")}</button><button>♡</button></div><div className="public-stats"><span><strong>184</strong><small>{t("peças", "pieces")}</small></span><span><strong>4.9</strong><small>{t("avaliação", "rating")}</small></span><span><strong>6 {t("anos", "yrs")}</strong><small>{t("em actividade", "in business")}</small></span></div></div></div><p className="preview-footnote">{t("As alterações aparecem aqui imediatamente.", "Changes appear here instantly.")}</p></aside>
+        <aside className="profile-preview-wrap"><div className="preview-label"><span className="eyebrow">{t("PRÉ-VISUALIZAÇÃO", "LIVE PREVIEW")}</span><a href={`/p/${encodeURIComponent(profile.handle)}`} target="_blank" rel="noreferrer">↗ {t("Abrir página pública", "Open public page")}</a></div><div className="public-profile-card"><div className="profile-cover" style={{ background: profile.color }}><span /><span /></div><div className="public-content"><div className="public-avatar" style={{ background: profile.color }}>{profile.avatarUrl ? <img src={profile.avatarUrl} alt="" /> : profile.businessName.split(" ").map((word) => word[0]).join("").slice(0, 2)}</div><span className="verified">{t("EMPRESA NA TROVE", "TROVE BUSINESS")} · <b>✓</b></span><h2>{profile.businessName}</h2><p>{profile.bio}</p><small>⌖ {profile.location}</small><div className="public-actions"><button style={{ background: profile.color }}>{t("Enviar pedido", "Send an enquiry")}</button></div><div className="public-stats"><span><strong>{itemCount}</strong><small>{t("peças", "pieces")}</small></span><span><strong>—</strong><small>{t("avaliação", "rating")}</small></span><span><strong>{profile.services.split(",").filter(Boolean).length}</strong><small>{t("serviços", "services")}</small></span></div></div></div><p className="preview-footnote">{t("Guarde antes de abrir a página pública.", "Save before opening the public page.")}</p></aside>
       </section>
     </>
   );
 }
 
-function Plans({ t, plan, choose }: { t: Translator; plan: "Basic" | "Network"; choose: (plan: "Basic" | "Network") => void }) {
+function Plans({ t, language, plan, subscription, payments, billing, canManageBilling, choose, changeCancellation, openReceipt }: {
+  t: Translator;
+  language: Language;
+  plan: "Basic" | "Network";
+  subscription: SubscriptionRecord | null;
+  payments: PaymentRecord[];
+  billing: BillingInfo | null;
+  canManageBilling: boolean;
+  choose: (plan: "Basic" | "Network") => void;
+  changeCancellation: (cancel: boolean) => void;
+  openReceipt: (payment: PaymentRecord) => void;
+}) {
+  const activeUntil = subscription?.currentPeriodEnd
+    ? new Date(subscription.currentPeriodEnd).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")
+    : "—";
+  const statusLabels: Record<string, string> = {
+    Trialing: t("Período experimental", "Trial"),
+    Active: t("Activa", "Active"),
+    Grace: t("Período de tolerância", "Grace period"),
+    PastDue: t("Pagamento em atraso", "Past due"),
+    Cancelled: t("Cancelada", "Cancelled"),
+  };
   return (
     <>
       <PageHeading eyebrow={t("SUBSCRIÇÃO", "SUBSCRIPTION")} title={t("Um plano que cresce consigo.", "A plan that grows with you.")} detail={t("Comece pelo inventário e desbloqueie a rede local quando precisar.", "Start with inventory and unlock the local network when you need it.")} />
-      <section className="billing-toggle"><button className="active">{t("Mensal", "Monthly")}</button><button>{t("Anual", "Yearly")} <span>{t("Poupe 20%", "Save 20%")}</span></button></section>
+      {subscription && <section className={cls("subscription-status", `status-${subscription.status.toLowerCase()}`)}>
+        <div><span className="eyebrow">{t("SUBSCRIÇÃO ACTUAL", "CURRENT SUBSCRIPTION")}</span><strong>{plan} · {statusLabels[subscription.status] || subscription.status}</strong><small>{t(`Acesso actual até ${activeUntil}`, `Current access until ${activeUntil}`)}{subscription.graceUntil ? t(` · tolerância até ${new Date(subscription.graceUntil).toLocaleDateString("pt-MZ")}`, ` · grace until ${new Date(subscription.graceUntil).toLocaleDateString("en-MZ")}`) : ""}</small></div>
+        {canManageBilling && (subscription.cancelAtPeriodEnd
+          ? <button className="button-primary" onClick={() => changeCancellation(false)}>{t("Manter subscrição", "Keep subscription")}</button>
+          : <button className="button-secondary danger-outline" onClick={() => changeCancellation(true)}>{t("Cancelar no fim do período", "Cancel at period end")}</button>)}
+      </section>}
+      {!billing?.configured && <section className="billing-configuration-note"><span>!</span><div><strong>{t("Activação comercial pendente", "Merchant activation pending")}</strong><small>{t("O fluxo PaySuite está implementado. Para aceitar pagamentos reais é necessário configurar o token da conta e o segredo do webhook.", "The PaySuite flow is implemented. A merchant token and webhook secret are required before accepting real payments.")}</small></div></section>}
+      <section className="billing-toggle"><button className="active">{t("Mensal", "Monthly")}</button><span>{t("Pagamentos em MZN via PaySuite", "MZN payments via PaySuite")}</span></section>
       <section className="plans-grid">
-        <article className={cls("pricing-card", plan === "Basic" && "current")}><span className="plan-label">STORAGE</span><h2>Basic</h2><p>{t("Tudo para uma pequena equipa se manter organizada.", "Everything a small team needs to stay organised.")}</p><div className="price"><strong>1 200</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button className="button-secondary" onClick={() => choose("Basic")}>{plan === "Basic" ? t("Plano actual", "Current plan") : t("Escolher Basic", "Choose Basic")}</button><ul><li>✓ {t("Inventário ilimitado", "Unlimited inventory")}</li><li>✓ {t("Calendário partilhado", "Shared calendar")}</li><li>✓ {t("Até 3 colaboradores", "Up to 3 team members")}</li><li>✓ {t("Perfil público", "Public profile")}</li><li>✓ {t("Exportação CSV", "CSV exports")}</li></ul></article>
-        <article className={cls("pricing-card featured", plan === "Network" && "current")}><span className="recommended">{t("MAIS POPULAR", "MOST POPULAR")}</span><span className="plan-label">STORAGE + NETWORK</span><h2>Network</h2><p>{t("Gira a colecção e expanda-a através de parceiros locais.", "Manage and expand through local partners.")}</p><div className="price"><strong>3 100</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button className="button-primary" onClick={() => choose("Network")}>{plan === "Network" ? t("Plano actual", "Current plan") : t("Mudar para Network", "Upgrade to Network")}</button><ul><li>✓ {t("Tudo no Basic", "Everything in Basic")}</li><li>✓ {t("Pesquisar stock local", "Search local stock")}</li><li>✓ {t("Pedir e aceitar alugueres", "Request and accept rentals")}</li><li>✓ {t("Preços e condições próprias", "Own pricing and terms")}</li><li>✓ {t("Colaboradores ilimitados", "Unlimited team members")}</li><li>✓ {t("Análise de receita", "Revenue analytics")}</li></ul></article>
+        <article className={cls("pricing-card", plan === "Basic" && "current")}><span className="plan-label">STORAGE</span><h2>Basic</h2><p>{t("Tudo para uma pequena equipa se manter organizada.", "Everything a small team needs to stay organised.")}</p><div className="price"><strong>1 200</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button disabled={!canManageBilling} className="button-secondary" onClick={() => choose("Basic")}>{canManageBilling ? (plan === "Basic" ? t("Pagar ou renovar Basic", "Pay or renew Basic") : t("Mudar para Basic", "Switch to Basic")) : t("Apenas o proprietário pode alterar", "Owner only")}</button><ul><li>✓ {t("Inventário ilimitado", "Unlimited inventory")}</li><li>✓ {t("Calendário partilhado", "Shared calendar")}</li><li>✓ {t("Até 3 colaboradores", "Up to 3 team members")}</li><li>✓ {t("Perfil público", "Public profile")}</li><li>✓ {t("Exportação CSV", "CSV exports")}</li></ul></article>
+        <article className={cls("pricing-card featured", plan === "Network" && "current")}><span className="recommended">{t("MAIS POPULAR", "MOST POPULAR")}</span><span className="plan-label">STORAGE + NETWORK</span><h2>Network</h2><p>{t("Gira a colecção e expanda-a através de parceiros locais.", "Manage and expand through local partners.")}</p><div className="price"><strong>3 100</strong><span>MZN / {t("mês", "month")}<br /><small>{t("por negócio", "per business")}</small></span></div><button disabled={!canManageBilling} className="button-primary" onClick={() => choose("Network")}>{canManageBilling ? (plan === "Network" ? t("Pagar ou renovar Network", "Pay or renew Network") : t("Mudar para Network", "Upgrade to Network")) : t("Apenas o proprietário pode alterar", "Owner only")}</button><ul><li>✓ {t("Tudo no Basic", "Everything in Basic")}</li><li>✓ {t("Pesquisar stock local", "Search local stock")}</li><li>✓ {t("Pedir e aceitar alugueres", "Request and accept rentals")}</li><li>✓ {t("Preços e condições próprias", "Own pricing and terms")}</li><li>✓ {t("Colaboradores ilimitados", "Unlimited team members")}</li><li>✓ {t("Análise de receita", "Revenue analytics")}</li></ul></article>
+      </section>
+      <section className="payment-history card"><header><div><span className="eyebrow">{t("FACTURAÇÃO", "BILLING")}</span><h2>{t("Pagamentos e recibos", "Payments & receipts")}</h2></div><small>{payments.length} {t("registos", "records")}</small></header>
+        <div>{payments.length ? payments.map((payment) => <article key={payment.id}><span className={cls("payment-status", `payment-${payment.status.toLowerCase()}`)}>{payment.status}</span><div><strong>{payment.plan} · {formatMoney(payment.amount, payment.currency, language)}</strong><small>{payment.reference} · {new Date(payment.createdAt).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")}</small>{payment.failureReason && <em>{payment.failureReason}</em>}</div>{payment.status === "Paid" && payment.receiptNumber ? <button onClick={() => openReceipt(payment)}>{t("Ver recibo", "View receipt")}</button> : payment.status === "Pending" && payment.checkoutUrl ? <a href={payment.checkoutUrl}>{t("Continuar pagamento", "Continue payment")}</a> : <span />}</article>) : <div className="manager-empty">◇<strong>{t("Ainda sem pagamentos", "No payments yet")}</strong></div>}</div>
       </section>
       <section className="plan-note"><span>♡</span><div><strong>{t("Pensado para a realidade dos decoradores.", "Built for how decorators actually work.")}</strong><p>{t("Sem contratos. Mude ou cancele quando quiser.", "No contracts. Switch or cancel anytime.")}</p></div><button>{t("Perguntas frequentes", "Common questions")} →</button></section>
     </>
   );
+}
+
+function Receipt({ payment, businessName, language, t }: { payment: PaymentRecord; businessName: string; language: Language; t: Translator }) {
+  return <section className="receipt">
+    <header><div><span className="brand-mark"><i /><i /><i /></span><strong>Trove</strong></div><span>{t("RECIBO", "RECEIPT")}</span></header>
+    <h3>{payment.receiptNumber}</h3>
+    <dl><div><dt>{t("Empresa", "Business")}</dt><dd>{businessName}</dd></div><div><dt>{t("Plano", "Plan")}</dt><dd>{payment.plan}</dd></div><div><dt>{t("Valor", "Amount")}</dt><dd>{formatMoney(payment.amount, payment.currency, language)}</dd></div><div><dt>{t("Método", "Method")}</dt><dd>{payment.method || "PaySuite"}</dd></div><div><dt>{t("Referência", "Reference")}</dt><dd>{payment.reference}</dd></div><div><dt>{t("Pago em", "Paid on")}</dt><dd>{payment.paidAt ? new Date(payment.paidAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ") : "—"}</dd></div></dl>
+    <p>{t("Pagamento recebido para acesso mensal à plataforma Trove.", "Payment received for monthly access to the Trove platform.")}</p>
+    <button className="button-primary" onClick={() => window.print()}>{t("Imprimir recibo", "Print receipt")}</button>
+  </section>;
+}
+
+function EnquiryManager({ enquiries, emailDeliveries, language, t, onStatus }: {
+  enquiries: PublicEnquiry[];
+  emailDeliveries: EmailDelivery[];
+  language: Language;
+  t: Translator;
+  onStatus: (enquiry: PublicEnquiry, status: PublicEnquiry["status"]) => void;
+}) {
+  if (!enquiries.length) {
+    return <div className="manager-empty">✦<strong>{t("Ainda não há pedidos", "No enquiries yet")}</strong><p>{t("Os pedidos enviados pelo perfil público aparecerão aqui.", "Enquiries sent through the public profile will appear here.")}</p></div>;
+  }
+  return <div className="enquiry-manager">
+    {enquiries.map((enquiry) => <article key={enquiry.id}>
+      <header><div><strong>{enquiry.name}</strong><small>{new Date(enquiry.createdAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ")}</small></div><span className={cls("enquiry-status", enquiry.status.toLowerCase())}>{enquiry.status === "New" ? t("Novo", "New") : enquiry.status === "Contacted" ? t("Contactado", "Contacted") : t("Fechado", "Closed")}</span></header>
+      <p>{enquiry.message}</p>
+      <dl><div><dt>Email</dt><dd><a href={`mailto:${enquiry.email}`}>{enquiry.email}</a></dd></div>{enquiry.phone && <div><dt>{t("Telefone", "Phone")}</dt><dd><a href={`tel:${enquiry.phone}`}>{enquiry.phone}</a></dd></div>}{enquiry.eventDate && <div><dt>{t("Evento", "Event")}</dt><dd>{new Date(`${enquiry.eventDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")}</dd></div>}</dl>
+      <footer><span>{emailDeliveries.some((delivery) => delivery.template === "public-enquiry" && delivery.status === "Sent" && delivery.createdAt >= enquiry.createdAt) ? t("Notificação por email enviada", "Email notification sent") : t("Notificação interna registada", "Internal notification recorded")}</span><div>{enquiry.status !== "Contacted" && <button className="button-secondary" onClick={() => onStatus(enquiry, "Contacted")}>{t("Marcar contactado", "Mark contacted")}</button>}{enquiry.status !== "Closed" && <button className="button-secondary" onClick={() => onStatus(enquiry, "Closed")}>{t("Fechar", "Close")}</button>}</div></footer>
+    </article>)}
+  </div>;
 }
 
 function Analytics({ language, t, items, reservations }: { language: Language; t: Translator; items: Item[]; reservations: Reservation[] }) {
@@ -735,7 +3493,7 @@ function Analytics({ language, t, items, reservations }: { language: Language; t
     return { category, rate: total ? Math.round((inUse / total) * 100) : 0 };
   }).sort((a, b) => b.rate - a.rate).slice(0, 5);
   const weekly = [42, 58, 36, 74, 67, 88, 62];
-  const revenue = items.reduce((sum, item) => sum + (item.quantity - item.available) * (item.price || 0), 0);
+  const revenue = reservations.filter((reservation) => reservation.status !== "Cancelled").reduce((sum, reservation) => sum + (reservation.total || 0), 0);
   return <section className="analytics-grid">
     <article className="card analytics-card">
       <div className="card-heading"><div><span className="eyebrow">{t("ANÁLISE", "ANALYTICS")}</span><h2>{t("Ocupação por categoria", "Utilization by category")}</h2></div><span className="analytics-period">{t("Últimos 30 dias", "Last 30 days")}</span></div>
@@ -749,21 +3507,79 @@ function Analytics({ language, t, items, reservations }: { language: Language; t
   </section>;
 }
 
-function ReservationInspector({ language, t, reservation }: { language: Language; t: Translator; reservation: Reservation | null }) {
+function ReservationInspector({ language, t, reservation, onEdit, onTransition }: { language: Language; t: Translator; reservation: Reservation | null; onEdit: (reservation: Reservation) => void; onTransition: (reservation: Reservation, status: string) => void }) {
   if (!reservation) return <aside className="card agenda-card"><span className="eyebrow">{t("DETALHES", "DETAILS")}</span><div className="agenda-empty"><span>☼</span><strong>{t("Nenhuma reserva seleccionada", "No reservation selected")}</strong><p>{t("Seleccione um evento no calendário.", "Select an event on the calendar.")}</p></div></aside>;
   return <aside className="card agenda-card reservation-inspector">
     <span className="eyebrow">{t("DETALHES DA RESERVA", "RESERVATION DETAILS")}</span>
     <h2>{reservation.eventName || reservation.client}</h2>
-    <span className="status-pill delivery">{t("Confirmada", "Confirmed")}</span>
+    <span className={cls("status-pill", reservation.status === "Cancelled" ? "cancelled" : reservation.status === "Returned" ? "return" : reservation.status === "CheckedOut" ? "delivery" : "pickup")}>{reservationStatusLabel(reservation.status, t)}</span>
     <dl>
       <div><dt>{t("Cliente", "Client")}</dt><dd>{reservation.client}</dd></div>
-      <div><dt>{t("Item", "Item")}</dt><dd>{reservation.item}</dd></div>
+      <div><dt>{t("Artigos", "Items")}</dt><dd>{reservation.items.length ? <ul className="inspector-items">{reservation.items.map((line) => <li key={line.id}><span>{line.quantity}× {line.itemName}</span><b>{formatMoney(line.quantity * line.unitPrice, line.currency, language)}</b></li>)}</ul> : reservation.item}</dd></div>
       <div><dt>{t("Datas", "Dates")}</dt><dd>{new Date(`${reservation.date}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })} — {new Date(`${reservation.endDate}T00:00:00`).toLocaleDateString(language === "pt" ? "pt-PT" : "en-US", { day: "numeric", month: "short" })}</dd></div>
       <div><dt>{t("Contacto", "Contact")}</dt><dd>{reservation.contact || "—"}</dd></div>
-      <div><dt>{t("Notas", "Notes")}</dt><dd>{reservation.notes || t("Sem notas adicionais.", "No additional notes.")}</dd></div>
+      <div><dt>{t("Valores", "Pricing")}</dt><dd><span className="inspector-price"><small>{t("Subtotal", "Subtotal")} {formatMoney(reservation.subtotal || 0, reservation.currency || "MZN", language)} · {t("Desconto", "Discount")} {formatMoney(reservation.discount || 0, reservation.currency || "MZN", language)} · {t("Entrega", "Delivery")} {formatMoney(reservation.deliveryFee || 0, reservation.currency || "MZN", language)}</small><strong>{t("Total", "Total")}: {formatMoney(reservation.total || 0, reservation.currency || "MZN", language)}</strong><em>{t("Caução", "Deposit")}: {formatMoney(reservation.deposit || 0, reservation.currency || "MZN", language)} · {reservation.paymentStatus || t("Pendente", "Pending")}</em></span></dd></div>
+      <div><dt>{t("Logística", "Logistics")}</dt><dd>{reservation.logistics || reservation.notes || t("Sem instruções adicionais.", "No additional instructions.")}</dd></div>
     </dl>
-    <div className="inspector-actions"><button className="button-secondary">{t("Editar", "Edit")}</button><button className="button-primary">{t("Contactar", "Contact")}</button></div>
+    {reservation.status === "Confirmed" && <div className="inspector-actions lifecycle-actions"><button className="button-secondary" onClick={() => onEdit(reservation)}>{t("Editar", "Edit")}</button><button className="button-secondary danger-outline" onClick={() => onTransition(reservation, "Cancelled")}>{t("Cancelar", "Cancel")}</button><button className="button-primary" onClick={() => onTransition(reservation, "CheckedOut")}>{t("Registar saída", "Check out")}</button></div>}
+    {reservation.status === "CheckedOut" && <div className="inspector-actions"><button className="button-primary" onClick={() => onTransition(reservation, "Returned")}>✓ {t("Registar devolução", "Record return")}</button></div>}
   </aside>;
+}
+
+function ItemManager({ item, categories, photos, movements, maintenance, language, t, onUpdate, onAddPhotos, onRemovePhoto, onAdjustStock, onAddMaintenance, onCompleteMaintenance }: {
+  item: Item;
+  categories: string[];
+  photos: ItemPhoto[];
+  movements: StockMovement[];
+  maintenance: MaintenanceRecord[];
+  language: Language;
+  t: Translator;
+  onUpdate: (event: FormEvent<HTMLFormElement>) => void;
+  onAddPhotos: (files: File[]) => void;
+  onRemovePhoto: (photo: ItemPhoto) => void;
+  onAdjustStock: (event: FormEvent<HTMLFormElement>) => void;
+  onAddMaintenance: (event: FormEvent<HTMLFormElement>) => void;
+  onCompleteMaintenance: (record: MaintenanceRecord) => void;
+}) {
+  const [tab, setTab] = useState<"details" | "gallery" | "stock" | "maintenance">("details");
+  return <div className="item-manager">
+    <nav className="manager-tabs">
+      <button className={cls(tab === "details" && "active")} onClick={() => setTab("details")}>{t("Ficha", "Details")}</button>
+      <button className={cls(tab === "gallery" && "active")} onClick={() => setTab("gallery")}>{t("Fotografias", "Photos")} <span>{photos.length}</span></button>
+      <button className={cls(tab === "stock" && "active")} onClick={() => setTab("stock")}>{t("Stock e histórico", "Stock & history")}</button>
+      <button className={cls(tab === "maintenance" && "active")} onClick={() => setTab("maintenance")}>{t("Manutenção", "Maintenance")} <span>{maintenance.filter((record) => record.status !== "Completed").length}</span></button>
+    </nav>
+    {tab === "details" && <form key={`details-${item.id}-${item.quantity}`} className="modal-form manager-panel" onSubmit={onUpdate}>
+      <div className="form-grid"><label>{t("Nome", "Name")}<input name="name" defaultValue={item.name} required /></label><label>SKU<input name="sku" defaultValue={item.sku} /></label></div>
+      <label>{t("Descrição", "Description")}<textarea name="description" rows={3} defaultValue={item.description} /></label>
+      <div className="form-grid"><label>{t("Categoria", "Category")}<select name="category" defaultValue={item.category}>{categories.map((category) => <option key={category}>{category}</option>)}</select></label><label>{t("Estado", "Status")}<select name="status" defaultValue={item.status}><option value="Available">{t("Disponível", "Available")}</option><option value="Reserved">{t("Reservado", "Reserved")}</option><option value="Rented">{t("Alugado", "Rented")}</option></select></label></div>
+      <div className="form-grid"><label>{t("Quantidade total", "Total quantity")}<input name="quantity" type="number" min="1" defaultValue={item.quantity} required /></label><label>{t("Disponível", "Available")}<input name="available" type="number" min="0" defaultValue={item.available} required /></label></div>
+      <div className="form-grid"><label>{t("Preço / dia", "Price / day")}<input name="price" type="number" min="0" defaultValue={item.price} required /></label><label>{t("Moeda", "Currency")}<select name="currency" defaultValue={item.currency || "MZN"}><option value="MZN">MZN · Metical</option><option value="ZAR">ZAR · Rand</option><option value="USD">USD · Dollar</option><option value="EUR">EUR · Euro</option></select></label></div>
+      <div className="form-grid"><label>{t("Valor de reposição (MZN)", "Replacement value (MZN)")}<input name="replacementValue" type="number" min="0" defaultValue={item.replacementValue} /></label><label>{t("Stock mínimo", "Minimum stock")}<input name="minStock" type="number" min="0" defaultValue={item.minStock} /></label></div>
+      <label>{t("Condição", "Condition")}<select name="condition" defaultValue={item.condition}><option>{t("Excelente", "Excellent")}</option><option>{t("Bom", "Good")}</option><option>{t("Requer inspecção", "Needs inspection")}</option><option>{t("Em manutenção", "In maintenance")}</option><option>{t("Danificado", "Damaged")}</option></select></label>
+      <label>{t("Localização no armazém", "Storage location")}<input name="storageLocation" defaultValue={item.storageLocation} /></label>
+      <div className="modal-actions"><button className="button-primary">{t("Guardar ficha", "Save record")}</button></div>
+    </form>}
+    {tab === "gallery" && <section className="manager-panel">
+      <label className="photo-upload-field"><span>▧</span><span><strong>{t("Adicionar fotografias", "Add photos")}</strong><small>{8 - photos.length} {t("lugares disponíveis", "slots available")}</small></span><input type="file" multiple accept="image/png,image/jpeg" onChange={(event) => { onAddPhotos(Array.from(event.target.files || [])); event.target.value = ""; }} /></label>
+      {photos.length ? <div className="photo-gallery">{photos.map((photo, index) => <figure key={photo.id}><img src={photo.url} alt={`${item.name} ${index + 1}`} /><figcaption>{index === 0 ? t("Capa", "Cover") : `${index + 1}`}<button onClick={() => onRemovePhoto(photo)}>{t("Remover", "Remove")}</button></figcaption></figure>)}</div> : <div className="manager-empty">▧<strong>{t("Ainda não há fotografias", "No photos yet")}</strong></div>}
+    </section>}
+    {tab === "stock" && <section className="manager-panel manager-columns">
+      <form className="operation-form" onSubmit={onAdjustStock}><h3>{t("Registar movimento", "Record movement")}</h3><div className="stock-balance"><span><strong>{item.quantity}</strong><small>{t("total", "total")}</small></span><span><strong>{item.available}</strong><small>{t("disponível", "available")}</small></span></div><div className="form-grid"><label>{t("Tipo", "Type")}<select name="type"><option value="purchase">{t("Compra / entrada", "Purchase / incoming")}</option><option value="adjustment">{t("Acerto", "Adjustment")}</option><option value="damage">{t("Dano / perda", "Damage / loss")}</option><option value="retirement">{t("Abate", "Retirement")}</option></select></label><label>{t("Variação", "Change")}<input name="delta" type="number" placeholder="+5 ou -2" required /></label></div><label>{t("Nota", "Note")}<input name="note" placeholder={t("Factura, motivo ou responsável…", "Invoice, reason, or owner…")} /></label><button className="button-primary">{t("Registar movimento", "Record movement")}</button></form>
+      <div className="history-list"><h3>{t("Histórico", "History")}</h3>{movements.length ? movements.map((movement) => <article key={movement.id}><i className={movement.quantityDelta >= 0 ? "positive" : "negative"}>{movement.quantityDelta > 0 ? "+" : ""}{movement.quantityDelta}</i><span><strong>{movement.type}</strong><small>{movement.note || t("Sem nota", "No note")} · {new Date(movement.createdAt).toLocaleDateString(language === "pt" ? "pt-MZ" : "en-MZ")}</small></span></article>) : <p>{t("Sem movimentos registados.", "No movements recorded.")}</p>}</div>
+    </section>}
+    {tab === "maintenance" && <section className="manager-panel manager-columns">
+      <form className="operation-form" onSubmit={onAddMaintenance}><h3>{t("Nova intervenção", "New intervention")}</h3><div className="form-grid"><label>{t("Tipo", "Type")}<select name="type"><option value="inspection">{t("Inspecção", "Inspection")}</option><option value="cleaning">{t("Limpeza", "Cleaning")}</option><option value="repair">{t("Reparação", "Repair")}</option><option value="damage">{t("Dano", "Damage")}</option></select></label><label>{t("Data prevista", "Scheduled date")}<input name="scheduledDate" type="date" /></label></div><label>{t("Custo (MZN)", "Cost (MZN)")}<input name="cost" type="number" min="0" defaultValue="0" /></label><label>{t("Notas", "Notes")}<textarea name="notes" rows={3} required /></label><button className="button-primary">{t("Registar intervenção", "Add intervention")}</button></form>
+      <div className="maintenance-list"><h3>{t("Intervenções", "Interventions")}</h3>{maintenance.length ? maintenance.map((record) => <article key={record.id}><span className={cls("maintenance-status", record.status === "Completed" && "completed")}>{record.status === "Completed" ? "✓" : "!"}</span><span><strong>{record.type}</strong><small>{record.notes}</small><em>{record.scheduledDate || t("Sem data", "No date")} · {formatMoney(record.cost, "MZN", language)}</em></span>{record.status !== "Completed" && <button onClick={() => onCompleteMaintenance(record)}>{t("Concluir", "Complete")}</button>}</article>) : <p>{t("Nenhuma intervenção registada.", "No maintenance records.")}</p>}</div>
+    </section>}
+  </div>;
+}
+
+function KitManager({ items, kits, language, t, onCreate, onDelete }: { items: Item[]; kits: Kit[]; language: Language; t: Translator; onCreate: (event: FormEvent<HTMLFormElement>) => void; onDelete: (kit: Kit) => void }) {
+  return <div className="kit-manager">
+    <form className="operation-form" onSubmit={onCreate}><h3>{t("Criar novo kit", "Create a new kit")}</h3><div className="form-grid"><label>{t("Nome", "Name")}<input name="name" placeholder={t("Mesa romântica para 10", "Romantic table for 10")} required /></label><label>{t("Preço do kit (MZN)", "Kit price (MZN)")}<input name="price" type="number" min="0" required /></label></div><label>{t("Descrição", "Description")}<textarea name="description" rows={2} /></label><div className="kit-item-picker">{items.map((item) => <label key={item.id}><input name={`kit-item-${item.id}`} type="checkbox" value={item.id} /><span><strong>{item.name}</strong><small>{item.available} {t("disponíveis", "available")}</small></span><input name={`kit-quantity-${item.id}`} type="number" min="1" max={item.quantity} defaultValue="1" aria-label={t(`Quantidade de ${item.name}`, `${item.name} quantity`)} /></label>)}</div><button className="button-primary">{t("Criar kit", "Create kit")}</button></form>
+    <div className="kit-list"><h3>{t("Kits activos", "Active kits")}</h3>{kits.length ? kits.map((kit) => <article key={kit.id}><div><span>◇</span><div><strong>{kit.name}</strong><small>{kit.items.map((entry) => `${entry.quantity}× ${items.find((item) => item.id === entry.itemId)?.name || t("Artigo removido", "Removed item")}`).join(" · ")}</small></div></div><footer><b>{formatMoney(kit.price, kit.currency, language)}</b><button onClick={() => onDelete(kit)}>{t("Remover", "Remove")}</button></footer></article>) : <div className="manager-empty">◇<strong>{t("Ainda não existem kits", "No kits yet")}</strong></div>}</div>
+  </div>;
 }
 
 function CategoryManager({ t, categories, addCategory, removeCategory }: { t: Translator; categories: string[]; addCategory: (name: string) => void; removeCategory: (name: string) => void }) {
@@ -771,11 +3587,73 @@ function CategoryManager({ t, categories, addCategory, removeCategory }: { t: Tr
   return <div className="category-manager"><form onSubmit={(event) => { event.preventDefault(); addCategory(name); setName(""); }}><input value={name} onChange={(event) => setName(event.target.value)} placeholder={t("Nova categoria…", "New category…")} required /><button className="button-primary">{t("Adicionar", "Add")}</button></form><div>{categories.map((category) => <span key={category}><i>▦</i><b>{category}</b><button onClick={() => removeCategory(category)} aria-label={t(`Remover ${category}`, `Remove ${category}`)}>×</button></span>)}</div><p>{t("Ao remover uma categoria, os itens passam para “Sem categoria”.", "Removing a category moves its items to “Uncategorized”.")}</p></div>;
 }
 
-function TeamManager({ t, onInvite }: { t: Translator; onInvite: (email: string, role: string) => void }) {
+function TeamManager({ t, members, canInvite, onInvite, onResend, onRevoke, onRole, onRemove, onActivity }: {
+  t: Translator;
+  members: Member[];
+  canInvite: boolean;
+  onInvite: (email: string, role: string) => Promise<string>;
+  onResend: (member: Member) => Promise<string>;
+  onRevoke: (member: Member) => void;
+  onRole: (member: Member, role: string) => void;
+  onRemove: (member: Member) => void;
+  onActivity: () => void;
+}) {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("Editor");
-  const members = [{ initials: "AM", name: "Amelia Moss", role: t("Proprietária", "Owner"), tone: "clay" }, { initials: "JR", name: "Jonah Reis", role: t("Gestor", "Manager"), tone: "olive" }, { initials: "SK", name: "Sara Khan", role: t("Consulta", "Viewer"), tone: "gold" }];
-  return <div className="team-manager"><div className="team-members">{members.map((member) => <span key={member.name}><i className={member.tone}>{member.initials}</i><b>{member.name}<small>{member.role}</small></b><em>{t("Activo", "Active")}</em></span>)}</div><form onSubmit={(event) => { event.preventDefault(); onInvite(email, role); setEmail(""); }}><label>{t("Email do colaborador", "Collaborator email")}<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@empresa.co.mz" required /></label><label>{t("Permissão", "Permission")}<select value={role} onChange={(event) => setRole(event.target.value)}><option>Editor</option><option>{t("Gestor de reservas", "Booking manager")}</option><option>{t("Apenas consulta", "View only")}</option></select></label><button className="button-primary">{t("Enviar convite", "Send invite")}</button></form><p>{t("Os convites ficam pendentes até ligar um serviço de autenticação e email.", "Invites remain pending until an authentication and email service is connected.")}</p></div>;
+  const [role, setRole] = useState("inventory");
+  const [inviteUrl, setInviteUrl] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const url = await onInvite(email, role);
+    if (url) {
+      setInviteUrl(url);
+      setEmail("");
+    }
+  }
+  async function copyInvite(url: string) {
+    await navigator.clipboard.writeText(url);
+    setInviteUrl(url);
+  }
+  return <div className="team-manager phase-four-team">
+    <header><button className="button-secondary" onClick={onActivity}>{t("Ver histórico de actividade", "View activity history")}</button></header>
+    <div className="team-members">{members.map((member, index) => <span key={`${member.id}-${member.email}`} className={cls(member.status !== "Active" && "pending-member")}>
+      <i className={["clay", "olive", "gold"][index % 3]}>{initials(member.displayName || member.email)}</i>
+      <b>{member.displayName || member.email}<small>{member.status === "Pending" && member.expiresAt ? t(`Expira em ${new Date(member.expiresAt).toLocaleDateString("pt-MZ")}`, `Expires ${new Date(member.expiresAt).toLocaleDateString("en-MZ")}`) : roleLabel(member.role, t)}</small></b>
+      {member.status === "Active" && member.role !== "owner" && canInvite
+        ? <select aria-label={t(`Permissão de ${member.email}`, `${member.email} permission`)} value={member.role} onChange={(event) => onRole(member, event.target.value)}><option value="manager">{t("Gestor", "Manager")}</option><option value="inventory">{t("Inventário", "Inventory")}</option><option value="reservations">{t("Reservas", "Reservations")}</option><option value="viewer">{t("Consulta", "Viewer")}</option></select>
+        : <em>{member.status === "Active" ? t("Activo", "Active") : member.status}</em>}
+      {canInvite && member.status === "Pending" && <div className="member-actions"><button onClick={async () => copyInvite(await onResend(member))}>{t("Renovar e copiar", "Renew & copy")}</button><button onClick={() => onRevoke(member)}>{t("Revogar", "Revoke")}</button></div>}
+      {canInvite && member.status === "Active" && member.role !== "owner" && <button className="member-remove" onClick={() => onRemove(member)}>{t("Remover", "Remove")}</button>}
+    </span>)}</div>
+    {canInvite && <form onSubmit={submit}><label>{t("Email do colaborador", "Collaborator email")}<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="nome@empresa.co.mz" required /></label><label>{t("Permissão", "Permission")}<select value={role} onChange={(event) => setRole(event.target.value)}><option value="manager">{t("Gestor", "Manager")}</option><option value="inventory">{t("Gestão de inventário", "Inventory manager")}</option><option value="reservations">{t("Gestão de reservas", "Booking manager")}</option><option value="viewer">{t("Apenas consulta", "View only")}</option></select></label><button className="button-primary">{t("Criar convite", "Create invitation")}</button></form>}
+    {inviteUrl && <div className="invite-link"><span><strong>{t("Convite pronto", "Invitation ready")}</strong><small>{t("Partilhe este link com o endereço convidado. É válido por 7 dias.", "Share this link with the invited address. It is valid for 7 days.")}</small></span><button className="button-secondary" onClick={() => copyInvite(inviteUrl)}>{t("Copiar link", "Copy link")}</button></div>}
+    <p>{t("A aceitação exige sessão iniciada com o mesmo email. O envio automático por email será activado quando for escolhido um fornecedor de correio.", "Acceptance requires signing in with the same email. Automatic email delivery will be enabled after an email provider is selected.")}</p>
+  </div>;
+}
+
+function NotificationCenter({ notifications, language, t, onRead, onReadAll, onEnableBrowser }: {
+  notifications: NotificationRecord[];
+  language: Language;
+  t: Translator;
+  onRead: (notification: NotificationRecord) => void;
+  onReadAll: () => void;
+  onEnableBrowser: () => void;
+}) {
+  return <div className="notification-center">
+    <header><button className="button-secondary" onClick={onEnableBrowser}>{t("Activar alertas do navegador", "Enable browser alerts")}</button><button onClick={onReadAll}>{t("Marcar tudo como lido", "Mark all as read")}</button></header>
+    <div>{notifications.length ? notifications.map((notification) => <button key={notification.id} className={cls(!notification.readAt && "unread")} onClick={() => onRead(notification)}>
+      <i>{notification.type === "reminder" ? "□" : notification.type === "team" ? "◎" : "◇"}</i>
+      <span><strong>{language === "pt" ? notification.titlePt : notification.titleEn}</strong><small>{language === "pt" ? notification.bodyPt : notification.bodyEn}</small><em>{new Date(notification.createdAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ", { dateStyle: "medium", timeStyle: "short" })}</em></span>
+    </button>) : <div className="manager-empty">◇<strong>{t("Sem notificações", "No notifications")}</strong></div>}</div>
+    <p>{t("Depois de activar, as reservas e actividades importantes podem chegar mesmo com a Trove em segundo plano. No iPhone ou iPad, instale primeiro a aplicação no ecrã principal.", "Once enabled, important reservations and activity can arrive while Trove is in the background. On iPhone or iPad, install the app to the home screen first.")}</p>
+  </div>;
+}
+
+function ActivityLog({ entries, language, t }: { entries: AuditEntry[]; language: Language; t: Translator }) {
+  return <div className="activity-log">{entries.length ? entries.map((entry) => <article key={entry.id}>
+    <i>{initials(entry.actorName || entry.actorEmail || "Trove")}</i>
+    <span><strong>{entry.summary}</strong><small>{entry.actorName || entry.actorEmail || t("Sistema", "System")} · {entry.entityType}</small></span>
+    <time>{new Date(entry.createdAt).toLocaleString(language === "pt" ? "pt-MZ" : "en-MZ", { dateStyle: "medium", timeStyle: "short" })}</time>
+  </article>) : <div className="manager-empty">◇<strong>{t("Ainda sem actividade registada", "No recorded activity yet")}</strong></div>}</div>;
 }
 
 function getMonthCells(cursor: Date) {
@@ -831,6 +3709,6 @@ function downloadCsv(filename: string, rows: (string | number | undefined)[][]) 
   URL.revokeObjectURL(url);
 }
 
-function Modal({ title, subtitle, onClose, children }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode }) {
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="modal" role="dialog" aria-modal="true" aria-label={title}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">TROVE STORAGE</span><h2>{title}</h2><p>{subtitle}</p>{children}</section></div>;
+function Modal({ title, subtitle, onClose, children, wide }: { title: string; subtitle: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className={cls("modal", wide && "modal-wide")} role="dialog" aria-modal="true" aria-label={title}><button className="modal-close" onClick={onClose} aria-label="Close">×</button><span className="eyebrow">TROVE STORAGE</span><h2>{title}</h2><p>{subtitle}</p>{children}</section></div>;
 }

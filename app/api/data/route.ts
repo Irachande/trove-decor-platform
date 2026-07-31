@@ -1,126 +1,1673 @@
 import { env } from "cloudflare:workers";
+import {
+  authorize,
+  isAuthorizationResponse,
+  type WorkspacePermission,
+} from "../../workspace";
+import { paymentConfiguration, PLAN_CATALOG } from "../../billing";
+import {
+  emailConfiguration,
+  invitationEmail,
+  sendTransactionalEmail,
+} from "../../email";
+import { sendPushToUsers } from "../../web-push";
 
-const starterItems = [
-  [1, "Cadeira Bentwood", "Mobiliário", 48, 36, "Reserved", "sand", "CB", 650, "MZN", "https://images.unsplash.com/photo-1503602642458-232111445657?auto=format&fit=crop&w=900&q=80", "Corredor A · Prateleira 2", "Excelente"],
-  [2, "Jarra âmbar pequena", "Mesa", 72, 72, "Available", "amber", "JA", 180, "MZN", "https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&w=900&q=80", "Corredor C · Caixa 14", "Bom"],
-  [3, "Guardanapo de linho · Sálvia", "Têxteis", 120, 84, "Rented", "sage", "GL", 75, "MZN", "https://images.unsplash.com/photo-1493663284031-b7e3aefcae8e?auto=format&fit=crop&w=900&q=80", "Corredor B · Caixa 6", "Excelente"],
-  [4, "Lanterna de rattan · Grande", "Iluminação", 18, 14, "Reserved", "clay", "LR", 900, "MZN", "https://images.unsplash.com/photo-1519710164239-da123dc03ef4?auto=format&fit=crop&w=900&q=80", "Corredor D · Chão 3", "Bom"],
-  [5, "Plinto canelado · Marfim", "Estruturas", 8, 8, "Available", "ivory", "PC", 2500, "MZN", "https://images.unsplash.com/photo-1615873968403-89e068629265?auto=format&fit=crop&w=900&q=80", "Zona E · Posição 5", "Excelente"],
-  [6, "Castiçal de pedra", "Mesa", 34, 28, "Available", "stone", "CP", 220, "MZN", "https://images.unsplash.com/photo-1602874801006-e26b7af32e9f?auto=format&fit=crop&w=900&q=80", "Corredor C · Caixa 9", "Requer inspecção"],
-] as const;
+type Payload = Record<string, unknown>;
+type ImportedItem = {
+  id: number;
+  name: string;
+  category: string;
+  quantity: number;
+  available: number;
+  status: string;
+  price: number;
+  currency: string;
+  storageLocation: string;
+  condition: string;
+  description?: string;
+  sku?: string;
+  replacementValue?: number;
+  minStock?: number;
+  tone?: string;
+  symbol?: string;
+};
+type ReservationLineInput = { itemId: number; quantity: number };
 
-const starterCategories = ["Mobiliário", "Mesa", "Têxteis", "Iluminação", "Estruturas"];
+const ACTION_PERMISSIONS: Record<string, WorkspacePermission> = {
+  addItem: "manageInventory",
+  updateItem: "manageInventory",
+  removeItem: "manageInventory",
+  bulkStatus: "manageInventory",
+  bulkRemove: "manageInventory",
+  addItemPhotos: "manageInventory",
+  removeItemPhoto: "manageInventory",
+  adjustStock: "manageInventory",
+  addMaintenance: "manageInventory",
+  updateMaintenance: "manageInventory",
+  createKit: "manageInventory",
+  updateKit: "manageInventory",
+  deleteKit: "manageInventory",
+  importItems: "manageInventory",
+  addReservation: "manageReservations",
+  updateReservation: "manageReservations",
+  transitionReservation: "manageReservations",
+  addClient: "manageReservations",
+  updateClient: "manageReservations",
+  addEvent: "manageReservations",
+  updateEvent: "manageReservations",
+  transitionEvent: "manageReservations",
+  duplicateEvent: "manageReservations",
+  archiveEvent: "manageReservations",
+  addEventTask: "manageReservations",
+  updateEventTask: "manageReservations",
+  transitionEventTask: "manageReservations",
+  deleteEventTask: "manageReservations",
+  addSupplier: "manageReservations",
+  updateSupplier: "manageReservations",
+  addEventExpense: "manageReservations",
+  updateEventExpense: "manageReservations",
+  deleteEventExpense: "manageReservations",
+  addCategory: "manageCategories",
+  removeCategory: "manageCategories",
+  inviteMember: "manageTeam",
+  resendInvitation: "manageTeam",
+  revokeInvitation: "manageTeam",
+  updateMemberRole: "manageTeam",
+  removeMember: "manageTeam",
+  acceptInvitation: "read",
+  declineInvitation: "read",
+  markNotificationRead: "read",
+  markAllNotificationsRead: "read",
+  cancelSubscription: "manageBilling",
+  resumeSubscription: "manageBilling",
+  updateProfile: "manageProfile",
+  updateEnquiryStatus: "manageReservations",
+};
 
-async function addMissingColumns(table: string, columns: { name: string; sql: string }[]) {
-  const result = await env.DB.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
-  const names = new Set(result.results.map((column: { name: string }) => column.name));
-  for (const column of columns) {
-    if (!names.has(column.name)) await env.DB.prepare(`ALTER TABLE ${table} ADD COLUMN ${column.sql}`).run();
+function text(
+  payload: Payload,
+  key: string,
+  options: { required?: boolean; max?: number } = {},
+) {
+  const value = String(payload[key] ?? "").trim();
+  if (options.required && !value) throw new Error(`${key} is required`);
+  if (value.length > (options.max ?? 500)) throw new Error(`${key} is too long`);
+  return value;
+}
+
+function integer(
+  payload: Payload,
+  key: string,
+  options: { min?: number; max?: number } = {},
+) {
+  const value = Number(payload[key]);
+  if (!Number.isSafeInteger(value)) throw new Error(`${key} must be an integer`);
+  if (value < (options.min ?? Number.MIN_SAFE_INTEGER)) {
+    throw new Error(`${key} is too small`);
+  }
+  if (value > (options.max ?? Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${key} is too large`);
+  }
+  return value;
+}
+
+function parseIds(payload: Payload) {
+  const ids = String(payload.ids || "")
+    .split(",")
+    .map(Number)
+    .filter((id) => Number.isSafeInteger(id) && id > 0);
+  if (!ids.length || ids.length > 200) {
+    throw new Error("Select between 1 and 200 items");
+  }
+  return [...new Set(ids)];
+}
+
+function clientError(error: unknown) {
+  const rawMessage = error instanceof Error ? error.message : "Invalid request";
+  const message = rawMessage.includes("INSUFFICIENT_DATE_AVAILABILITY")
+    ? "One or more items are unavailable for the selected dates"
+    : rawMessage.includes("INSUFFICIENT_PHYSICAL_STOCK")
+      ? "There is not enough physical stock to check out this reservation"
+      : rawMessage;
+  const validation =
+    /required|too long|too small|too large|must be|select between|invalid|not found|exceeds|duplicate|unavailable|not enough|transition|already|cannot|expired|allows up to|^only /i.test(
+      message,
+    );
+  return Response.json({ error: message }, { status: validation ? 400 : 500 });
+}
+
+function date(payload: Payload, key: string) {
+  const value = text(payload, key, { required: true, max: 10 });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(Date.parse(`${value}T00:00:00Z`))) {
+    throw new Error(`${key} is invalid`);
+  }
+  return value;
+}
+
+function reservationLines(payload: Payload) {
+  const raw = Array.isArray(payload.items) ? payload.items : [];
+  if (!raw.length || raw.length > 100) throw new Error("Reservation items are required");
+  const lines = raw.map((entry) => {
+    const value = entry as Payload;
+    return {
+      itemId: integer(value, "itemId", { min: 1 }),
+      quantity: integer(value, "quantity", { min: 1, max: 100000 }),
+    };
+  });
+  if (new Set(lines.map((line) => line.itemId)).size !== lines.length) {
+    throw new Error("Duplicate reservation item");
+  }
+  return lines satisfies ReservationLineInput[];
+}
+
+function addDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function normalizedRole(value: string) {
+  return ["manager", "inventory", "reservations", "viewer"].includes(value)
+    ? value
+    : "viewer";
+}
+
+function actionEntity(action: string) {
+  if (action.includes("Reservation")) return "reservation";
+  if (action.includes("Invitation") || action === "inviteMember") return "invitation";
+  if (action.includes("Member")) return "membership";
+  if (action.includes("Subscription")) return "subscription";
+  if (action.includes("Item") || action === "adjustStock") return "inventory_item";
+  if (action.includes("Maintenance")) return "maintenance";
+  if (action.includes("Kit")) return "kit";
+  if (action.includes("Client")) return "client";
+  if (action.includes("Supplier")) return "supplier";
+  if (action.includes("Expense")) return "event_expense";
+  if (action.includes("EventTask")) return "event_task";
+  if (action.includes("Event")) return "event";
+  if (action.includes("Category")) return "category";
+  if (action.includes("Profile")) return "business_profile";
+  if (action.includes("Enquiry")) return "public_enquiry";
+  return "workspace";
+}
+
+function actionSummary(action: string) {
+  const summaries: Record<string, string> = {
+    addReservation: "Reserva criada",
+    updateReservation: "Reserva actualizada",
+    transitionReservation: "Estado da reserva alterado",
+    inviteMember: "Convite de equipa criado",
+    resendInvitation: "Convite de equipa renovado",
+    revokeInvitation: "Convite de equipa revogado",
+    acceptInvitation: "Convite de equipa aceite",
+    declineInvitation: "Convite de equipa recusado",
+    updateMemberRole: "Função de membro actualizada",
+    removeMember: "Membro removido da equipa",
+    cancelSubscription: "Cancelamento da subscrição agendado",
+    resumeSubscription: "Cancelamento da subscrição removido",
+    adjustStock: "Stock ajustado",
+    addMaintenance: "Intervenção registada",
+    updateMaintenance: "Intervenção actualizada",
+    updateEnquiryStatus: "Estado do pedido público alterado",
+    duplicateEvent: "Evento duplicado sem reservas",
+    archiveEvent: "Evento arquivado",
+    transitionEvent: "Estado do evento alterado",
+    addEventTask: "Tarefa de evento criada",
+    updateEventTask: "Tarefa de evento actualizada",
+    transitionEventTask: "Estado da tarefa de evento alterado",
+    deleteEventTask: "Tarefa de evento removida",
+    addSupplier: "Fornecedor criado",
+    updateSupplier: "Fornecedor actualizado",
+    addEventExpense: "Custo de evento registado",
+    updateEventExpense: "Custo de evento actualizado",
+    deleteEventExpense: "Custo de evento removido",
+  };
+  return summaries[action] || action.replace(/([A-Z])/g, " $1").trim();
+}
+
+async function writeAudit(
+  businessId: number,
+  userId: number,
+  action: string,
+  payload: Payload,
+  createdAt: string,
+) {
+  const rawId = payload.id ?? payload.itemId ?? payload.memberId ?? "";
+  await env.DB.prepare(
+    "INSERT INTO audit_logs (business_id, user_id, action, entity_type, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).bind(
+    businessId,
+    userId,
+    action,
+    actionEntity(action),
+    String(rawId),
+    actionSummary(action),
+    createdAt,
+  ).run();
+}
+
+async function notifyBusinessMembers(
+  businessId: number,
+  type: string,
+  titlePt: string,
+  titleEn: string,
+  bodyPt: string,
+  bodyEn: string,
+  sourceKey: string,
+  createdAt: string,
+) {
+  const members = await env.DB.prepare(
+    "SELECT user_id AS userId FROM memberships WHERE business_id = ? AND status = 'Active'",
+  ).bind(businessId).all<{ userId: number }>();
+  if (!members.results.length) return;
+  await env.DB.batch(
+    members.results.map((member) =>
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO notifications (business_id, user_id, type, title_pt, title_en, body_pt, body_en, link, source_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, '', ?, ?)",
+      ).bind(
+        businessId,
+        member.userId,
+        type,
+        titlePt,
+        titleEn,
+        bodyPt,
+        bodyEn,
+        `${sourceKey}:${member.userId}`,
+        createdAt,
+      ),
+    ),
+  );
+  await sendPushToUsers(
+    members.results.map((member) => member.userId),
+    {
+      title: titlePt,
+      body: bodyPt,
+      url: "/",
+      tag: sourceKey,
+    },
+  ).catch(() => undefined);
+}
+
+async function ensureReservationReminders(
+  businessId: number,
+  createdAt: string,
+) {
+  const today = createdAt.slice(0, 10);
+  const until = addDays(new Date(createdAt), 3).toISOString().slice(0, 10);
+  const upcoming = await env.DB.prepare(
+    "SELECT id, event_name AS eventName, date FROM reservations WHERE business_id = ? AND status IN ('Confirmed', 'CheckedOut') AND date >= ? AND date <= ? ORDER BY date",
+  ).bind(businessId, today, until).all<{
+    id: number;
+    eventName: string;
+    date: string;
+  }>();
+  for (const reservation of upcoming.results) {
+    await notifyBusinessMembers(
+      businessId,
+      "reminder",
+      "Reserva próxima",
+      "Upcoming reservation",
+      `${reservation.eventName || "Evento"} começa em ${reservation.date}.`,
+      `${reservation.eventName || "Event"} starts on ${reservation.date}.`,
+      `reservation-reminder:${reservation.id}:${reservation.date}`,
+      createdAt,
+    );
   }
 }
 
-async function ensureDatabase() {
-  const db = env.DB;
-  await db.batch([
-    db.prepare("CREATE TABLE IF NOT EXISTS inventory_items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, category TEXT NOT NULL, quantity INTEGER NOT NULL, available INTEGER NOT NULL, status TEXT NOT NULL, tone TEXT NOT NULL, symbol TEXT NOT NULL, price INTEGER NOT NULL DEFAULT 0, currency TEXT NOT NULL DEFAULT 'MZN', photo_url TEXT, storage_location TEXT NOT NULL DEFAULT '', condition TEXT NOT NULL DEFAULT 'Bom')"),
-    db.prepare("CREATE TABLE IF NOT EXISTS reservations (id INTEGER PRIMARY KEY, item TEXT NOT NULL, client TEXT NOT NULL, date TEXT NOT NULL, end_date TEXT NOT NULL, color TEXT NOT NULL, event_name TEXT NOT NULL DEFAULT '', contact TEXT NOT NULL DEFAULT '', notes TEXT NOT NULL DEFAULT '', quantity INTEGER NOT NULL DEFAULT 1, status TEXT NOT NULL DEFAULT 'Confirmed')"),
-    db.prepare("CREATE TABLE IF NOT EXISTS business_profile (id INTEGER PRIMARY KEY, business_name TEXT NOT NULL, handle TEXT NOT NULL, bio TEXT NOT NULL, location TEXT NOT NULL, phone TEXT NOT NULL, email TEXT NOT NULL, color TEXT NOT NULL, avatar_url TEXT)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS collaborators (id INTEGER PRIMARY KEY, email TEXT NOT NULL, role TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'Pending')"),
-  ]);
-  await addMissingColumns("inventory_items", [
-    { name: "price", sql: "price INTEGER NOT NULL DEFAULT 0" },
-    { name: "currency", sql: "currency TEXT NOT NULL DEFAULT 'MZN'" },
-    { name: "photo_url", sql: "photo_url TEXT" },
-    { name: "storage_location", sql: "storage_location TEXT NOT NULL DEFAULT ''" },
-    { name: "condition", sql: "condition TEXT NOT NULL DEFAULT 'Bom'" },
-  ]);
-  await addMissingColumns("reservations", [
-    { name: "event_name", sql: "event_name TEXT NOT NULL DEFAULT ''" },
-    { name: "contact", sql: "contact TEXT NOT NULL DEFAULT ''" },
-    { name: "notes", sql: "notes TEXT NOT NULL DEFAULT ''" },
-    { name: "quantity", sql: "quantity INTEGER NOT NULL DEFAULT 1" },
-    { name: "status", sql: "status TEXT NOT NULL DEFAULT 'Confirmed'" },
-  ]);
-  await db.batch([
-    db.prepare("UPDATE inventory_items SET price = 650, currency = 'MZN', photo_url = ?, storage_location = 'Corredor A · Prateleira 2', condition = 'Excelente' WHERE id = 1 AND price = 0").bind(starterItems[0][10]),
-    db.prepare("UPDATE inventory_items SET price = 180, currency = 'MZN', photo_url = ?, storage_location = 'Corredor C · Caixa 14', condition = 'Bom' WHERE id = 2 AND price = 0").bind(starterItems[1][10]),
-    db.prepare("UPDATE inventory_items SET price = 75, currency = 'MZN', photo_url = ?, storage_location = 'Corredor B · Caixa 6', condition = 'Excelente' WHERE id = 3 AND price = 0").bind(starterItems[2][10]),
-    db.prepare("UPDATE inventory_items SET price = 900, currency = 'MZN', photo_url = ?, storage_location = 'Corredor D · Chão 3', condition = 'Bom' WHERE id = 4 AND price = 0").bind(starterItems[3][10]),
-    db.prepare("UPDATE inventory_items SET price = 2500, currency = 'MZN', photo_url = ?, storage_location = 'Zona E · Posição 5', condition = 'Excelente' WHERE id = 5 AND price = 0").bind(starterItems[4][10]),
-    db.prepare("UPDATE inventory_items SET price = 220, currency = 'MZN', photo_url = ?, storage_location = 'Corredor C · Caixa 9', condition = 'Requer inspecção' WHERE id = 6 AND price = 0").bind(starterItems[5][10]),
-  ]);
+async function emitActionNotification(
+  action: string,
+  businessId: number,
+  payload: Payload,
+  createdAt: string,
+) {
+  const id = String(payload.id ?? payload.itemId ?? createdAt);
+  const messages: Record<string, [string, string, string, string, string]> = {
+    addReservation: ["reservation", "Nova reserva", "New reservation", "Foi criada uma reserva para a equipa.", "A reservation was created for the team."],
+    updateReservation: ["reservation", "Reserva actualizada", "Reservation updated", "Os detalhes de uma reserva foram alterados.", "Reservation details were changed."],
+    transitionReservation: ["reservation", "Estado da reserva alterado", "Reservation status changed", `Novo estado: ${String(payload.status || "")}.`, `New status: ${String(payload.status || "")}.`],
+    transitionEvent: ["event", "Estado do evento alterado", "Event status changed", `Novo estado: ${String(payload.status || "")}.`, `New status: ${String(payload.status || "")}.`],
+    adjustStock: ["inventory", "Stock actualizado", "Stock updated", "A quantidade disponível de um artigo foi alterada.", "An item's available quantity was changed."],
+    addMaintenance: ["maintenance", "Intervenção registada", "Maintenance recorded", "Foi adicionada uma intervenção ao inventário.", "An inventory maintenance record was added."],
+    updateMaintenance: ["maintenance", "Intervenção concluída", "Maintenance completed", "Uma intervenção foi actualizada.", "A maintenance record was updated."],
+    addEventTask: ["event", "Nova tarefa de evento", "New event task", "Foi adicionada uma tarefa à checklist de um evento.", "A task was added to an event checklist."],
+    transitionEventTask: ["event", "Checklist actualizada", "Checklist updated", `Novo estado da tarefa: ${String(payload.status || "")}.`, `New task status: ${String(payload.status || "")}.`],
+    updateMemberRole: ["team", "Permissão actualizada", "Permission updated", "A função de um membro da equipa foi alterada.", "A team member's role was changed."],
+    removeMember: ["team", "Equipa actualizada", "Team updated", "Um membro foi removido da empresa.", "A member was removed from the business."],
+    cancelSubscription: ["billing", "Cancelamento agendado", "Cancellation scheduled", "O plano continuará activo até ao fim do período actual.", "The plan will remain active until the end of the current period."],
+    resumeSubscription: ["billing", "Subscrição retomada", "Subscription resumed", "O cancelamento agendado foi removido.", "The scheduled cancellation was removed."],
+  };
+  const message = messages[action];
+  if (!message) return;
+  await notifyBusinessMembers(
+    businessId,
+    message[0],
+    message[1],
+    message[2],
+    message[3],
+    message[4],
+    `activity:${action}:${id}:${createdAt}`,
+    createdAt,
+  );
+}
 
-  const count = await db.prepare("SELECT COUNT(*) AS count FROM inventory_items").first<{ count: number }>();
-  if (!count?.count) {
-    await db.batch(starterItems.map((item) =>
-      db.prepare("INSERT INTO inventory_items (id, name, category, quantity, available, status, tone, symbol, price, currency, photo_url, storage_location, condition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...item),
-    ));
+function validateItem(input: Payload): ImportedItem {
+  const id = integer(input, "id", { min: 1 });
+  const quantity = integer(input, "quantity", { min: 1, max: 100000 });
+  const available = integer(input, "available", { min: 0, max: quantity });
+  const status = text(input, "status", { required: true, max: 30 });
+  if (!["Available", "Reserved", "Rented"].includes(status)) {
+    throw new Error("status is invalid");
   }
-  const categoryCount = await db.prepare("SELECT COUNT(*) AS count FROM categories").first<{ count: number }>();
-  if (!categoryCount?.count) {
-    await db.batch(starterCategories.map((name, index) => db.prepare("INSERT INTO categories (id, name) VALUES (?, ?)").bind(index + 1, name)));
-  }
-  await db.prepare("INSERT OR IGNORE INTO categories (name) SELECT DISTINCT category FROM inventory_items WHERE category IS NOT NULL AND category != ''").run();
-  const profileCount = await db.prepare("SELECT COUNT(*) AS count FROM business_profile").first<{ count: number }>();
-  if (!profileCount?.count) {
-    await db.prepare("INSERT INTO business_profile (id, business_name, handle, bio, location, phone, email, color) VALUES (1, ?, ?, ?, ?, ?, ?, ?)")
-      .bind("Terra & Table", "terraandtable", "Decoração de eventos e mesas cheias de alma para casamentos e celebrações intimistas.", "Maputo, Mozambique", "+258 84 555 0192", "hello@terraandtable.co", "#b75d3f")
-      .run();
+  return {
+    id,
+    name: text(input, "name", { required: true, max: 160 }),
+    category: text(input, "category", { required: true, max: 80 }),
+    quantity,
+    available,
+    status,
+    price: integer(input, "price", { min: 0, max: 100000000 }),
+    currency: text(input, "currency", { required: true, max: 3 }).toUpperCase(),
+    storageLocation: text(input, "storageLocation", { max: 160 }),
+    condition: text(input, "condition", { max: 80 }) || "Bom",
+    description: text(input, "description", { max: 2000 }),
+    sku: text(input, "sku", { max: 80 }),
+    replacementValue: integer(
+      { replacementValue: input.replacementValue ?? 0 },
+      "replacementValue",
+      { min: 0, max: 100000000 },
+    ),
+    minStock: integer({ minStock: input.minStock ?? 0 }, "minStock", {
+      min: 0,
+      max: 100000,
+    }),
+    tone: text(input, "tone", { max: 30 }) || "clay",
+    symbol: text(input, "symbol", { max: 8 }) || "IT",
+  };
+}
+
+function itemInsert(item: ImportedItem, businessId: number, photoUrl?: string) {
+  return env.DB.prepare(
+    "INSERT INTO inventory_items (id, business_id, name, category, quantity, available, status, tone, symbol, price, currency, photo_url, storage_location, condition, description, sku, replacement_value, min_stock) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).bind(
+    item.id,
+    businessId,
+    item.name,
+    item.category,
+    item.quantity,
+    item.available,
+    item.status,
+    item.tone,
+    item.symbol,
+    item.price,
+    item.currency,
+    photoUrl || null,
+    item.storageLocation,
+    item.condition,
+    item.description || "",
+    item.sku || "",
+    item.replacementValue || 0,
+    item.minStock || 0,
+  );
+}
+
+async function deleteOwnedPhoto(url: string, businessId: number) {
+  const key = new URL(url, "https://trove.local").searchParams.get("key");
+  if (key?.startsWith(`businesses/${businessId}/items/`)) {
+    await env.MEDIA.delete(key);
   }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    await ensureDatabase();
-    const [items, reservations, categories, profile] = await Promise.all([
-      env.DB.prepare("SELECT id, name, category, quantity, available, status, tone, symbol, price, currency, photo_url AS photoUrl, storage_location AS storageLocation, condition FROM inventory_items ORDER BY id").all(),
-      env.DB.prepare("SELECT id, item, client, date, end_date AS endDate, color, event_name AS eventName, contact, notes, quantity, status FROM reservations ORDER BY date").all(),
-      env.DB.prepare("SELECT id, name FROM categories ORDER BY name").all(),
-      env.DB.prepare("SELECT business_name AS businessName, handle, bio, location, phone, email, color, avatar_url AS avatarUrl FROM business_profile WHERE id = 1").first(),
+    const context = await authorize(request);
+    if (isAuthorizationResponse(context)) return context;
+    const loadedAt = new Date().toISOString();
+    await env.DB.prepare(
+      "UPDATE collaborators SET status = 'Expired' WHERE status = 'Pending' AND expires_at != '' AND expires_at <= ? AND (business_id = ? OR lower(email) = ?)",
+    ).bind(loadedAt, context.businessId, context.user.email.toLowerCase()).run();
+    await ensureReservationReminders(context.businessId, loadedAt);
+
+    const [
+      items,
+      reservations,
+      categories,
+      profile,
+      activeMembers,
+      pendingMembers,
+      photos,
+      movements,
+      maintenance,
+      kits,
+      kitItems,
+      clients,
+      events,
+      eventTasks,
+      suppliers,
+      eventExpenses,
+      eventDocuments,
+      bookedItems,
+      notifications,
+      auditLogs,
+      invitations,
+      workspaces,
+      subscription,
+      payments,
+      publicEnquiries,
+      emailDeliveries,
+    ] = await Promise.all([
+      env.DB.prepare(
+        "SELECT id, name, category, quantity, available, status, tone, symbol, price, currency, photo_url AS photoUrl, storage_location AS storageLocation, condition, description, sku, replacement_value AS replacementValue, min_stock AS minStock FROM inventory_items WHERE business_id = ? ORDER BY id DESC",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, item, client, date, end_date AS endDate, color, event_name AS eventName, contact, notes, quantity, status, client_id AS clientId, event_id AS eventId, subtotal, discount, delivery_fee AS deliveryFee, total, deposit, currency, logistics, payment_status AS paymentStatus, checked_out_at AS checkedOutAt, returned_at AS returnedAt, cancelled_at AS cancelledAt, created_at AS createdAt FROM reservations WHERE business_id = ? ORDER BY date",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, name FROM categories WHERE business_id = ? ORDER BY name",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT business_name AS businessName, handle, bio, location, phone, email, color, avatar_url AS avatarUrl, website, instagram, services, is_public AS isPublic, accepts_enquiries AS acceptsEnquiries FROM business_profile WHERE business_id = ?",
+      ).bind(context.businessId).first(),
+      env.DB.prepare(
+        "SELECT u.id, u.email, u.display_name AS displayName, m.role, m.status FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.business_id = ? AND m.status = 'Active' ORDER BY m.id",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, email, role, status, created_at AS createdAt, expires_at AS expiresAt, accepted_at AS acceptedAt, revoked_at AS revokedAt FROM collaborators WHERE business_id = ? AND status IN ('Pending', 'Expired', 'Revoked', 'Declined') ORDER BY id DESC LIMIT 100",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, item_id AS itemId, url, sort_order AS sortOrder FROM item_photos WHERE business_id = ? ORDER BY item_id, sort_order, id",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, item_id AS itemId, type, quantity_delta AS quantityDelta, note, created_at AS createdAt FROM inventory_movements WHERE business_id = ? ORDER BY created_at DESC LIMIT 500",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, item_id AS itemId, type, status, notes, cost, scheduled_date AS scheduledDate, completed_at AS completedAt, created_at AS createdAt FROM maintenance_records WHERE business_id = ? ORDER BY created_at DESC",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, name, description, price, currency, active, created_at AS createdAt FROM kits WHERE business_id = ? ORDER BY created_at DESC",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, kit_id AS kitId, item_id AS itemId, quantity FROM kit_items WHERE business_id = ? ORDER BY kit_id, id",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, name, email, phone, notes, created_at AS createdAt FROM clients WHERE business_id = ? ORDER BY name",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, client_id AS clientId, owner_user_id AS ownerUserId, name, event_type AS eventType, venue, address, start_date AS startDate, end_date AS endDate, setup_time AS setupTime, pickup_time AS pickupTime, guest_count AS guestCount, budget, currency, on_site_contact AS onSiteContact, color, notes, status, created_at AS createdAt, updated_at AS updatedAt, archived_at AS archivedAt FROM events WHERE business_id = ? ORDER BY start_date",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, event_id AS eventId, assignee_user_id AS assigneeUserId, title, description, category, priority, status, due_date AS dueDate, due_time AS dueTime, sort_order AS sortOrder, completed_at AS completedAt, completed_by_user_id AS completedByUserId, created_by_user_id AS createdByUserId, created_at AS createdAt, updated_at AS updatedAt FROM event_tasks WHERE business_id = ? ORDER BY event_id, status = 'Completed', sort_order, due_date, id",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, name, service_type AS serviceType, contact_name AS contactName, email, phone, notes, active, created_at AS createdAt, updated_at AS updatedAt FROM suppliers WHERE business_id = ? ORDER BY active DESC, name",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, event_id AS eventId, supplier_id AS supplierId, category, description, amount, currency, payment_status AS paymentStatus, incurred_date AS incurredDate, notes, created_by_user_id AS createdByUserId, created_at AS createdAt, updated_at AS updatedAt FROM event_expenses WHERE business_id = ? ORDER BY incurred_date DESC, created_at DESC",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, event_id AS eventId, name, content_type AS contentType, size, category, notes, uploaded_by_user_id AS uploadedByUserId, created_at AS createdAt FROM event_documents WHERE business_id = ? ORDER BY created_at DESC",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, reservation_id AS reservationId, item_id AS itemId, item_name AS itemName, quantity, unit_price AS unitPrice, currency FROM reservation_items WHERE business_id = ? ORDER BY reservation_id, id",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, type, title_pt AS titlePt, title_en AS titleEn, body_pt AS bodyPt, body_en AS bodyEn, link, read_at AS readAt, created_at AS createdAt FROM notifications WHERE business_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 100",
+      ).bind(context.businessId, context.userId).all(),
+      env.DB.prepare(
+        "SELECT a.id, a.action, a.entity_type AS entityType, a.entity_id AS entityId, a.summary, a.created_at AS createdAt, u.display_name AS actorName, u.email AS actorEmail FROM audit_logs a LEFT JOIN users u ON u.id = a.user_id WHERE a.business_id = ? ORDER BY a.created_at DESC LIMIT 150",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT c.id, c.business_id AS businessId, b.name AS businessName, c.role, c.created_at AS createdAt, c.expires_at AS expiresAt FROM collaborators c JOIN businesses b ON b.id = c.business_id WHERE lower(c.email) = ? AND c.status = 'Pending' AND (c.expires_at = '' OR c.expires_at > ?) ORDER BY c.created_at DESC",
+      ).bind(context.user.email.toLowerCase(), loadedAt).all(),
+      env.DB.prepare(
+        "SELECT b.id, b.name, b.handle, b.plan, m.role FROM memberships m JOIN businesses b ON b.id = m.business_id WHERE m.user_id = ? AND m.status = 'Active' ORDER BY b.name",
+      ).bind(context.userId).all(),
+      env.DB.prepare(
+        "SELECT id, plan, pending_plan AS pendingPlan, status, amount, currency, current_period_start AS currentPeriodStart, current_period_end AS currentPeriodEnd, grace_until AS graceUntil, cancel_at_period_end AS cancelAtPeriodEnd, provider, created_at AS createdAt, updated_at AS updatedAt FROM subscriptions WHERE business_id = ?",
+      ).bind(context.businessId).first(),
+      env.DB.prepare(
+        "SELECT id, provider, provider_payment_id AS providerPaymentId, reference, kind, plan, amount, currency, status, checkout_url AS checkoutUrl, method, paid_at AS paidAt, failure_reason AS failureReason, receipt_number AS receiptNumber, created_at AS createdAt, updated_at AS updatedAt FROM payments WHERE business_id = ? ORDER BY created_at DESC LIMIT 100",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, name, email, phone, event_date AS eventDate, message, status, created_at AS createdAt FROM public_enquiries WHERE business_id = ? ORDER BY created_at DESC LIMIT 100",
+      ).bind(context.businessId).all(),
+      env.DB.prepare(
+        "SELECT id, recipient, template, provider, provider_message_id AS providerMessageId, status, error, created_at AS createdAt, updated_at AS updatedAt FROM email_deliveries WHERE business_id = ? ORDER BY created_at DESC LIMIT 30",
+      ).bind(context.businessId).all(),
     ]);
-    return Response.json({ items: items.results, reservations: reservations.results, categories: categories.results, profile });
+
+    return Response.json({
+      items: items.results,
+      reservations: reservations.results.map((reservation: Record<string, unknown>) => {
+        const lines = bookedItems.results.filter(
+          (entry: Record<string, unknown>) => entry.reservationId === reservation.id,
+        );
+        return {
+          ...reservation,
+          items: lines,
+          item: lines.length
+            ? lines.map((entry: Record<string, unknown>) => `${entry.itemName} × ${entry.quantity}`).join(", ")
+            : reservation.item,
+          quantity: lines.length
+            ? lines.reduce((sum: number, entry: Record<string, unknown>) => sum + Number(entry.quantity), 0)
+            : reservation.quantity,
+        };
+      }),
+      clients: clients.results,
+      events: events.results,
+      eventTasks: eventTasks.results,
+      suppliers: suppliers.results.map((supplier: Record<string, unknown>) => ({
+        ...supplier,
+        active: Boolean(supplier.active),
+      })),
+      eventExpenses: eventExpenses.results,
+      eventDocuments: eventDocuments.results,
+      notifications: notifications.results,
+      auditLogs: auditLogs.results,
+      invitations: invitations.results,
+      workspaces: workspaces.results,
+      subscription: subscription
+        ? { ...subscription, cancelAtPeriodEnd: Boolean((subscription as Record<string, unknown>).cancelAtPeriodEnd) }
+        : null,
+      payments: payments.results,
+      publicEnquiries: publicEnquiries.results,
+      emailDeliveries: emailDeliveries.results,
+      billing: {
+        provider: "PaySuite",
+        configured: Boolean(paymentConfiguration().apiToken),
+        catalog: PLAN_CATALOG,
+      },
+      communication: {
+        provider: "Resend",
+        configured: Boolean(
+          emailConfiguration().apiKey && emailConfiguration().from,
+        ),
+      },
+      categories: categories.results,
+      profile: profile
+        ? {
+          ...profile,
+          isPublic: Boolean((profile as Record<string, unknown>).isPublic),
+          acceptsEnquiries: Boolean((profile as Record<string, unknown>).acceptsEnquiries),
+        }
+        : profile,
+      members: [...activeMembers.results, ...pendingMembers.results],
+      photos: photos.results,
+      movements: movements.results,
+      maintenance: maintenance.results,
+      kits: kits.results.map((kit: Record<string, unknown>) => ({
+        ...kit,
+        active: Boolean(kit.active),
+        items: kitItems.results.filter(
+          (entry: Record<string, unknown>) => entry.kitId === kit.id,
+        ),
+      })),
+      user: context.user,
+      workspace: {
+        id: context.businessId,
+        name: context.businessName,
+        handle: context.businessHandle,
+        role: context.role,
+        plan: context.plan,
+        subscriptionStatus: context.subscriptionStatus,
+        currentPeriodEnd: context.currentPeriodEnd,
+        graceUntil: context.graceUntil,
+        cancelAtPeriodEnd: context.cancelAtPeriodEnd,
+      },
+    });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to load workspace" }, { status: 500 });
+    return clientError(error);
   }
 }
 
 export async function POST(request: Request) {
   try {
-    await ensureDatabase();
-    const { action, payload } = await request.json() as { action: string; payload: Record<string, string | number | null> };
-    if (action === "addItem") {
-      await env.DB.prepare("INSERT INTO inventory_items (id, name, category, quantity, available, status, tone, symbol, price, currency, photo_url, storage_location, condition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(payload.id, payload.name, payload.category, payload.quantity, payload.available, payload.status, payload.tone, payload.symbol, payload.price || 0, payload.currency || "MZN", payload.photoUrl || null, payload.storageLocation || "", payload.condition || "Bom").run();
-    } else if (action === "removeItem") {
-      await env.DB.prepare("DELETE FROM inventory_items WHERE id = ?").bind(payload.id).run();
-    } else if (action === "bulkStatus" || action === "bulkRemove") {
-      const ids = String(payload.ids || "").split(",").map(Number).filter((id) => Number.isInteger(id));
-      if (ids.length) {
-        const placeholders = ids.map(() => "?").join(",");
-        if (action === "bulkStatus") await env.DB.prepare(`UPDATE inventory_items SET status = ? WHERE id IN (${placeholders})`).bind(payload.status, ...ids).run();
-        else await env.DB.prepare(`DELETE FROM inventory_items WHERE id IN (${placeholders})`).bind(...ids).run();
-      }
-    } else if (action === "addReservation") {
-      await env.DB.prepare("INSERT INTO reservations (id, item, client, date, end_date, color, event_name, contact, notes, quantity, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .bind(payload.id, payload.item, payload.client, payload.date, payload.endDate, payload.color, payload.eventName || "", payload.contact || "", payload.notes || "", payload.quantity || 1, payload.status || "Confirmed").run();
-    } else if (action === "addCategory") {
-      await env.DB.prepare("INSERT OR IGNORE INTO categories (id, name) VALUES (?, ?)").bind(payload.id, payload.name).run();
-    } else if (action === "removeCategory") {
-      await env.DB.batch([
-        env.DB.prepare("UPDATE inventory_items SET category = ? WHERE category = ?").bind(payload.fallback, payload.name),
-        env.DB.prepare("DELETE FROM categories WHERE name = ?").bind(payload.name),
-      ]);
-    } else if (action === "inviteMember") {
-      await env.DB.prepare("INSERT INTO collaborators (id, email, role, status) VALUES (?, ?, ?, 'Pending')").bind(payload.id, payload.email, payload.role).run();
-    } else if (action === "updateProfile") {
-      await env.DB.prepare("UPDATE business_profile SET business_name = ?, handle = ?, bio = ?, location = ?, phone = ?, email = ?, color = ?, avatar_url = ? WHERE id = 1")
-        .bind(payload.businessName, payload.handle, payload.bio, payload.location, payload.phone, payload.email, payload.color, payload.avatarUrl || null).run();
-    } else {
+    const body = (await request.json()) as { action?: string; payload?: Payload };
+    const action = String(body.action || "");
+    const payload = body.payload || {};
+    const permission = ACTION_PERMISSIONS[action];
+    if (!permission) {
       return Response.json({ error: "Unknown action" }, { status: 400 });
     }
-    return Response.json({ ok: true });
+    const context = await authorize(request, permission);
+    if (isAuthorizationResponse(context)) return context;
+    const createdAt = new Date().toISOString();
+    let auditBusinessId = context.businessId;
+    let result: Record<string, unknown> = { ok: true };
+
+    if (action === "addItem") {
+      const item = validateItem(payload);
+      const photoUrl = text(payload, "photoUrl", { max: 1000 });
+      await env.DB.batch([
+        itemInsert(item, context.businessId, photoUrl),
+        env.DB.prepare(
+          "INSERT INTO inventory_movements (id, business_id, item_id, type, quantity_delta, note, created_by_user_id, created_at) VALUES (?, ?, ?, 'initial', ?, ?, ?, ?)",
+        ).bind(Date.now() + 1, context.businessId, item.id, item.quantity, "Stock inicial", context.userId, createdAt),
+        ...(photoUrl
+          ? [env.DB.prepare(
+            "INSERT INTO item_photos (id, business_id, item_id, url, sort_order, created_at) VALUES (?, ?, ?, ?, 0, ?)",
+          ).bind(Date.now() + 2, context.businessId, item.id, photoUrl, createdAt)]
+          : []),
+      ]);
+    } else if (action === "updateItem") {
+      const item = validateItem(payload);
+      const existing = await env.DB.prepare(
+        "SELECT quantity, available FROM inventory_items WHERE id = ? AND business_id = ?",
+      ).bind(item.id, context.businessId).first<{ quantity: number; available: number }>();
+      if (!existing) throw new Error("Item not found");
+      const delta = item.quantity - existing.quantity;
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE inventory_items SET name = ?, category = ?, quantity = ?, available = ?, status = ?, price = ?, currency = ?, storage_location = ?, condition = ?, description = ?, sku = ?, replacement_value = ?, min_stock = ?, tone = ?, symbol = ? WHERE id = ? AND business_id = ?",
+        ).bind(item.name, item.category, item.quantity, item.available, item.status, item.price, item.currency, item.storageLocation, item.condition, item.description || "", item.sku || "", item.replacementValue || 0, item.minStock || 0, item.tone, item.symbol, item.id, context.businessId),
+        ...(delta
+          ? [env.DB.prepare(
+            "INSERT INTO inventory_movements (id, business_id, item_id, type, quantity_delta, note, created_by_user_id, created_at) VALUES (?, ?, ?, 'adjustment', ?, ?, ?, ?)",
+          ).bind(Date.now(), context.businessId, item.id, delta, "Quantidade actualizada na ficha", context.userId, createdAt)]
+          : []),
+      ]);
+    } else if (action === "removeItem") {
+      const itemId = integer(payload, "id", { min: 1 });
+      const networkHistory = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM rental_requests WHERE listing_id IN (SELECT id FROM marketplace_listings WHERE business_id = ? AND item_id = ?)",
+      ).bind(context.businessId, itemId).first<{ count: number }>();
+      if (networkHistory?.count) {
+        throw new Error("Items with Trove Network rental history cannot be deleted");
+      }
+      const storedPhotos = await env.DB.prepare(
+        "SELECT url FROM item_photos WHERE item_id = ? AND business_id = ?",
+      ).bind(itemId, context.businessId).all<{ url: string }>();
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM marketplace_listings WHERE item_id = ? AND business_id = ?").bind(itemId, context.businessId),
+        env.DB.prepare("DELETE FROM item_photos WHERE item_id = ? AND business_id = ?").bind(itemId, context.businessId),
+        env.DB.prepare("DELETE FROM inventory_movements WHERE item_id = ? AND business_id = ?").bind(itemId, context.businessId),
+        env.DB.prepare("DELETE FROM maintenance_records WHERE item_id = ? AND business_id = ?").bind(itemId, context.businessId),
+        env.DB.prepare("DELETE FROM kit_items WHERE item_id = ? AND business_id = ?").bind(itemId, context.businessId),
+        env.DB.prepare("DELETE FROM inventory_items WHERE id = ? AND business_id = ?").bind(itemId, context.businessId),
+      ]);
+      await Promise.all(storedPhotos.results.map((photo: { url: string }) => deleteOwnedPhoto(photo.url, context.businessId)));
+    } else if (action === "bulkStatus" || action === "bulkRemove") {
+      const ids = parseIds(payload);
+      const placeholders = ids.map(() => "?").join(",");
+      if (action === "bulkStatus") {
+        const status = text(payload, "status", { required: true, max: 30 });
+        await env.DB.prepare(
+          `UPDATE inventory_items SET status = ? WHERE business_id = ? AND id IN (${placeholders})`,
+        ).bind(status, context.businessId, ...ids).run();
+      } else {
+        const networkHistory = await env.DB.prepare(
+          `SELECT COUNT(*) AS count FROM rental_requests WHERE listing_id IN (
+            SELECT id FROM marketplace_listings
+            WHERE business_id = ? AND item_id IN (${placeholders})
+          )`,
+        ).bind(context.businessId, ...ids).first<{ count: number }>();
+        if (networkHistory?.count) {
+          throw new Error("Items with Trove Network rental history cannot be deleted");
+        }
+        const storedPhotos = await env.DB.prepare(
+          `SELECT url FROM item_photos WHERE business_id = ? AND item_id IN (${placeholders})`,
+        ).bind(context.businessId, ...ids).all<{ url: string }>();
+        await env.DB.batch([
+          env.DB.prepare(`DELETE FROM marketplace_listings WHERE business_id = ? AND item_id IN (${placeholders})`).bind(context.businessId, ...ids),
+          env.DB.prepare(`DELETE FROM item_photos WHERE business_id = ? AND item_id IN (${placeholders})`).bind(context.businessId, ...ids),
+          env.DB.prepare(`DELETE FROM inventory_movements WHERE business_id = ? AND item_id IN (${placeholders})`).bind(context.businessId, ...ids),
+          env.DB.prepare(`DELETE FROM maintenance_records WHERE business_id = ? AND item_id IN (${placeholders})`).bind(context.businessId, ...ids),
+          env.DB.prepare(`DELETE FROM kit_items WHERE business_id = ? AND item_id IN (${placeholders})`).bind(context.businessId, ...ids),
+          env.DB.prepare(`DELETE FROM inventory_items WHERE business_id = ? AND id IN (${placeholders})`).bind(context.businessId, ...ids),
+        ]);
+        await Promise.all(storedPhotos.results.map((photo: { url: string }) => deleteOwnedPhoto(photo.url, context.businessId)));
+      }
+    } else if (action === "addItemPhotos") {
+      const itemId = integer(payload, "itemId", { min: 1 });
+      const exists = await env.DB.prepare(
+        "SELECT id FROM inventory_items WHERE id = ? AND business_id = ?",
+      ).bind(itemId, context.businessId).first();
+      if (!exists) throw new Error("Item not found");
+      const urls = Array.isArray(payload.urls)
+        ? payload.urls.map(String).map((url) => url.trim()).filter(Boolean)
+        : [];
+      if (!urls.length || urls.length > 8 || urls.some((url) => url.length > 1000)) {
+        throw new Error("photos are invalid");
+      }
+      const count = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM item_photos WHERE item_id = ? AND business_id = ?",
+      ).bind(itemId, context.businessId).first<{ count: number }>();
+      if ((count?.count || 0) + urls.length > 8) throw new Error("photos exceeds limit");
+      await env.DB.batch(urls.map((url, index) =>
+        env.DB.prepare(
+          "INSERT INTO item_photos (id, business_id, item_id, url, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        ).bind(Date.now() + index, context.businessId, itemId, url, (count?.count || 0) + index, createdAt),
+      ));
+      await env.DB.prepare(
+        "UPDATE inventory_items SET photo_url = COALESCE(photo_url, ?) WHERE id = ? AND business_id = ?",
+      ).bind(urls[0], itemId, context.businessId).run();
+    } else if (action === "removeItemPhoto") {
+      const photoId = integer(payload, "id", { min: 1 });
+      const photo = await env.DB.prepare(
+        "SELECT item_id AS itemId, url FROM item_photos WHERE id = ? AND business_id = ?",
+      ).bind(photoId, context.businessId).first<{ itemId: number; url: string }>();
+      if (!photo) throw new Error("Photo not found");
+      await env.DB.prepare("DELETE FROM item_photos WHERE id = ? AND business_id = ?")
+        .bind(photoId, context.businessId).run();
+      const next = await env.DB.prepare(
+        "SELECT url FROM item_photos WHERE item_id = ? AND business_id = ? ORDER BY sort_order, id LIMIT 1",
+      ).bind(photo.itemId, context.businessId).first<{ url: string }>();
+      await env.DB.prepare(
+        "UPDATE inventory_items SET photo_url = ? WHERE id = ? AND business_id = ?",
+      ).bind(next?.url || null, photo.itemId, context.businessId).run();
+      await deleteOwnedPhoto(photo.url, context.businessId);
+    } else if (action === "adjustStock") {
+      const itemId = integer(payload, "itemId", { min: 1 });
+      const delta = integer(payload, "delta", { min: -100000, max: 100000 });
+      if (!delta) throw new Error("delta must be different from zero");
+      const item = await env.DB.prepare(
+        "SELECT quantity, available FROM inventory_items WHERE id = ? AND business_id = ?",
+      ).bind(itemId, context.businessId).first<{ quantity: number; available: number }>();
+      if (!item) throw new Error("Item not found");
+      if (item.quantity + delta < 0 || item.available + delta < 0) {
+        throw new Error("Adjustment exceeds available stock");
+      }
+      await env.DB.batch([
+        env.DB.prepare(
+          "UPDATE inventory_items SET quantity = quantity + ?, available = available + ? WHERE id = ? AND business_id = ?",
+        ).bind(delta, delta, itemId, context.businessId),
+        env.DB.prepare(
+          "INSERT INTO inventory_movements (id, business_id, item_id, type, quantity_delta, note, created_by_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ).bind(integer(payload, "id", { min: 1 }), context.businessId, itemId, text(payload, "type", { required: true, max: 30 }), delta, text(payload, "note", { max: 500 }), context.userId, createdAt),
+      ]);
+    } else if (action === "addMaintenance") {
+      const itemId = integer(payload, "itemId", { min: 1 });
+      const exists = await env.DB.prepare(
+        "SELECT id FROM inventory_items WHERE id = ? AND business_id = ?",
+      ).bind(itemId, context.businessId).first();
+      if (!exists) throw new Error("Item not found");
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO maintenance_records (id, business_id, item_id, type, status, notes, cost, scheduled_date, completed_at, created_by_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+        ).bind(integer(payload, "id", { min: 1 }), context.businessId, itemId, text(payload, "type", { required: true, max: 40 }), text(payload, "status", { required: true, max: 30 }), text(payload, "notes", { max: 2000 }), integer(payload, "cost", { min: 0, max: 100000000 }), text(payload, "scheduledDate", { max: 10 }), context.userId, createdAt),
+        env.DB.prepare(
+          "UPDATE inventory_items SET condition = ? WHERE id = ? AND business_id = ?",
+        ).bind(text(payload, "condition", { max: 80 }) || "Em manutenção", itemId, context.businessId),
+      ]);
+    } else if (action === "updateMaintenance") {
+      const id = integer(payload, "id", { min: 1 });
+      const status = text(payload, "status", { required: true, max: 30 });
+      await env.DB.prepare(
+        "UPDATE maintenance_records SET status = ?, completed_at = ? WHERE id = ? AND business_id = ?",
+      ).bind(status, status === "Completed" ? createdAt : null, id, context.businessId).run();
+    } else if (action === "createKit" || action === "updateKit") {
+      const kitId = integer(payload, "id", { min: 1 });
+      const name = text(payload, "name", { required: true, max: 160 });
+      const kitEntries = Array.isArray(payload.items) ? payload.items : [];
+      if (!kitEntries.length || kitEntries.length > 100) {
+        throw new Error("Kit items are required");
+      }
+      const normalized = kitEntries.map((entry) => {
+        const value = entry as Payload;
+        return {
+          itemId: integer(value, "itemId", { min: 1 }),
+          quantity: integer(value, "quantity", { min: 1, max: 100000 }),
+        };
+      });
+      if (new Set(normalized.map((entry) => entry.itemId)).size !== normalized.length) {
+        throw new Error("Duplicate kit item");
+      }
+      const placeholders = normalized.map(() => "?").join(",");
+      const owned = await env.DB.prepare(
+        `SELECT COUNT(*) AS count FROM inventory_items WHERE business_id = ? AND id IN (${placeholders})`,
+      ).bind(context.businessId, ...normalized.map((entry) => entry.itemId)).first<{ count: number }>();
+      if (owned?.count !== normalized.length) throw new Error("Kit item not found");
+      const kitStatement = action === "createKit"
+        ? env.DB.prepare(
+          "INSERT INTO kits (id, business_id, name, description, price, currency, active, created_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?)",
+        ).bind(kitId, context.businessId, name, text(payload, "description", { max: 1000 }), integer(payload, "price", { min: 0, max: 100000000 }), text(payload, "currency", { required: true, max: 3 }).toUpperCase(), createdAt)
+        : env.DB.prepare(
+          "UPDATE kits SET name = ?, description = ?, price = ?, currency = ?, active = ? WHERE id = ? AND business_id = ?",
+        ).bind(name, text(payload, "description", { max: 1000 }), integer(payload, "price", { min: 0, max: 100000000 }), text(payload, "currency", { required: true, max: 3 }).toUpperCase(), payload.active === false ? 0 : 1, kitId, context.businessId);
+      await env.DB.batch([
+        kitStatement,
+        env.DB.prepare("DELETE FROM kit_items WHERE kit_id = ? AND business_id = ?").bind(kitId, context.businessId),
+        ...normalized.map((entry, index) =>
+          env.DB.prepare(
+            "INSERT INTO kit_items (id, business_id, kit_id, item_id, quantity) VALUES (?, ?, ?, ?, ?)",
+          ).bind(Date.now() + index, context.businessId, kitId, entry.itemId, entry.quantity),
+        ),
+      ]);
+    } else if (action === "deleteKit") {
+      const id = integer(payload, "id", { min: 1 });
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM kit_items WHERE kit_id = ? AND business_id = ?").bind(id, context.businessId),
+        env.DB.prepare("DELETE FROM kits WHERE id = ? AND business_id = ?").bind(id, context.businessId),
+      ]);
+    } else if (action === "importItems") {
+      const rawItems = Array.isArray(payload.items) ? payload.items : [];
+      if (!rawItems.length || rawItems.length > 500) {
+        throw new Error("Import must have between 1 and 500 items");
+      }
+      const imported = rawItems.map((entry) => validateItem(entry as Payload));
+      const ids = imported.map((item) => item.id);
+      if (new Set(ids).size !== ids.length) throw new Error("Duplicate imported item id");
+      await env.DB.batch(imported.flatMap((item, index) => [
+        itemInsert(item, context.businessId),
+        env.DB.prepare(
+          "INSERT INTO inventory_movements (id, business_id, item_id, type, quantity_delta, note, created_by_user_id, created_at) VALUES (?, ?, ?, 'import', ?, ?, ?, ?)",
+        ).bind(Date.now() + index, context.businessId, item.id, item.quantity, "Importação de inventário", context.userId, createdAt),
+        env.DB.prepare(
+          "INSERT OR IGNORE INTO categories (id, business_id, name) VALUES (?, ?, ?)",
+        ).bind(Date.now() + 1000 + index, context.businessId, item.category),
+      ]));
+    } else if (action === "addClient" || action === "updateClient") {
+      const id = integer(payload, "id", { min: 1 });
+      const existing = await env.DB.prepare(
+        "SELECT business_id AS businessId FROM clients WHERE id = ?",
+      ).bind(id).first<{ businessId: number }>();
+      if (existing && existing.businessId !== context.businessId) {
+        throw new Error("Client not found");
+      }
+      const values = [
+        text(payload, "name", { required: true, max: 160 }),
+        text(payload, "email", { max: 254 }),
+        text(payload, "phone", { max: 80 }),
+        text(payload, "notes", { max: 1000 }),
+      ] as const;
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE clients SET name = ?, email = ?, phone = ?, notes = ? WHERE id = ? AND business_id = ?",
+        ).bind(...values, id, context.businessId).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO clients (id, business_id, name, email, phone, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        ).bind(id, context.businessId, ...values, createdAt).run();
+      }
+    } else if (action === "addEvent" || action === "updateEvent") {
+      const id = integer(payload, "id", { min: 1 });
+      const clientId = integer(payload, "clientId", { min: 1 });
+      const client = await env.DB.prepare(
+        "SELECT id FROM clients WHERE id = ? AND business_id = ?",
+      ).bind(clientId, context.businessId).first();
+      if (!client) throw new Error("Client not found");
+      const ownerUserId = payload.ownerUserId
+        ? integer(payload, "ownerUserId", { min: 1 })
+        : null;
+      if (ownerUserId) {
+        const owner = await env.DB.prepare(
+          "SELECT user_id AS userId FROM memberships WHERE business_id = ? AND user_id = ? AND status = 'Active'",
+        ).bind(context.businessId, ownerUserId).first();
+        if (!owner) throw new Error("Event owner not found");
+      }
+      const start = date(payload, "startDate");
+      const end = date(payload, "endDate");
+      if (end < start) throw new Error("End date must follow start date");
+      const existing = await env.DB.prepare(
+        "SELECT business_id AS businessId, status FROM events WHERE id = ?",
+      ).bind(id).first<{ businessId: number; status: string }>();
+      if (existing && existing.businessId !== context.businessId) {
+        throw new Error("Event not found");
+      }
+      if (existing?.status === "Archived") {
+        throw new Error("Archived events cannot be edited");
+      }
+      const status = text(payload, "status", { max: 30 }) || "Planned";
+      if (!["Lead", "Planned", "Confirmed", "Preparing", "InProgress", "Completed", "Cancelled"].includes(status)) {
+        throw new Error("Event status is invalid");
+      }
+      if (existing && status !== existing.status) {
+        throw new Error("Status must be changed with the event lifecycle controls");
+      }
+      if (!existing && !["Lead", "Planned"].includes(status)) {
+        throw new Error("New events must start as a lead or in planning");
+      }
+      const currency = text(payload, "currency", { max: 3 }).toUpperCase() || "MZN";
+      const color = text(payload, "color", { max: 7 }) || "#b75d3f";
+      if (!/#[0-9a-f]{6}/i.test(color)) throw new Error("Event color is invalid");
+      const values = [
+        clientId,
+        ownerUserId,
+        text(payload, "name", { required: true, max: 180 }),
+        text(payload, "eventType", { max: 60 }) || "Other",
+        text(payload, "venue", { max: 240 }),
+        text(payload, "address", { max: 400 }),
+        start,
+        end,
+        text(payload, "setupTime", { max: 5 }),
+        text(payload, "pickupTime", { max: 5 }),
+        integer({ guestCount: payload.guestCount ?? 0 }, "guestCount", { min: 0, max: 100000 }),
+        integer({ budget: payload.budget ?? 0 }, "budget", { min: 0, max: 100000000 }),
+        currency,
+        text(payload, "onSiteContact", { max: 160 }),
+        color,
+        text(payload, "notes", { max: 2000 }),
+        status,
+      ] as const;
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE events SET client_id = ?, owner_user_id = ?, name = ?, event_type = ?, venue = ?, address = ?, start_date = ?, end_date = ?, setup_time = ?, pickup_time = ?, guest_count = ?, budget = ?, currency = ?, on_site_contact = ?, color = ?, notes = ?, status = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(...values, createdAt, id, context.businessId).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO events (id, business_id, client_id, owner_user_id, name, event_type, venue, address, start_date, end_date, setup_time, pickup_time, guest_count, budget, currency, on_site_contact, color, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).bind(id, context.businessId, ...values, createdAt, createdAt).run();
+      }
+      result = { ok: true, eventId: id };
+    } else if (action === "transitionEvent") {
+      const id = integer(payload, "id", { min: 1 });
+      const target = text(payload, "status", { required: true, max: 30 });
+      const event = await env.DB.prepare(
+        "SELECT status FROM events WHERE id = ? AND business_id = ?",
+      ).bind(id, context.businessId).first<{ status: string }>();
+      if (!event) throw new Error("Event not found");
+      const allowed: Record<string, string[]> = {
+        Lead: ["Planned", "Cancelled"],
+        Planned: ["Lead", "Confirmed", "Cancelled"],
+        Confirmed: ["Preparing", "Cancelled"],
+        Preparing: ["Confirmed", "InProgress", "Cancelled"],
+        InProgress: ["Completed"],
+        Cancelled: ["Planned"],
+      };
+      if (!allowed[event.status]?.includes(target)) {
+        throw new Error("Invalid event transition");
+      }
+      const reservationCounts = await env.DB.prepare(
+        "SELECT COALESCE(SUM(CASE WHEN status = 'Confirmed' THEN 1 ELSE 0 END), 0) AS confirmed, COALESCE(SUM(CASE WHEN status = 'CheckedOut' THEN 1 ELSE 0 END), 0) AS checkedOut FROM reservations WHERE event_id = ? AND business_id = ?",
+      ).bind(id, context.businessId).first<{ confirmed: number; checkedOut: number }>();
+      const confirmed = Number(reservationCounts?.confirmed || 0);
+      const checkedOut = Number(reservationCounts?.checkedOut || 0);
+      const pendingTasks = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM event_tasks WHERE event_id = ? AND business_id = ? AND status != 'Completed'",
+      ).bind(id, context.businessId).first<{ count: number }>();
+      if (target === "InProgress" && confirmed > 0) {
+        throw new Error("All confirmed reservations must be checked out before the event can start");
+      }
+      if (target === "Completed" && (confirmed > 0 || checkedOut > 0)) {
+        throw new Error("All linked reservations must be returned or cancelled before completing the event");
+      }
+      if (target === "Completed" && Number(pendingTasks?.count || 0) > 0) {
+        throw new Error("All event tasks must be completed before completing the event");
+      }
+      if (target === "Cancelled" && checkedOut > 0) {
+        throw new Error("Checked out reservations must be returned before cancelling the event");
+      }
+      if (target === "Cancelled" && confirmed > 0 && payload.cancelReservations !== true) {
+        throw new Error("Cannot cancel without confirming the linked reservations");
+      }
+      const statements = [
+        env.DB.prepare(
+          "UPDATE events SET status = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(target, createdAt, id, context.businessId),
+      ];
+      if (target === "Cancelled" && confirmed > 0) {
+        statements.push(
+          env.DB.prepare(
+            "UPDATE reservations SET status = 'Cancelled', cancelled_at = ? WHERE event_id = ? AND business_id = ? AND status = 'Confirmed'",
+          ).bind(createdAt, id, context.businessId),
+        );
+      }
+      await env.DB.batch(statements);
+      result = {
+        ok: true,
+        eventId: id,
+        status: target,
+        cancelledReservations: target === "Cancelled" ? confirmed : 0,
+      };
+    } else if (action === "duplicateEvent") {
+      const sourceId = integer(payload, "sourceId", { min: 1 });
+      const id = integer(payload, "id", { min: 1 });
+      const source = await env.DB.prepare(
+        "SELECT client_id AS clientId, owner_user_id AS ownerUserId, name, event_type AS eventType, venue, address, start_date AS startDate, end_date AS endDate, setup_time AS setupTime, pickup_time AS pickupTime, guest_count AS guestCount, budget, currency, on_site_contact AS onSiteContact, color, notes FROM events WHERE id = ? AND business_id = ?",
+      ).bind(sourceId, context.businessId).first<{
+        clientId: number; ownerUserId: number | null; name: string; eventType: string;
+        venue: string; address: string; startDate: string; endDate: string;
+        setupTime: string; pickupTime: string; guestCount: number; budget: number;
+        currency: string; onSiteContact: string; color: string; notes: string;
+      }>();
+      if (!source) throw new Error("Event not found");
+      await env.DB.prepare(
+        "INSERT INTO events (id, business_id, client_id, owner_user_id, name, event_type, venue, address, start_date, end_date, setup_time, pickup_time, guest_count, budget, currency, on_site_contact, color, notes, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Planned', ?, ?)",
+      ).bind(
+        id, context.businessId, source.clientId, source.ownerUserId,
+        `${source.name} · Cópia`, source.eventType, source.venue, source.address,
+        source.startDate, source.endDate, source.setupTime, source.pickupTime,
+        source.guestCount, source.budget, source.currency, source.onSiteContact,
+        source.color, source.notes, createdAt, createdAt,
+      ).run();
+      result = {
+        ok: true,
+        eventId: id,
+        reservationsCopied: false,
+        tasksCopied: false,
+        expensesCopied: false,
+        documentsCopied: false,
+      };
+    } else if (action === "archiveEvent") {
+      const id = integer(payload, "id", { min: 1 });
+      const event = await env.DB.prepare(
+        "SELECT status FROM events WHERE id = ? AND business_id = ?",
+      ).bind(id, context.businessId).first<{ status: string }>();
+      if (!event) throw new Error("Event not found");
+      if (!["Completed", "Cancelled"].includes(event.status)) {
+        throw new Error("Only completed or cancelled events can be archived");
+      }
+      const activeReservations = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM reservations WHERE event_id = ? AND business_id = ? AND status IN ('Confirmed', 'CheckedOut')",
+      ).bind(id, context.businessId).first<{ count: number }>();
+      if (activeReservations?.count) {
+        throw new Error("Event has active reservations and cannot be archived");
+      }
+      const pendingTasks = await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM event_tasks WHERE event_id = ? AND business_id = ? AND status != 'Completed'",
+      ).bind(id, context.businessId).first<{ count: number }>();
+      if (pendingTasks?.count) {
+        throw new Error("Event has pending tasks and cannot be archived");
+      }
+      await env.DB.prepare(
+        "UPDATE events SET status = 'Archived', archived_at = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+      ).bind(createdAt, createdAt, id, context.businessId).run();
+      result = { ok: true, eventId: id };
+    } else if (action === "addEventTask" || action === "updateEventTask") {
+      const id = integer(payload, "id", { min: 1 });
+      const eventId = integer(payload, "eventId", { min: 1 });
+      const event = await env.DB.prepare(
+        "SELECT status FROM events WHERE id = ? AND business_id = ?",
+      ).bind(eventId, context.businessId).first<{ status: string }>();
+      if (!event) throw new Error("Event not found");
+      if (event.status === "Archived") throw new Error("Archived events cannot be changed");
+      const assigneeUserId = payload.assigneeUserId
+        ? integer(payload, "assigneeUserId", { min: 1 })
+        : null;
+      if (assigneeUserId) {
+        const assignee = await env.DB.prepare(
+          "SELECT user_id AS userId FROM memberships WHERE business_id = ? AND user_id = ? AND status = 'Active'",
+        ).bind(context.businessId, assigneeUserId).first();
+        if (!assignee) throw new Error("Task assignee not found");
+      }
+      const category = text(payload, "category", { max: 30 }) || "General";
+      if (!["Planning", "Logistics", "Setup", "Styling", "Pickup", "General"].includes(category)) {
+        throw new Error("Task category is invalid");
+      }
+      const priority = text(payload, "priority", { max: 20 }) || "Normal";
+      if (!["Low", "Normal", "High", "Urgent"].includes(priority)) {
+        throw new Error("Task priority is invalid");
+      }
+      const dueDate = text(payload, "dueDate", { max: 10 });
+      if (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`)))) {
+        throw new Error("Task due date is invalid");
+      }
+      const dueTime = text(payload, "dueTime", { max: 5 });
+      if (dueTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(dueTime)) {
+        throw new Error("Task due time is invalid");
+      }
+      const existing = await env.DB.prepare(
+        "SELECT business_id AS businessId, status FROM event_tasks WHERE id = ?",
+      ).bind(id).first<{ businessId: number; status: string }>();
+      if (existing && existing.businessId !== context.businessId) {
+        throw new Error("Event task not found");
+      }
+      if (action === "updateEventTask" && !existing) {
+        throw new Error("Event task not found");
+      }
+      if (existing?.status === "Completed") {
+        throw new Error("Completed tasks must be reopened before editing");
+      }
+      const values = [
+        eventId,
+        assigneeUserId,
+        text(payload, "title", { required: true, max: 180 }),
+        text(payload, "description", { max: 1000 }),
+        category,
+        priority,
+        dueDate,
+        dueTime,
+        integer({ sortOrder: payload.sortOrder ?? 0 }, "sortOrder", { min: 0, max: 100000 }),
+      ] as const;
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE event_tasks SET event_id = ?, assignee_user_id = ?, title = ?, description = ?, category = ?, priority = ?, due_date = ?, due_time = ?, sort_order = ?, updated_at = ? WHERE id = ? AND business_id = ? AND status = 'Pending'",
+        ).bind(...values, createdAt, id, context.businessId).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO event_tasks (id, business_id, event_id, assignee_user_id, title, description, category, priority, status, due_date, due_time, sort_order, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?, ?, ?)",
+        ).bind(id, context.businessId, ...values, context.userId, createdAt, createdAt).run();
+      }
+      result = { ok: true, taskId: id };
+    } else if (action === "transitionEventTask") {
+      const id = integer(payload, "id", { min: 1 });
+      const status = text(payload, "status", { required: true, max: 20 });
+      if (!["Pending", "Completed"].includes(status)) {
+        throw new Error("Task status is invalid");
+      }
+      const task = await env.DB.prepare(
+        "SELECT t.status, e.status AS eventStatus FROM event_tasks t JOIN events e ON e.id = t.event_id AND e.business_id = t.business_id WHERE t.id = ? AND t.business_id = ?",
+      ).bind(id, context.businessId).first<{ status: string; eventStatus: string }>();
+      if (!task) throw new Error("Event task not found");
+      if (task.eventStatus === "Archived") throw new Error("Archived events cannot be changed");
+      if (task.status === status) throw new Error("Task status is already set");
+      await env.DB.prepare(
+        "UPDATE event_tasks SET status = ?, completed_at = ?, completed_by_user_id = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+      ).bind(
+        status,
+        status === "Completed" ? createdAt : null,
+        status === "Completed" ? context.userId : null,
+        createdAt,
+        id,
+        context.businessId,
+      ).run();
+      result = { ok: true, taskId: id, status };
+    } else if (action === "deleteEventTask") {
+      const id = integer(payload, "id", { min: 1 });
+      const deleted = await env.DB.prepare(
+        "DELETE FROM event_tasks WHERE id = ? AND business_id = ? AND status = 'Pending' AND event_id IN (SELECT id FROM events WHERE business_id = ? AND status != 'Archived')",
+      ).bind(id, context.businessId, context.businessId).run();
+      if (!deleted.meta.changes) {
+        throw new Error("Only pending tasks from active events can be deleted");
+      }
+      result = { ok: true, taskId: id };
+    } else if (action === "addSupplier" || action === "updateSupplier") {
+      const id = integer(payload, "id", { min: 1 });
+      const existing = await env.DB.prepare(
+        "SELECT business_id AS businessId FROM suppliers WHERE id = ?",
+      ).bind(id).first<{ businessId: number }>();
+      if (existing && existing.businessId !== context.businessId) {
+        throw new Error("Supplier not found");
+      }
+      if (action === "updateSupplier" && !existing) {
+        throw new Error("Supplier not found");
+      }
+      const serviceType = text(payload, "serviceType", { max: 60 }) || "Other";
+      const values = [
+        text(payload, "name", { required: true, max: 160 }),
+        serviceType,
+        text(payload, "contactName", { max: 160 }),
+        text(payload, "email", { max: 254 }),
+        text(payload, "phone", { max: 80 }),
+        text(payload, "notes", { max: 1000 }),
+        payload.active === false ? 0 : 1,
+      ] as const;
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE suppliers SET name = ?, service_type = ?, contact_name = ?, email = ?, phone = ?, notes = ?, active = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(...values, createdAt, id, context.businessId).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO suppliers (id, business_id, name, service_type, contact_name, email, phone, notes, active, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).bind(id, context.businessId, ...values, createdAt, createdAt).run();
+      }
+      result = { ok: true, supplierId: id };
+    } else if (
+      action === "addEventExpense" ||
+      action === "updateEventExpense"
+    ) {
+      const id = integer(payload, "id", { min: 1 });
+      const eventId = integer(payload, "eventId", { min: 1 });
+      const event = await env.DB.prepare(
+        "SELECT status FROM events WHERE id = ? AND business_id = ?",
+      ).bind(eventId, context.businessId).first<{ status: string }>();
+      if (!event) throw new Error("Event not found");
+      if (event.status === "Archived") {
+        throw new Error("Archived events cannot be changed");
+      }
+      const supplierId = payload.supplierId
+        ? integer(payload, "supplierId", { min: 1 })
+        : null;
+      if (supplierId) {
+        const supplier = await env.DB.prepare(
+          "SELECT id FROM suppliers WHERE id = ? AND business_id = ? AND active = 1",
+        ).bind(supplierId, context.businessId).first();
+        if (!supplier) throw new Error("Supplier not found");
+      }
+      const existing = await env.DB.prepare(
+        "SELECT business_id AS businessId FROM event_expenses WHERE id = ?",
+      ).bind(id).first<{ businessId: number }>();
+      if (existing && existing.businessId !== context.businessId) {
+        throw new Error("Event expense not found");
+      }
+      if (action === "updateEventExpense" && !existing) {
+        throw new Error("Event expense not found");
+      }
+      const category = text(payload, "category", { max: 30 }) || "Other";
+      if (!["Rental", "Transport", "Labour", "Flowers", "Catering", "Printing", "Other"].includes(category)) {
+        throw new Error("Expense category is invalid");
+      }
+      const paymentStatus = text(payload, "paymentStatus", { max: 20 }) || "Planned";
+      if (!["Planned", "Pending", "Paid"].includes(paymentStatus)) {
+        throw new Error("Payment status is invalid");
+      }
+      const incurredDate = text(payload, "incurredDate", { max: 10 });
+      if (incurredDate && (!/^\d{4}-\d{2}-\d{2}$/.test(incurredDate) || Number.isNaN(Date.parse(`${incurredDate}T00:00:00Z`)))) {
+        throw new Error("Expense date is invalid");
+      }
+      const values = [
+        eventId,
+        supplierId,
+        category,
+        text(payload, "description", { required: true, max: 240 }),
+        integer(payload, "amount", { min: 0, max: 100000000 }),
+        text(payload, "currency", { max: 3 }).toUpperCase() || "MZN",
+        paymentStatus,
+        incurredDate,
+        text(payload, "notes", { max: 1000 }),
+      ] as const;
+      if (existing) {
+        await env.DB.prepare(
+          "UPDATE event_expenses SET event_id = ?, supplier_id = ?, category = ?, description = ?, amount = ?, currency = ?, payment_status = ?, incurred_date = ?, notes = ?, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(...values, createdAt, id, context.businessId).run();
+      } else {
+        await env.DB.prepare(
+          "INSERT INTO event_expenses (id, business_id, event_id, supplier_id, category, description, amount, currency, payment_status, incurred_date, notes, created_by_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).bind(id, context.businessId, ...values, context.userId, createdAt, createdAt).run();
+      }
+      result = { ok: true, expenseId: id };
+    } else if (action === "deleteEventExpense") {
+      const id = integer(payload, "id", { min: 1 });
+      const deleted = await env.DB.prepare(
+        "DELETE FROM event_expenses WHERE id = ? AND business_id = ? AND event_id IN (SELECT id FROM events WHERE business_id = ? AND status != 'Archived')",
+      ).bind(id, context.businessId, context.businessId).run();
+      if (!deleted.meta.changes) {
+        throw new Error("Event expense not found or event is archived");
+      }
+      result = { ok: true, expenseId: id };
+    } else if (action === "addReservation" || action === "updateReservation") {
+      const reservationId = integer(payload, "id", { min: 1 });
+      const clientId = integer(payload, "clientId", { min: 1 });
+      const eventId = integer(payload, "eventId", { min: 1 });
+      const start = date(payload, "date");
+      const end = date(payload, "endDate");
+      if (end < start) throw new Error("End date must follow start date");
+      const lines = reservationLines(payload);
+      const itemPlaceholders = lines.map(() => "?").join(",");
+      const stock = await env.DB.prepare(
+        `SELECT id, name, price, currency FROM inventory_items WHERE business_id = ? AND id IN (${itemPlaceholders})`,
+      ).bind(context.businessId, ...lines.map((line) => line.itemId)).all<{
+        id: number;
+        name: string;
+        price: number;
+        currency: string;
+      }>();
+      if (stock.results.length !== lines.length) throw new Error("Reservation item not found");
+      const currencies = new Set(stock.results.map((item) => item.currency || "MZN"));
+      if (currencies.size > 1) {
+        throw new Error("Reservation items must use the same currency");
+      }
+      const currency = stock.results[0]?.currency || "MZN";
+      const pricedLines = lines.map((line) => {
+        const item = stock.results.find((candidate) => candidate.id === line.itemId);
+        if (!item) throw new Error("Reservation item not found");
+        return { ...line, itemName: item.name, unitPrice: item.price, currency: item.currency || "MZN" };
+      });
+      const subtotal = pricedLines.reduce(
+        (sum, line) => sum + line.quantity * line.unitPrice,
+        0,
+      );
+      const discount = integer(
+        { discount: payload.discount ?? 0 },
+        "discount",
+        { min: 0, max: subtotal },
+      );
+      const deliveryFee = integer(
+        { deliveryFee: payload.deliveryFee ?? 0 },
+        "deliveryFee",
+        { min: 0, max: 100000000 },
+      );
+      const deposit = integer(
+        { deposit: payload.deposit ?? 0 },
+        "deposit",
+        { min: 0, max: 100000000 },
+      );
+      const total = subtotal - discount + deliveryFee;
+      const clientName = text(payload, "clientName", { required: true, max: 160 });
+      const clientEmail = text(payload, "clientEmail", { max: 254 });
+      const clientPhone = text(payload, "clientPhone", { max: 80 });
+      const eventName = text(payload, "eventName", { required: true, max: 180 });
+      const existingClient = await env.DB.prepare(
+        "SELECT business_id AS businessId FROM clients WHERE id = ?",
+      ).bind(clientId).first<{ businessId: number }>();
+      const existingEvent = await env.DB.prepare(
+        "SELECT business_id AS businessId, status FROM events WHERE id = ?",
+      ).bind(eventId).first<{ businessId: number; status: string }>();
+      const existingReservation = await env.DB.prepare(
+        "SELECT business_id AS businessId, status FROM reservations WHERE id = ?",
+      ).bind(reservationId).first<{ businessId: number; status: string }>();
+      if (existingClient && existingClient.businessId !== context.businessId) {
+        throw new Error("Client not found");
+      }
+      if (existingEvent && existingEvent.businessId !== context.businessId) {
+        throw new Error("Event not found");
+      }
+      if (existingEvent && !["Lead", "Planned", "Confirmed", "Preparing"].includes(existingEvent.status)) {
+        throw new Error("Reservations cannot be changed after an event starts or closes");
+      }
+      if (existingReservation && existingReservation.businessId !== context.businessId) {
+        throw new Error("Reservation not found");
+      }
+      if (action === "updateReservation" && (!existingReservation || existingReservation.status !== "Confirmed")) {
+        throw new Error("Only confirmed reservations can be edited");
+      }
+      if (action === "addReservation" && existingReservation) {
+        throw new Error("Duplicate reservation id");
+      }
+      const itemSummary = pricedLines
+        .map((line) => `${line.itemName} × ${line.quantity}`)
+        .join(", ");
+      const totalQuantity = pricedLines.reduce((sum, line) => sum + line.quantity, 0);
+      const reservationStatement = action === "addReservation"
+        ? env.DB.prepare(
+          "INSERT INTO reservations (id, business_id, item, client, date, end_date, color, event_name, contact, notes, quantity, status, client_id, event_id, subtotal, discount, delivery_fee, total, deposit, currency, logistics, payment_status, created_by_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Confirmed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).bind(reservationId, context.businessId, itemSummary, clientName, start, end, text(payload, "color", { max: 20 }) || "#b75d3f", eventName, clientPhone || clientEmail, text(payload, "notes", { max: 2000 }), totalQuantity, clientId, eventId, subtotal, discount, deliveryFee, total, deposit, currency, text(payload, "logistics", { max: 3000 }), text(payload, "paymentStatus", { max: 30 }) || "Pending", context.userId, createdAt)
+        : env.DB.prepare(
+          "UPDATE reservations SET item = ?, client = ?, date = ?, end_date = ?, color = ?, event_name = ?, contact = ?, notes = ?, quantity = ?, client_id = ?, event_id = ?, subtotal = ?, discount = ?, delivery_fee = ?, total = ?, deposit = ?, currency = ?, logistics = ?, payment_status = ? WHERE id = ? AND business_id = ? AND status = 'Confirmed'",
+        ).bind(itemSummary, clientName, start, end, text(payload, "color", { max: 20 }) || "#b75d3f", eventName, clientPhone || clientEmail, text(payload, "notes", { max: 2000 }), totalQuantity, clientId, eventId, subtotal, discount, deliveryFee, total, deposit, currency, text(payload, "logistics", { max: 3000 }), text(payload, "paymentStatus", { max: 30 }) || "Pending", reservationId, context.businessId);
+      await env.DB.batch([
+        existingClient
+          ? env.DB.prepare(
+            "UPDATE clients SET name = ?, email = ?, phone = ? WHERE id = ? AND business_id = ?",
+          ).bind(clientName, clientEmail, clientPhone, clientId, context.businessId)
+          : env.DB.prepare(
+            "INSERT INTO clients (id, business_id, name, email, phone, notes, created_at) VALUES (?, ?, ?, ?, ?, '', ?)",
+          ).bind(clientId, context.businessId, clientName, clientEmail, clientPhone, createdAt),
+        existingEvent
+          ? env.DB.prepare(
+            "UPDATE events SET client_id = ?, name = ?, venue = ?, start_date = ?, end_date = ?, setup_time = ?, pickup_time = ?, notes = ? WHERE id = ? AND business_id = ?",
+          ).bind(clientId, eventName, text(payload, "venue", { max: 240 }), start, end, text(payload, "setupTime", { max: 5 }), text(payload, "pickupTime", { max: 5 }), text(payload, "eventNotes", { max: 2000 }), eventId, context.businessId)
+          : env.DB.prepare(
+            "INSERT INTO events (id, business_id, client_id, name, venue, start_date, end_date, setup_time, pickup_time, notes, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Planned', ?)",
+          ).bind(eventId, context.businessId, clientId, eventName, text(payload, "venue", { max: 240 }), start, end, text(payload, "setupTime", { max: 5 }), text(payload, "pickupTime", { max: 5 }), text(payload, "eventNotes", { max: 2000 }), createdAt),
+        reservationStatement,
+        ...(action === "updateReservation"
+          ? [env.DB.prepare(
+            "DELETE FROM reservation_items WHERE reservation_id = ? AND business_id = ?",
+          ).bind(reservationId, context.businessId)]
+          : []),
+        ...pricedLines.map((line, index) =>
+          env.DB.prepare(
+            "INSERT INTO reservation_items (id, business_id, reservation_id, item_id, item_name, quantity, unit_price, currency) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          ).bind(reservationId * 1000 + index + 1, context.businessId, reservationId, line.itemId, line.itemName, line.quantity, line.unitPrice, line.currency),
+        ),
+      ]);
+    } else if (action === "transitionReservation") {
+      const id = integer(payload, "id", { min: 1 });
+      const target = text(payload, "status", { required: true, max: 30 });
+      const reservation = await env.DB.prepare(
+        "SELECT r.status, r.event_id AS eventId, r.event_name AS eventName, e.status AS eventStatus FROM reservations r JOIN events e ON e.id = r.event_id AND e.business_id = r.business_id WHERE r.id = ? AND r.business_id = ?",
+      ).bind(id, context.businessId).first<{ status: string; eventId: number; eventName: string; eventStatus: string }>();
+      if (!reservation) throw new Error("Reservation not found");
+      const allowed: Record<string, string[]> = {
+        Confirmed: ["Cancelled", "CheckedOut"],
+        CheckedOut: ["Returned"],
+      };
+      if (!allowed[reservation.status]?.includes(target)) {
+        throw new Error("Invalid reservation transition");
+      }
+      if (target === "CheckedOut" && !["Confirmed", "Preparing", "InProgress"].includes(reservation.eventStatus)) {
+        throw new Error("The event must be confirmed or preparing before checkout");
+      }
+      const lines = await env.DB.prepare(
+        "SELECT item_id AS itemId, quantity FROM reservation_items WHERE reservation_id = ? AND business_id = ?",
+      ).bind(id, context.businessId).all<{ itemId: number; quantity: number }>();
+      if (!lines.results.length) throw new Error("Reservation items are required");
+      const statements = [
+        env.DB.prepare(
+          "UPDATE reservations SET status = ?, checked_out_at = CASE WHEN ? = 'CheckedOut' THEN ? ELSE checked_out_at END, returned_at = CASE WHEN ? = 'Returned' THEN ? ELSE returned_at END, cancelled_at = CASE WHEN ? = 'Cancelled' THEN ? ELSE cancelled_at END WHERE id = ? AND business_id = ?",
+        ).bind(target, target, createdAt, target, createdAt, target, createdAt, id, context.businessId),
+        env.DB.prepare(
+          "UPDATE events SET status = CASE WHEN ? = 'CheckedOut' AND status IN ('Confirmed', 'Preparing') AND NOT EXISTS (SELECT 1 FROM reservations WHERE event_id = ? AND business_id = ? AND status = 'Confirmed') THEN 'InProgress' WHEN ? = 'Returned' AND status = 'InProgress' AND NOT EXISTS (SELECT 1 FROM reservations WHERE event_id = ? AND business_id = ? AND status IN ('Confirmed', 'CheckedOut')) AND NOT EXISTS (SELECT 1 FROM event_tasks WHERE event_id = ? AND business_id = ? AND status != 'Completed') THEN 'Completed' ELSE status END, updated_at = ? WHERE id = ? AND business_id = ?",
+        ).bind(
+          target,
+          reservation.eventId,
+          context.businessId,
+          target,
+          reservation.eventId,
+          context.businessId,
+          reservation.eventId,
+          context.businessId,
+          createdAt,
+          reservation.eventId,
+          context.businessId,
+        ),
+      ];
+      if (target === "CheckedOut") {
+        lines.results.forEach((line, index) => {
+          statements.push(
+            env.DB.prepare(
+              "UPDATE inventory_items SET available = available - ?, status = CASE WHEN available - ? <= 0 THEN 'Rented' ELSE status END WHERE id = ? AND business_id = ?",
+            ).bind(line.quantity, line.quantity, line.itemId, context.businessId),
+            env.DB.prepare(
+              "INSERT INTO inventory_movements (id, business_id, item_id, type, quantity_delta, note, created_by_user_id, created_at) VALUES (?, ?, ?, 'rental_out', ?, ?, ?, ?)",
+            ).bind(Date.now() * 100 + index, context.businessId, line.itemId, -line.quantity, `Saída · ${reservation.eventName}`, context.userId, createdAt),
+          );
+        });
+      } else if (target === "Returned") {
+        lines.results.forEach((line, index) => {
+          statements.push(
+            env.DB.prepare(
+              "UPDATE inventory_items SET available = MIN(quantity, available + ?), status = 'Available' WHERE id = ? AND business_id = ?",
+            ).bind(line.quantity, line.itemId, context.businessId),
+            env.DB.prepare(
+              "INSERT INTO inventory_movements (id, business_id, item_id, type, quantity_delta, note, created_by_user_id, created_at) VALUES (?, ?, ?, 'rental_return', ?, ?, ?, ?)",
+            ).bind(Date.now() * 100 + index, context.businessId, line.itemId, line.quantity, `Devolução · ${reservation.eventName}`, context.userId, createdAt),
+          );
+        });
+      }
+      await env.DB.batch(statements);
+    } else if (action === "addCategory") {
+      await env.DB.prepare(
+        "INSERT OR IGNORE INTO categories (id, business_id, name) VALUES (?, ?, ?)",
+      ).bind(integer(payload, "id", { min: 1 }), context.businessId, text(payload, "name", { required: true, max: 80 })).run();
+    } else if (action === "removeCategory") {
+      const name = text(payload, "name", { required: true, max: 80 });
+      const fallback = text(payload, "fallback", { required: true, max: 80 });
+      await env.DB.batch([
+        env.DB.prepare("UPDATE inventory_items SET category = ? WHERE business_id = ? AND category = ?").bind(fallback, context.businessId, name),
+        env.DB.prepare("DELETE FROM categories WHERE business_id = ? AND name = ?").bind(context.businessId, name),
+        env.DB.prepare("INSERT OR IGNORE INTO categories (id, business_id, name) VALUES (?, ?, ?)").bind(Date.now(), context.businessId, fallback),
+      ]);
+    } else if (action === "inviteMember") {
+      const email = text(payload, "email", { required: true, max: 254 }).toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Invalid email address");
+      if (email === context.user.email) throw new Error("You already belong to this business");
+      if (context.plan === "Basic") {
+        const teamSize = await env.DB.prepare(
+          "SELECT (SELECT COUNT(*) FROM memberships WHERE business_id = ? AND status = 'Active' AND role != 'owner') + (SELECT COUNT(*) FROM collaborators WHERE business_id = ? AND status = 'Pending') AS count",
+        ).bind(context.businessId, context.businessId).first<{ count: number }>();
+        if ((teamSize?.count || 0) >= PLAN_CATALOG.Basic.collaboratorLimit!) {
+          throw new Error("The Basic plan allows up to 3 collaborators");
+        }
+      }
+      const existingMember = await env.DB.prepare(
+        "SELECT m.id FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.business_id = ? AND lower(u.email) = ? AND m.status = 'Active'",
+      ).bind(context.businessId, email).first();
+      if (existingMember) throw new Error("This person already belongs to the business");
+      const role = normalizedRole(text(payload, "role", { required: true, max: 40 }));
+      const invitationId = integer(payload, "id", { min: 1 });
+      const expiresAt = addDays(new Date(createdAt), 7).toISOString();
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM collaborators WHERE business_id = ? AND lower(email) = ? AND status = 'Pending'").bind(context.businessId, email),
+        env.DB.prepare("INSERT INTO collaborators (id, business_id, email, role, status, invited_by_user_id, created_at, expires_at) VALUES (?, ?, ?, ?, 'Pending', ?, ?, ?)").bind(invitationId, context.businessId, email, role, context.userId, createdAt, expiresAt),
+      ]);
+      const inviteUrl = `${emailConfiguration().publicAppUrl.replace(/\/$/, "")}/?invitation=${invitationId}`;
+      const message = invitationEmail({
+        businessName: context.businessName,
+        inviterName: context.user.displayName,
+        role,
+        inviteUrl,
+        expiresAt,
+      });
+      const delivery = await sendTransactionalEmail({
+        businessId: context.businessId,
+        recipient: email,
+        template: "team-invitation",
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+      });
+      result = {
+        ok: true,
+        invitationId,
+        expiresAt,
+        inviteUrl,
+        emailConfigured: delivery.configured,
+        emailSent: delivery.sent,
+      };
+    } else if (action === "resendInvitation") {
+      const id = integer(payload, "id", { min: 1 });
+      const expiresAt = addDays(new Date(createdAt), 7).toISOString();
+      const invitation = await env.DB.prepare(
+        "SELECT email, role FROM collaborators WHERE id = ? AND business_id = ? AND status IN ('Pending', 'Expired', 'Revoked')",
+      ).bind(id, context.businessId).first<{ email: string; role: string }>();
+      if (!invitation) throw new Error("Invitation not found");
+      const updated = await env.DB.prepare(
+        "UPDATE collaborators SET status = 'Pending', created_at = ?, expires_at = ?, revoked_at = NULL WHERE id = ? AND business_id = ? AND status IN ('Pending', 'Expired', 'Revoked')",
+      ).bind(createdAt, expiresAt, id, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Invitation not found");
+      const inviteUrl = `${emailConfiguration().publicAppUrl.replace(/\/$/, "")}/?invitation=${id}`;
+      const message = invitationEmail({
+        businessName: context.businessName,
+        inviterName: context.user.displayName,
+        role: invitation.role,
+        inviteUrl,
+        expiresAt,
+      });
+      const delivery = await sendTransactionalEmail({
+        businessId: context.businessId,
+        recipient: invitation.email,
+        template: "team-invitation",
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+      });
+      result = {
+        ok: true,
+        invitationId: id,
+        expiresAt,
+        inviteUrl,
+        emailConfigured: delivery.configured,
+        emailSent: delivery.sent,
+      };
+    } else if (action === "revokeInvitation") {
+      const id = integer(payload, "id", { min: 1 });
+      const updated = await env.DB.prepare(
+        "UPDATE collaborators SET status = 'Revoked', revoked_at = ? WHERE id = ? AND business_id = ? AND status = 'Pending'",
+      ).bind(createdAt, id, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Pending invitation not found");
+    } else if (action === "acceptInvitation") {
+      const id = integer(payload, "id", { min: 1 });
+      const invitation = await env.DB.prepare(
+        "SELECT business_id AS businessId, role, expires_at AS expiresAt FROM collaborators WHERE id = ? AND lower(email) = ? AND status = 'Pending'",
+      ).bind(id, context.user.email.toLowerCase()).first<{
+        businessId: number;
+        role: string;
+        expiresAt: string;
+      }>();
+      if (!invitation) throw new Error("Invitation not found");
+      if (invitation.expiresAt && invitation.expiresAt <= createdAt) {
+        await env.DB.prepare(
+          "UPDATE collaborators SET status = 'Expired' WHERE id = ?",
+        ).bind(id).run();
+        throw new Error("Invitation has expired");
+      }
+      await env.DB.batch([
+        env.DB.prepare(
+          "INSERT INTO memberships (business_id, user_id, role, status, created_at) VALUES (?, ?, ?, 'Active', ?) ON CONFLICT(business_id, user_id) DO UPDATE SET role = excluded.role, status = 'Active'",
+        ).bind(invitation.businessId, context.userId, normalizedRole(invitation.role), createdAt),
+        env.DB.prepare(
+          "UPDATE collaborators SET status = 'Accepted', accepted_at = ?, accepted_by_user_id = ? WHERE id = ? AND business_id = ?",
+        ).bind(createdAt, context.userId, id, invitation.businessId),
+      ]);
+      auditBusinessId = invitation.businessId;
+      result = { ok: true, workspaceId: invitation.businessId };
+      await notifyBusinessMembers(
+        invitation.businessId,
+        "team",
+        "Convite aceite",
+        "Invitation accepted",
+        `${context.user.displayName} entrou na equipa.`,
+        `${context.user.displayName} joined the team.`,
+        `invitation-accepted:${id}`,
+        createdAt,
+      );
+    } else if (action === "declineInvitation") {
+      const id = integer(payload, "id", { min: 1 });
+      const invitation = await env.DB.prepare(
+        "SELECT business_id AS businessId FROM collaborators WHERE id = ? AND lower(email) = ? AND status = 'Pending'",
+      ).bind(id, context.user.email.toLowerCase()).first<{ businessId: number }>();
+      if (!invitation) throw new Error("Invitation not found");
+      await env.DB.prepare(
+        "UPDATE collaborators SET status = 'Declined' WHERE id = ? AND business_id = ?",
+      ).bind(id, invitation.businessId).run();
+      auditBusinessId = invitation.businessId;
+    } else if (action === "updateMemberRole") {
+      const memberId = integer(payload, "memberId", { min: 1 });
+      const role = normalizedRole(text(payload, "role", { required: true, max: 40 }));
+      const updated = await env.DB.prepare(
+        "UPDATE memberships SET role = ? WHERE business_id = ? AND user_id = ? AND role != 'owner'",
+      ).bind(role, context.businessId, memberId).run();
+      if (!updated.meta.changes) throw new Error("Member cannot be updated");
+    } else if (action === "removeMember") {
+      const memberId = integer(payload, "memberId", { min: 1 });
+      if (memberId === context.userId) throw new Error("You cannot remove yourself");
+      const updated = await env.DB.prepare(
+        "UPDATE memberships SET status = 'Removed' WHERE business_id = ? AND user_id = ? AND role != 'owner'",
+      ).bind(context.businessId, memberId).run();
+      if (!updated.meta.changes) throw new Error("Member cannot be removed");
+    } else if (action === "markNotificationRead") {
+      await env.DB.prepare(
+        "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE id = ? AND business_id = ? AND user_id = ?",
+      ).bind(createdAt, integer(payload, "id", { min: 1 }), context.businessId, context.userId).run();
+    } else if (action === "markAllNotificationsRead") {
+      await env.DB.prepare(
+        "UPDATE notifications SET read_at = COALESCE(read_at, ?) WHERE business_id = ? AND user_id = ?",
+      ).bind(createdAt, context.businessId, context.userId).run();
+    } else if (action === "cancelSubscription") {
+      const updated = await env.DB.prepare(
+        "UPDATE subscriptions SET cancel_at_period_end = 1, updated_at = ? WHERE business_id = ? AND status IN ('Trialing', 'Active', 'Grace')",
+      ).bind(createdAt, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Subscription cannot be cancelled");
+      result = { ok: true, cancelAtPeriodEnd: true };
+    } else if (action === "resumeSubscription") {
+      const updated = await env.DB.prepare(
+        "UPDATE subscriptions SET cancel_at_period_end = 0, updated_at = ? WHERE business_id = ? AND status IN ('Trialing', 'Active', 'Grace')",
+      ).bind(createdAt, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Subscription cannot be resumed");
+      result = { ok: true, cancelAtPeriodEnd: false };
+    } else if (action === "updateProfile") {
+      const businessName = text(payload, "businessName", { required: true, max: 120 });
+      const handle = text(payload, "handle", { required: true, max: 60 }).toLowerCase().replace(/[^a-z0-9-]/g, "");
+      if (!handle) throw new Error("Invalid profile handle");
+      const website = text(payload, "website", { max: 300 });
+      if (website) {
+        let parsed: URL;
+        try {
+          parsed = new URL(website);
+        } catch {
+          throw new Error("Invalid website");
+        }
+        if (!["http:", "https:"].includes(parsed.protocol)) {
+          throw new Error("Invalid website");
+        }
+      }
+      const instagram = text(payload, "instagram", { max: 31 }).replace(/^@/, "");
+      if (instagram && !/^[a-zA-Z0-9._]{1,30}$/.test(instagram)) {
+        throw new Error("Invalid Instagram handle");
+      }
+      await env.DB.batch([
+        env.DB.prepare("UPDATE business_profile SET business_name = ?, handle = ?, bio = ?, location = ?, phone = ?, email = ?, color = ?, avatar_url = ?, website = ?, instagram = ?, services = ?, is_public = ?, accepts_enquiries = ? WHERE business_id = ?").bind(businessName, handle, text(payload, "bio", { max: 1000 }), text(payload, "location", { max: 160 }), text(payload, "phone", { max: 80 }), text(payload, "email", { max: 254 }), text(payload, "color", { max: 20 }) || "#b75d3f", text(payload, "avatarUrl", { max: 1000 }) || null, website, instagram, text(payload, "services", { max: 500 }), payload.isPublic === false ? 0 : 1, payload.acceptsEnquiries === false ? 0 : 1, context.businessId),
+        env.DB.prepare("UPDATE businesses SET name = ?, handle = ? WHERE id = ?").bind(businessName, handle, context.businessId),
+      ]);
+    } else if (action === "updateEnquiryStatus") {
+      const id = integer(payload, "id", { min: 1 });
+      const status = text(payload, "status", { required: true, max: 20 });
+      if (!["New", "Contacted", "Closed"].includes(status)) {
+        throw new Error("Invalid enquiry status");
+      }
+      const updated = await env.DB.prepare(
+        "UPDATE public_enquiries SET status = ? WHERE id = ? AND business_id = ?",
+      ).bind(status, id, context.businessId).run();
+      if (!updated.meta.changes) throw new Error("Enquiry not found");
+    }
+    if (!["markNotificationRead", "markAllNotificationsRead"].includes(action)) {
+      await writeAudit(auditBusinessId, context.userId, action, payload, createdAt);
+      await emitActionNotification(action, auditBusinessId, payload, createdAt);
+    }
+    return Response.json(result);
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Unable to save change" }, { status: 500 });
+    return clientError(error);
   }
 }

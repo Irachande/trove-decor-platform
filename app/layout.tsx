@@ -16,9 +16,20 @@ export async function generateMetadata(): Promise<Metadata> {
       template: "%s · Trove",
     },
     description,
+    manifest: "/manifest.webmanifest",
+    applicationName: "Trove",
+    appleWebApp: {
+      capable: true,
+      statusBarStyle: "default",
+      title: "Trove",
+    },
+    formatDetection: {
+      telephone: false,
+    },
     icons: {
       icon: "/favicon.svg",
       shortcut: "/favicon.svg",
+      apple: "/icon-192.png",
     },
     openGraph: {
       title,
@@ -38,7 +49,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="pt">
       <body>{children}</body>
     </html>
   );

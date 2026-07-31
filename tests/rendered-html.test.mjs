@@ -1,91 +1,550 @@
 import assert from "node:assert/strict";
-import { access, readFile, readdir } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const developmentPreviewMeta =
-  /<meta(?=[^>]*\bname=["']codex-preview["'])(?=[^>]*\bcontent=["']development["'])[^>]*>/i;
-const templateRoot = new URL("../", import.meta.url);
-const previewRoot = new URL("../app/_sites-preview/", import.meta.url);
+const projectRoot = new URL("../", import.meta.url);
 
-async function render() {
-  const workerUrl = new URL("../dist/server/index.js", import.meta.url);
-  workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
-  const { default: worker } = await import(workerUrl.href);
-
-  return worker.fetch(
-    new Request("http://localhost/", {
-      headers: { accept: "text/html" },
-    }),
-    {
-      ASSETS: {
-        fetch: async () => new Response("Not found", { status: 404 }),
-      },
-    },
-    {
-      waitUntil() {},
-      passThroughOnException() {},
-    },
-  );
+async function source(path) {
+  return readFile(new URL(path, projectRoot), "utf8");
 }
 
-test("server-renders the starter loading skeleton", async () => {
-  const response = await render();
-  assert.equal(response.status, 200);
-  assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
-
-  const html = await response.text();
-  assert.match(html, developmentPreviewMeta);
-  assert.match(html, /<title>Your site is taking shape<\/title>/i);
-  assert.match(html, /Building your site/);
-  assert.match(html, /Your site is taking shape/);
-  assert.match(
-    html,
-    /Your first version will appear here automatically when it’s ready\./,
-  );
-  assert.doesNotMatch(html, /Codex/);
-  assert.match(html, /react-loading-skeleton/);
-  assert.match(html, /role="status"/);
-});
-
-test("keeps the loading skeleton scoped and disposable", async () => {
-  const [preview, css, page, layout, packageJson, files] = await Promise.all([
-    readFile(new URL("SkeletonPreview.tsx", previewRoot), "utf8"),
-    readFile(new URL("preview.css", previewRoot), "utf8"),
-    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
-    readFile(new URL("../package.json", import.meta.url), "utf8"),
-    readdir(previewRoot),
+test("the application has an explicit authenticated entry gate", async () => {
+  const [page, auth] = await Promise.all([
+    source("app/page.tsx"),
+    source("app/chatgpt-auth.ts"),
   ]);
 
-  assert.deepEqual(files.sort(), ["SkeletonPreview.tsx", "preview.css"]);
-  assert.match(preview, /from "react-loading-skeleton"/);
-  assert.match(preview, /baseColor="#eceae7"/);
-  assert.match(preview, /highlightColor="#f9f8f6"/);
-  assert.match(preview, /duration=\{2\.8\}/);
-  assert.match(preview, /sites-skeleton-search-placeholder/);
-  assert.match(packageJson, /"react-loading-skeleton": "3\.5\.0"/);
+  assert.match(page, /getChatGPTUser/);
+  assert.match(page, /chatGPTSignInPath/);
+  assert.match(page, /Entrar com ChatGPT/);
+  assert.match(page, /force-dynamic/);
+  assert.match(auth, /getUserFromHeaders/);
+  assert.match(auth, /oai-authenticated-user-email/);
+});
 
-  const shellIndex = preview.indexOf('className="sites-skeleton-shell"');
-  const statusIndex = preview.indexOf('className="sites-skeleton-status"');
-  assert.ok(shellIndex >= 0 && statusIndex > shellIndex);
-  assert.match(css, /position:\s*fixed/);
-  assert.match(css, /inset:\s*0/);
-  assert.match(css, /opacity:\s*0\.52/);
-  assert.match(css, /prefers-reduced-motion:\s*reduce/);
-  assert.doesNotMatch(css, /#020617|canvas|pets|progress/i);
-  assert.doesNotMatch(
-    preview,
-    /loading-spinner|status-mark|status-progress|canvas|cookie|random/i,
-  );
+test("data and upload routes enforce server-side authorization", async () => {
+  const [data, itemImage, profileImage, workspace] = await Promise.all([
+    source("app/api/data/route.ts"),
+    source("app/api/item-image/route.ts"),
+    source("app/api/profile-image/route.ts"),
+    source("app/workspace.ts"),
+  ]);
 
-  assert.match(page, /export const metadata:\s*Metadata/);
-  assert.match(page, /"codex-preview": "development"/);
-  assert.match(page, /<SkeletonPreview \/>/);
-  assert.match(layout, /title:\s*"Starter Project"/);
-  assert.doesNotMatch(layout, /codex-preview|_sites-preview|themeColor|\bViewport\b/);
-  assert.doesNotMatch(css, /(^|\s)(html|body)\s*\{/m);
+  assert.match(data, /ACTION_PERMISSIONS/);
+  assert.match(data, /authorize\(request, permission\)/);
+  assert.match(itemImage, /authorize\(request, "manageInventory"\)/);
+  assert.match(profileImage, /authorize\(request, "manageProfile"\)/);
+  assert.match(workspace, /UNAUTHENTICATED/);
+  assert.match(workspace, /FORBIDDEN/);
+  assert.match(workspace, /PERMISSIONS/);
+});
 
-  await assert.rejects(
-    access(new URL("public/_sites-preview", templateRoot)),
-  );
+test("tenant ownership is represented in schema, migration and queries", async () => {
+  const [schema, migration, workspace, api] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0002_free_caretaker.sql"),
+    source("app/workspace.ts"),
+    source("app/api/data/route.ts"),
+  ]);
+
+  assert.match(schema, /export const businesses/);
+  assert.match(schema, /export const memberships/);
+  assert.ok((schema.match(/businessId:/g) ?? []).length >= 6);
+  assert.match(migration, /CREATE TABLE `memberships`/);
+  assert.match(migration, /ADD `business_id`/);
+  assert.match(workspace, /createBusinessForUser/);
+  assert.ok((api.match(/business_id = \?/g) ?? []).length >= 12);
+});
+
+test("real accounts start without client-side demo inventory", async () => {
+  const app = await source("app/DecorApp.tsx");
+
+  assert.match(app, /useState<Item\[]>\(\[\]\)/);
+  assert.match(app, /useState<Reservation\[]>\(\[\]\)/);
+  assert.doesNotMatch(app, /const seedItems/);
+  assert.doesNotMatch(app, /const seedReservations/);
+});
+
+test("phase 2 inventory entities are durable and tenant scoped", async () => {
+  const [schema, migration, workspace, api] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0003_sleepy_wolfpack.sql"),
+    source("app/workspace.ts"),
+    source("app/api/data/route.ts"),
+  ]);
+
+  for (const entity of [
+    "itemPhotos",
+    "inventoryMovements",
+    "maintenanceRecords",
+    "kits",
+    "kitItems",
+  ]) {
+    assert.match(schema, new RegExp(`export const ${entity}`));
+  }
+  assert.match(migration, /CREATE TABLE `inventory_movements`/);
+  assert.match(migration, /CREATE TABLE `maintenance_records`/);
+  assert.match(workspace, /item_photos_business_item_idx/);
+  assert.match(api, /addItemPhotos: "manageInventory"/);
+  assert.match(api, /adjustStock: "manageInventory"/);
+  assert.match(api, /createKit: "manageInventory"/);
+  assert.ok((api.match(/context\.businessId/g) ?? []).length >= 60);
+});
+
+test("phase 2 interface supports complete records and validated Excel imports", async () => {
+  const [app, styles, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("package.json"),
+  ]);
+
+  assert.match(app, /function ItemManager/);
+  assert.match(app, /function KitManager/);
+  assert.match(app, /read-excel-file/);
+  assert.match(app, /Nenhum artigo foi gravado/);
+  assert.match(app, /multiple accept="image\/png,image\/jpeg"/);
+  assert.match(styles, /\.photo-gallery/);
+  assert.match(styles, /\.history-list/);
+  assert.match(styles, /\.kit-manager/);
+  assert.match(manifest, /"read-excel-file": "5\.8\.8"/);
+});
+
+test("phase 3 reservations use durable clients, events and line items", async () => {
+  const [schema, migration, workspace, api] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0004_numerous_slyde.sql"),
+    source("app/workspace.ts"),
+    source("app/api/data/route.ts"),
+  ]);
+
+  assert.match(schema, /export const clients/);
+  assert.match(schema, /export const events/);
+  assert.match(schema, /export const reservationItems/);
+  assert.match(migration, /CREATE TABLE `clients`/);
+  assert.match(migration, /CREATE TABLE `events`/);
+  assert.match(migration, /CREATE TABLE `reservation_items`/);
+  assert.match(workspace, /reservation_items_availability_insert/);
+  assert.match(workspace, /INSUFFICIENT_DATE_AVAILABILITY/);
+  assert.match(workspace, /reservations_checkout_stock/);
+  assert.match(api, /updateReservation: "manageReservations"/);
+  assert.match(api, /transitionReservation: "manageReservations"/);
+  assert.match(api, /env\.DB\.batch\(\[/);
+});
+
+test("phase 3 interface supports multi-item pricing and lifecycle actions", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /function ReservationComposer/);
+  assert.match(app, /function RelationshipManager/);
+  assert.match(app, /reservation-item-/);
+  assert.match(app, /Registar saída/);
+  assert.match(app, /Registar devolução/);
+  assert.match(app, /Clientes e eventos/);
+  assert.match(styles, /\.reservation-item-picker/);
+  assert.match(styles, /\.reservation-totals/);
+  assert.match(styles, /\.relationship-manager/);
+});
+
+test("phase 4 communication data is durable, scoped, and permissioned", async () => {
+  const [schema, migration, workspace, api] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0005_reflective_exiles.sql"),
+    source("app/workspace.ts"),
+    source("app/api/data/route.ts"),
+  ]);
+
+  assert.match(schema, /export const notifications/);
+  assert.match(schema, /export const auditLogs/);
+  assert.match(migration, /CREATE TABLE `notifications`/);
+  assert.match(migration, /CREATE TABLE `audit_logs`/);
+  assert.match(migration, /ADD `expires_at`/);
+  assert.match(workspace, /notifications_business_user_date_idx/);
+  assert.match(workspace, /audit_logs_business_date_idx/);
+  assert.match(api, /acceptInvitation: "read"/);
+  assert.match(api, /revokeInvitation: "manageTeam"/);
+  assert.match(api, /ensureReservationReminders/);
+  assert.match(api, /writeAudit/);
+});
+
+test("phase 4 interface exposes invitations, notifications, roles, and activity", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /function NotificationCenter/);
+  assert.match(app, /function ActivityLog/);
+  assert.match(app, /acceptInvitation/);
+  assert.match(app, /enableBrowserAlerts/);
+  assert.match(app, /updateMemberRole/);
+  assert.match(app, /trove-business-id/);
+  assert.match(styles, /\.invitation-banner/);
+  assert.match(styles, /\.notification-center/);
+  assert.match(styles, /\.activity-log/);
+  assert.match(styles, /\.phase-four-team/);
+});
+
+test("phase 5 billing entities and PaySuite boundaries are durable and verified", async () => {
+  const [schema, migration, workspace, billing, checkout, webhook] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0006_confused_snowbird.sql"),
+    source("app/workspace.ts"),
+    source("app/billing.ts"),
+    source("app/api/billing/checkout/route.ts"),
+    source("app/api/billing/webhook/route.ts"),
+  ]);
+
+  assert.match(schema, /export const subscriptions/);
+  assert.match(schema, /export const payments/);
+  assert.match(schema, /export const paymentWebhookEvents/);
+  assert.match(migration, /CREATE TABLE `subscriptions`/);
+  assert.match(migration, /CREATE TABLE `payments`/);
+  assert.match(workspace, /SUBSCRIPTION_REQUIRED/);
+  assert.match(workspace, /subscriptionAllowsWrites/);
+  assert.match(billing, /PLAN_CATALOG/);
+  assert.match(billing, /verifyPaySuiteSignature/);
+  assert.match(checkout, /createPaySuitePayment/);
+  assert.match(webhook, /x-webhook-signature/);
+  assert.match(webhook, /payment_webhook_events/);
+});
+
+test("phase 5 interface exposes live status, payment history and receipts", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /startSubscriptionCheckout/);
+  assert.match(app, /function Receipt/);
+  assert.match(app, /Pagamentos e recibos/);
+  assert.match(app, /cancelSubscription/);
+  assert.match(app, /PAYMENTS_NOT_CONFIGURED/);
+  assert.match(styles, /\.subscription-status/);
+  assert.match(styles, /\.payment-history/);
+  assert.match(styles, /\.receipt/);
+  assert.match(styles, /@media print/);
+});
+
+test("phase 6 network entities are durable and indexed by business", async () => {
+  const [schema, migration, workspace] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0007_peaceful_moon_knight.sql"),
+    source("app/workspace.ts"),
+  ]);
+
+  assert.match(schema, /export const marketplaceListings/);
+  assert.match(schema, /export const rentalRequests/);
+  assert.match(schema, /export const rentalReviews/);
+  assert.match(schema, /export const rentalDisputes/);
+  assert.match(migration, /CREATE TABLE `marketplace_listings`/);
+  assert.match(migration, /CREATE TABLE `rental_requests`/);
+  assert.match(migration, /CREATE TABLE `rental_reviews`/);
+  assert.match(migration, /CREATE TABLE `rental_disputes`/);
+  assert.match(workspace, /marketplace_listings_business_item_idx/);
+  assert.match(workspace, /rental_requests_owner_status_dates_idx/);
+  assert.match(workspace, /rental_requests_accept_availability/);
+  assert.match(workspace, /INSUFFICIENT_NETWORK_AVAILABILITY/);
+});
+
+test("phase 6 API enforces Network entitlements, availability, and participant ownership", async () => {
+  const [network, image] = await Promise.all([
+    source("app/api/network/route.ts"),
+    source("app/api/network-image/route.ts"),
+  ]);
+
+  assert.match(network, /NETWORK_PLAN_REQUIRED/);
+  assert.match(network, /manageNetworkListings/);
+  assert.match(network, /manageNetworkRentals/);
+  assert.match(network, /listingAvailability/);
+  assert.match(network, /assertParticipant/);
+  assert.match(network, /createRentalRequest/);
+  assert.match(network, /counterRentalRequest/);
+  assert.match(network, /updateRentalFinancials/);
+  assert.match(network, /acceptDisputeResolution/);
+  assert.match(image, /marketplace_listings/);
+  assert.match(image, /allowedPrefix/);
+});
+
+test("phase 6 interface replaces demo listings with the operational marketplace", async () => {
+  const [app, styles, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("package.json"),
+  ]);
+
+  assert.doesNotMatch(app, /const networkItems/);
+  assert.match(app, /function NetworkListingForm/);
+  assert.match(app, /function NetworkRentalForm/);
+  assert.match(app, /function NetworkRequestManager/);
+  assert.match(app, /Usar minha localização/);
+  assert.match(app, /Confirmado manualmente/);
+  assert.match(app, /RESOLUÇÃO DE DISPUTA/);
+  assert.match(styles, /\.network-tabs/);
+  assert.match(styles, /\.network-listing-table/);
+  assert.match(styles, /\.network-request-manager/);
+  assert.match(manifest, /"test:phase6-api"/);
+});
+
+test("phase 7 provides an installable and resilient PWA shell", async () => {
+  const [layout, manifest, worker, offline, cache] = await Promise.all([
+    source("app/layout.tsx"),
+    source("public/manifest.webmanifest"),
+    source("public/sw.js"),
+    source("public/offline.html"),
+    source("app/offline-cache.ts"),
+  ]);
+
+  assert.match(layout, /manifest: "\/manifest\.webmanifest"/);
+  assert.match(manifest, /"display": "standalone"/);
+  assert.match(manifest, /icon-512\.png/);
+  assert.match(worker, /self\.addEventListener\("push"/);
+  assert.match(worker, /caches\.match\("\/offline\.html"\)/);
+  assert.doesNotMatch(worker, /pathname\.startsWith\("\/api\/"\).*cache/i);
+  assert.match(offline, /apenas para consulta/);
+  assert.match(cache, /indexedDB\.open\("trove-offline"/);
+});
+
+test("phase 7 push, monitoring, and beta feedback are durable and tenant scoped", async () => {
+  const [schema, migration, workspace, push, operations, health, webPush] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0008_lovely_fabian_cortez.sql"),
+    source("app/workspace.ts"),
+    source("app/api/push/route.ts"),
+    source("app/api/operations/route.ts"),
+    source("app/api/health/route.ts"),
+    source("app/web-push.ts"),
+  ]);
+
+  assert.match(schema, /export const pushSubscriptions/);
+  assert.match(schema, /export const operationalEvents/);
+  assert.match(schema, /export const betaFeedback/);
+  assert.match(migration, /CREATE TABLE `push_subscriptions`/);
+  assert.match(workspace, /push_subscriptions_user_idx/);
+  assert.match(push, /authorize\(request\)/);
+  assert.match(push, /sendPushToUsers/);
+  assert.match(operations, /authorize\(request, "manageTeam"\)/);
+  assert.match(operations, /INSERT INTO beta_feedback/);
+  assert.match(health, /SELECT 1 AS healthy/);
+  assert.match(webPush, /Content-Encoding: aes128gcm/);
+  assert.match(webPush, /ECDH/);
+});
+
+test("phase 7 interface exposes installation, push, feedback, and operational status", async () => {
+  const [app, styles, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("package.json"),
+  ]);
+
+  assert.match(app, /function LaunchTools/);
+  assert.match(app, /beforeinstallprompt/);
+  assert.match(app, /pushManager\.subscribe/);
+  assert.match(app, /Feedback da fase beta/);
+  assert.match(app, /Estado operacional/);
+  assert.match(styles, /\.launch-tools/);
+  assert.match(styles, /\.connection-status/);
+  assert.match(styles, /\.operations-status/);
+  assert.match(manifest, /"test:phase7-api"/);
+});
+
+test("phase 8 provides durable public profiles and protected enquiries", async () => {
+  const [schema, migration, workspace, publicApi, publicPage] = await Promise.all([
+    source("db/schema.ts"),
+    source("drizzle/0009_cheerful_bedlam.sql"),
+    source("app/workspace.ts"),
+    source("app/api/public-profile/route.ts"),
+    source("app/p/[handle]/page.tsx"),
+  ]);
+
+  assert.match(schema, /export const publicEnquiries/);
+  assert.match(schema, /export const emailDeliveries/);
+  assert.match(migration, /CREATE TABLE `public_enquiries`/);
+  assert.match(migration, /CREATE TABLE `email_deliveries`/);
+  assert.match(workspace, /public_enquiries_rate_limit_idx/);
+  assert.match(publicApi, /crypto\.subtle\.digest/);
+  assert.match(publicApi, /Too many enquiries/);
+  assert.match(publicApi, /sendTransactionalEmail/);
+  assert.match(publicPage, /EnquiryForm/);
+});
+
+test("phase 8 includes transactional email, owner backup, and legal boundaries", async () => {
+  const [email, data, backup, terms, privacy] = await Promise.all([
+    source("app/email.ts"),
+    source("app/api/data/route.ts"),
+    source("app/api/backup/route.ts"),
+    source("app/legal/terms/page.tsx"),
+    source("app/legal/privacy/page.tsx"),
+  ]);
+
+  assert.match(email, /RESEND_API_KEY/);
+  assert.match(email, /email_deliveries/);
+  assert.match(data, /invitationEmail/);
+  assert.match(backup, /authorize\(request, "manageBilling"\)/);
+  assert.doesNotMatch(backup, /push_subscriptions/);
+  assert.match(terms, /Versão beta/);
+  assert.match(privacy, /não guardamos o endereço IP em claro/);
+});
+
+test("phase 8 interface exposes onboarding, enquiries, backup, and public controls", async () => {
+  const [app, styles, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("package.json"),
+  ]);
+
+  assert.match(app, /function OnboardingChecklist/);
+  assert.match(app, /function EnquiryManager/);
+  assert.match(app, /exportWorkspaceBackup/);
+  assert.match(app, /acceptsEnquiries/);
+  assert.match(styles, /\.onboarding-card/);
+  assert.match(styles, /\.enquiry-manager/);
+  assert.match(manifest, /"test:phase8-api"/);
+});
+
+test("phase 9 starts with a dedicated responsive events workspace", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /type View = .*"events"/);
+  assert.match(app, /function Events/);
+  assert.match(app, /PRODUÇÃO E OPERAÇÃO/);
+  assert.match(app, /Pesquisar evento, cliente ou local/);
+  assert.match(app, /eventStatusLabel/);
+  assert.match(app, /reservations\.filter\(\(reservation\) => reservation\.eventId === entry\.id\)/);
+  assert.match(styles, /\.event-stat-grid/);
+  assert.match(styles, /\.events-toolbar/);
+  assert.match(styles, /\.events-list/);
+  assert.match(styles, /repeat\(6, minmax\(52px, 1fr\)\)/);
+});
+
+test("phase 9 event records support editing, safe duplication, and archiving", async () => {
+  const [app, api, schema, workspace, migration, manifest] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/api/data/route.ts"),
+    source("db/schema.ts"),
+    source("app/workspace.ts"),
+    source("drizzle/0010_square_marauders.sql"),
+    source("package.json"),
+  ]);
+
+  assert.match(app, /function EventManager/);
+  assert.match(app, /saveManagedEvent/);
+  assert.match(app, /duplicateManagedEvent/);
+  assert.match(app, /archiveManagedEvent/);
+  assert.match(app, /Evento duplicado sem copiar reservas/);
+  assert.match(api, /duplicateEvent: "manageReservations"/);
+  assert.match(api, /archiveEvent: "manageReservations"/);
+  assert.match(api, /Only completed or cancelled events can be archived/);
+  assert.match(api, /status IN \('Confirmed', 'CheckedOut'\)/);
+  assert.match(schema, /ownerUserId: integer\("owner_user_id"\)/);
+  assert.match(schema, /archivedAt: text\("archived_at"\)/);
+  assert.match(workspace, /addMissingColumns\("events"/);
+  assert.match(migration, /ALTER TABLE `events` ADD `event_type`/);
+  assert.match(manifest, /"test:phase9-api"/);
+});
+
+test("phase 9 step 3 adds durable team tasks and operational checklists", async () => {
+  const [app, styles, api, schema, workspace, migration, backup] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("app/api/data/route.ts"),
+    source("db/schema.ts"),
+    source("app/workspace.ts"),
+    source("drizzle/0011_long_pandemic.sql"),
+    source("app/api/backup/route.ts"),
+  ]);
+
+  assert.match(app, /function EventChecklist/);
+  assert.match(app, /addManagedEventTask/);
+  assert.match(app, /transitionManagedEventTask/);
+  assert.match(app, /CHECKLIST OPERACIONAL/);
+  assert.match(styles, /\.event-checklist/);
+  assert.match(styles, /\.checklist-progress/);
+  assert.match(styles, /\.event-task-list/);
+  assert.match(api, /addEventTask: "manageReservations"/);
+  assert.match(api, /transitionEventTask: "manageReservations"/);
+  assert.match(api, /Event has pending tasks and cannot be archived/);
+  assert.match(api, /tasksCopied: false/);
+  assert.match(schema, /export const eventTasks/);
+  assert.match(workspace, /CREATE TABLE IF NOT EXISTS event_tasks/);
+  assert.match(migration, /CREATE TABLE `event_tasks`/);
+  assert.match(migration, /event_tasks_assignee_due_idx/);
+  assert.match(backup, /eventTasks/);
+});
+
+test("phase 9 step 4 adds suppliers, event costs, protected documents, and profitability", async () => {
+  const [app, styles, api, documentApi, schema, workspace, migration, backup] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("app/api/data/route.ts"),
+    source("app/api/event-document/route.ts"),
+    source("db/schema.ts"),
+    source("app/workspace.ts"),
+    source("drizzle/0012_chunky_shinko_yamashiro.sql"),
+    source("app/api/backup/route.ts"),
+  ]);
+
+  assert.match(app, /function EventFinance/);
+  assert.match(app, /Receita reservada, não recebida/);
+  assert.match(app, /addManagedEventExpense/);
+  assert.match(app, /uploadManagedEventDocument/);
+  assert.match(styles, /\.event-finance-summary/);
+  assert.match(styles, /\.event-finance-columns/);
+  assert.match(api, /addSupplier: "manageReservations"/);
+  assert.match(api, /addEventExpense: "manageReservations"/);
+  assert.match(api, /expensesCopied: false/);
+  assert.match(api, /documentsCopied: false/);
+  assert.match(documentApi, /MAX_FILE_SIZE = 10_000_000/);
+  assert.match(documentApi, /businesses\/\$\{context\.businessId\}\/events/);
+  assert.match(documentApi, /cache-control", "private, no-store"/);
+  assert.match(schema, /export const suppliers/);
+  assert.match(schema, /export const eventExpenses/);
+  assert.match(schema, /export const eventDocuments/);
+  assert.match(workspace, /CREATE TABLE IF NOT EXISTS event_expenses/);
+  assert.match(migration, /CREATE TABLE `event_documents`/);
+  assert.match(backup, /eventExpenses/);
+  assert.match(backup, /eventDocuments/);
+});
+
+test("phase 9 step 5 enforces an aggregate event and reservation lifecycle", async () => {
+  const [app, styles, api] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+    source("app/api/data/route.ts"),
+  ]);
+
+  assert.match(app, /function EventLifecycle/);
+  assert.match(app, /transitionManagedEvent/);
+  assert.match(app, /Reservas e checklist controlam o avanço/);
+  assert.match(app, /Reabrir planeamento/);
+  assert.match(styles, /\.event-lifecycle-track/);
+  assert.match(styles, /\.event-current-status/);
+  assert.match(api, /transitionEvent: "manageReservations"/);
+  assert.match(api, /Status must be changed with the event lifecycle controls/);
+  assert.match(api, /All confirmed reservations must be checked out before the event can start/);
+  assert.match(api, /All linked reservations must be returned or cancelled before completing the event/);
+  assert.match(api, /Cannot cancel without confirming the linked reservations/);
+  assert.match(api, /NOT EXISTS \(SELECT 1 FROM event_tasks/);
+});
+
+test("phase 9 step 6 places events without bookings in the shared calendar", async () => {
+  const [app, styles] = await Promise.all([
+    source("app/DecorApp.tsx"),
+    source("app/globals.css"),
+  ]);
+
+  assert.match(app, /const standaloneEvents = events\.filter/);
+  assert.match(app, /representedEventIds/);
+  assert.match(app, /function EventCalendarInspector/);
+  assert.match(app, /Evento · sem material/);
+  assert.match(app, /Reservas e eventos/);
+  assert.match(app, /trove-agenda\.csv/);
+  assert.match(styles, /\.calendar-day > button\.standalone-event/);
+  assert.match(styles, /\.calendar-legend/);
+  assert.match(styles, /\.event-calendar-inspector/);
 });
